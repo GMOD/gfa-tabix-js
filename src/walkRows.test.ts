@@ -482,7 +482,7 @@ test('a cut is written as the GFA its tables stand for, with the departures over
     'GRCh38#0#chr1',
     [],
   )
-  expect([...kept].sort()).toEqual([2, 3, 5])
+  expect([...kept].sort((a, b) => a - b)).toEqual([2, 3, 5])
   expect(
     fragments.map(f => [
       f.name,
@@ -547,7 +547,7 @@ test('a walk leaving the window is cut at its last step on it, and its departure
     'GRCh38#0#chr1',
     [],
   )
-  expect([...kept].sort()).toEqual([2, 3, 5, 6])
+  expect([...kept].sort((a, b) => a - b)).toEqual([2, 3, 5, 6])
   expect(
     fragments.map(f => [f.name, f.hapStart, f.hapEnd, [...f.ids]]),
   ).toEqual([
@@ -674,7 +674,7 @@ test('a contained cut splits a walk where it steps onto the reference off the wi
     [],
     { contained: true, context: 50 },
   )
-  expect([...kept].sort()).toEqual([2, 3, 5, 6])
+  expect([...kept].sort((a, b) => a - b)).toEqual([2, 3, 5, 6])
   expect(
     fragments.map(f => [
       f.name,

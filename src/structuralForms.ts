@@ -657,6 +657,8 @@ function unionSpans(marks: Mark[]) {
 
 // The spans of overlapping common marks, then of overlapping rarer marks that
 // overlap none of those
+const isPlainState = (s: string) => s !== NO_CALL_STATE && s !== RARER_STATE
+
 function siteSpans(marks: Mark[], common: Set<Mark>) {
   const commonSpans = unionSpans(marks.filter(m => common.has(m)))
   const apart = marks.filter(
@@ -727,7 +729,7 @@ export function structuralForms(
     }
     for (const m of marks) {
       for (const i of sitesOver(spans, m)) {
-        if (!PLAIN_KINDS.has(m.kind) || !summed[i]) {
+        if (!PLAIN_KINDS.has(m.kind) || !summed[i]!) {
           add(i, m)
         }
       }
@@ -735,7 +737,7 @@ export function structuralForms(
     const plainAt = new Map<number, Joined[]>()
     for (const d of plain) {
       for (const i of sitesOver(spans, d)) {
-        if (summed[i]) {
+        if (summed[i]!) {
           plainAt.set(i, [...(plainAt.get(i) ?? []), d])
         }
       }
@@ -768,7 +770,7 @@ export function structuralForms(
         [...at].map(([site, ms]) => {
           ms.sort((a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd)
           const state = ms
-            .map(m => (summed[site] ? stateKey(m, floorBp) : placedKey(m)))
+            .map(m => (summed[site]! ? stateKey(m, floorBp) : placedKey(m)))
             .join(';')
           return [site, ms.map((m): SiteMark => ({ ...m, site, state }))]
         }),
@@ -785,19 +787,19 @@ export function structuralForms(
   const windowCount = inWindow.filter(Boolean).length
   const edge = raw.map(
     states =>
-      2 * states.filter((s, j) => inWindow[j] && s !== NO_CALL_STATE).length <
+      2 * states.filter((s, j) => inWindow[j]! && s !== NO_CALL_STATE).length <
       windowCount,
   )
   const isPlaced = haplotypes.map(
     (_, j) =>
       inWindow[j]! &&
       (edge.every(Boolean) ||
-        raw.some((states, i) => !edge[i] && states[j] !== NO_CALL_STATE)),
+        raw.some((states, i) => !edge[i]! && states[j] !== NO_CALL_STATE)),
   )
-  const placed = haplotypes.flatMap((_, j) => (isPlaced[j] ? [j] : []))
+  const placed = haplotypes.flatMap((_, j) => (isPlaced[j]! ? [j] : []))
   const fits = (j: number, i: number, state: SiteState) => {
     const own = marksAt[j]!.get(i) ?? []
-    return summed[i]
+    return summed[i]!
       ? statesAgree(state.marks, own, floorBp)
       : pairOneToOne(
           state.marks,
@@ -854,14 +856,14 @@ export function structuralForms(
       covered: placed.length - (carriers.get(NO_CALL_STATE)?.length ?? 0),
       states: siteStates,
     })
-    if (!edge[i]) {
+    if (!edge[i]!) {
       const common = siteStates.filter(s => s.carriers.length >= minCarriers)
       keyed.push(i)
       folded.push(
         states.map((state, j) => {
           const stays =
             keepRare ||
-            !isPlaced[j] ||
+            !isPlaced[j]! ||
             state === NO_CALL_STATE ||
             state === REFERENCE_STATE ||
             (carriers.get(state)?.length ?? 0) >= minCarriers
@@ -897,11 +899,13 @@ export function structuralForms(
   const kept = common.length > 0 ? common : grouped
   const matches = (j: number, k: number, key: string) => {
     const own = folded[k]![j]!
-    const plain = (s: string) => s !== NO_CALL_STATE && s !== RARER_STATE
     const state = sites[keyed[k]!]!.states.find(s => s.key === key)
     return (
       key === own ||
-      (plain(key) && plain(own) && !!state && fits(j, keyed[k]!, state))
+      (isPlainState(key) &&
+        isPlainState(own) &&
+        !!state &&
+        fits(j, keyed[k]!, state))
     )
   }
   const largestFirst = kept.toSorted(
@@ -930,9 +934,9 @@ export function structuralForms(
     )
   })
   keyed.forEach((i, k) => {
-    sites[i]!.shared = !told[k]
+    sites[i]!.shared = !told[k]!
   })
-  const informative = keyed.filter((_, k) => told[k])
+  const informative = keyed.filter((_, k) => told[k]!)
   const stateAt = (i: number, key: string) =>
     sites[i]!.states.find(s => s.key === key)?.marks ?? []
   const forms = kept.map(({ states, members }): Form => {
@@ -942,7 +946,7 @@ export function structuralForms(
       keyed.flatMap((i, k) => stateAt(i, states[k]!)),
     ).sort((a, b) => a.refStart - b.refStart)
     const own = marks.filter(m => !sites[m.site]!.shared)
-    const formStates = states.filter((_, k) => told[k])
+    const formStates = states.filter((_, k) => told[k]!)
     const onlyShifts =
       own.length > 0 &&
       own.every(m => m.kind === 'shift') &&
@@ -974,7 +978,7 @@ export function structuralForms(
     informative,
     forms: [...sortForms(forms), ...otherForm],
     placed: placed.length,
-    unplaced: haplotypes.flatMap((h, j) => (isPlaced[j] ? [] : [h.haplotype])),
+    unplaced: haplotypes.flatMap((h, j) => (isPlaced[j]! ? [] : [h.haplotype])),
     rareCarriers: haplotypes
       .filter(h => rare.has(h.haplotype))
       .map(h => h.haplotype),
@@ -1130,7 +1134,7 @@ export function formStateAt(
   const k = result.informative.indexOf(site)
   return k >= 0
     ? form.states[k]
-    : !result.sites[site]?.shared
+    : result.sites[site]?.shared !== true
       ? undefined
       : form.key === OTHER_STATE
         ? OTHER_STATE

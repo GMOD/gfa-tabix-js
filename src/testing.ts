@@ -28,7 +28,7 @@ export function graphTablesGFA({ nodes, links, walks }: GraphTables) {
     const [sample, haplotype, ...contig] = walks.names[p]!.split('#')
     let body = ''
     for (let s = walks.offsets[p]!; s < walks.offsets[p + 1]!; s++) {
-      body += (walks.reversed[s] ? '<' : '>') + names[walks.steps[s]!]
+      body += (walks.reversed[s]! !== 0 ? '<' : '>') + names[walks.steps[s]!]
     }
     lines.push(
       `W\t${sample}\t${haplotype}\t${contig.join('#')}\t${walks.starts[p]}\t${walks.ends[p]}\t${body}`,
@@ -130,7 +130,7 @@ export function walkFileOf(
     const items: { start: number; order: number; unit: () => WalkUnit }[] = []
     const tiles = new Map<number, string[][]>()
     const blocks = new Map<number, string[]>()
-    for (const r of body.filter(r => r[0] === seq)) {
+    for (const r of body.filter(row => row[0] === seq)) {
       if (Number.isNaN(Number(r[2]))) {
         tiles.set(+r[1]!, [...(tiles.get(+r[1]!) ?? []), r])
       } else {

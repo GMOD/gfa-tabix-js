@@ -207,6 +207,13 @@ function pathChains(items: Item[], length: (id: number) => number) {
   return chains.map(chain => chainEvents(chain, length))
 }
 
+const on = (from: number, to: number, reversed: boolean): Event => ({
+  kind: 'on',
+  lo: Math.min(from, to),
+  hi: Math.max(from, to),
+  reversed,
+})
+
 function chainEvents(items: Item[], length: (id: number) => number) {
   const anchors: Anchor[] = []
   for (const item of items) {
@@ -259,12 +266,6 @@ function chainEvents(items: Item[], length: (id: number) => number) {
   }
   anchors.sort((a, b) => a.hap - b.hap || a.order - b.order)
   const events: Event[] = []
-  const on = (from: number, to: number, reversed: boolean): Event => ({
-    kind: 'on',
-    lo: Math.min(from, to),
-    hi: Math.max(from, to),
-    reversed,
-  })
   // the open stretch on R: where it began, and the furthest fragment end seen
   // along it
   let cur: { pos: number; reversed: boolean } | undefined

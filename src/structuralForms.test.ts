@@ -600,8 +600,8 @@ test("one haplotype's mark covering half of two common changes merges neither's 
   ]
   const states = (input: HaplotypeDepartures[], minCarriers?: number) =>
     forms(input, { minCarriers })
-      .sites[0]!.states.map(s => [s.key, s.carriers.length])
-      .sort()
+      .sites[0]!.states.toSorted((a, b) => (a.key < b.key ? -1 : 1))
+      .map(s => [s.key, s.carriers.length])
   for (const minCarriers of [undefined, 5]) {
     expect(states(two, minCarriers)).toEqual([
       ['-10000@10000', 10],

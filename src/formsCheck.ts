@@ -32,7 +32,14 @@ import type { Departure, HaplotypeDepartures } from './walkDepartures.ts'
  * - `unsited`: a change of the member's lies in no site
  */
 export type ContradictionKind =
-  'call' | 'net' | 'size' | 'rarer' | 'count' | 'place' | 'unsited' | 'hidden'
+  | 'call'
+  | 'net'
+  | 'size'
+  | 'rarer'
+  | 'count'
+  | 'place'
+  | 'unsited'
+  | 'hidden'
 
 export interface Contradiction {
   kind: ContradictionKind

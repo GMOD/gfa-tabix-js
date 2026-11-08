@@ -154,7 +154,10 @@ export function parseGraphHeader(lines: string[]): GraphHeader {
   const samples = lines.find(l => l.startsWith('#samples\t'))
   return {
     anchored: tags.get('layout') === 'anchored',
-    samples: samples ? samples.slice('#samples\t'.length).split(',') : [],
+    samples:
+      samples !== undefined
+        ? samples.slice('#samples\t'.length).split(',')
+        : [],
   }
 }
 
@@ -180,7 +183,7 @@ export function parseGraphRow(line: string, header: GraphHeader) {
   const cols = line.split('\t')
   const [kind] = cols.splice(3, 1)
   const named = (i: number) => {
-    if (cols[i]?.startsWith('SB:H:')) {
+    if (cols[i]?.startsWith('SB:H:') === true) {
       cols[i] =
         `SM:Z:${carrierNames(cols[i].slice(5), header.samples).join(',')}`
     }

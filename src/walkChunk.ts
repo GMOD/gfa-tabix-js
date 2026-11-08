@@ -480,7 +480,7 @@ function abridgedRow(
 ): WalkRow {
   const count = (k: number) => {
     const n = Number(cols[k])
-    if (cols[7]?.includes(',')) {
+    if (cols[7]?.includes(',') === true) {
       throw new WalkRowError(
         `an abridged row of several pieces, ${EARLIER_FORMAT_6}: ${cols.join('\t')}`,
       )
@@ -791,7 +791,7 @@ export function placeAndLink(
       let remaining = 0
       for (let k = 0; k < choices.length; k += 4) {
         const index = choices[k]!
-        if (wanted[index] && !taken[index]) {
+        if (wanted[index]! !== 0 && taken[index] === 0) {
           remaining++
         }
       }
@@ -811,7 +811,7 @@ export function placeAndLink(
             : path.bp(from) - path.bp(to)
         },
         route(index, flip) {
-          if (!wanted[index] || taken[index]) {
+          if (wanted[index] === 0 || taken[index]! !== 0) {
             offset += routeBp(index)
             return true
           }

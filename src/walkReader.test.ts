@@ -76,7 +76,7 @@ const fragment = (f: WalkFragment) => [
   f.name,
   f.hapStart,
   f.hapEnd,
-  [...f.ids].map((id, k) => (f.rev[k] ? '<' : '>') + id).join(''),
+  [...f.ids].map((id, k) => (f.rev[k]! !== 0 ? '<' : '>') + id).join(''),
   f.trimmedBefore,
   f.trimmedAfter,
 ]
@@ -92,7 +92,7 @@ const departure = (d: WalkDeparture) => [
   d.fromSteps ? 'steps' : 'record',
   d.steps
     ? [...d.steps.ids]
-        .map((id, k) => (d.steps!.rev[k] ? '<' : '>') + id)
+        .map((id, k) => (d.steps!.rev[k]! !== 0 ? '<' : '>') + id)
         .join('')
     : undefined,
 ]
@@ -331,7 +331,7 @@ test('tables takes the departures, so the call without them is a type error', as
     'skip.GRCh38',
   ).cut('GRCh38#0#chr1', { start: 31, end: 60 }, { context: 0 })
   // @ts-expect-error departures are required
-  expect(() => graph.tables(kept, fragments)).toThrow()
+  expect(() => graph.tables(kept, fragments)).toThrow(TypeError)
   expect(graph.tables(kept, fragments, departures).departures.names).toEqual([
     'HG002#1#ctg',
   ])
@@ -771,14 +771,14 @@ describe.each([
 // from its first step on the window to its last, the visit to the other
 // chunk included, and the jumps between the pieces come from the records
 test('the same walks in pieces of their own cut whole, with the jumps as records', async () => {
-  const records = [
+  const departureRecords = [
     ...pieces,
     'R#0#chr 4 24 departure H1#1#c 8 0 0 8 + 1 20 + 1',
     'R#0#chr 8 24 departure H1#1#c 12 0 0 24 + 1 8 + 1',
     'R#0#chr 4 24 departure H2#1#c 8 0 0 24 + 1 4 + 1',
     'R#0#chr 4 28 departure H2#1#c 12 0 0 8 + 1 24 + 1',
   ]
-  const { tables } = await inline(records).cutRegion(
+  const { tables } = await inline(departureRecords).cutRegion(
     { refName: 'chr', start: 4, end: 20 },
     { context: 0 },
   )
@@ -909,11 +909,11 @@ const copyJumpCut = async (
 test('a contained cut splits a walk where it steps onto the reference off the window', async () => {
   const detour = await copyJumpCut(20, 36, false)
   expect(detour.walks).toEqual([['H#1#h', 4, 28, '>6>7>11>6>7>8', 4, 0]])
-  const records = [
+  const departureRecords = [
     ['H#1#h', 12, 0, 0, '28+', '40+', 'forward', 'record', undefined],
     ['H#1#h', 16, 0, 0, '44+', '20+', 'back', 'record', undefined],
   ]
-  expect(detour.departures).toEqual(records)
+  expect(detour.departures).toEqual(departureRecords)
   expect(detour.text).toMatch(/^S\t11\t/m)
   expect(detour.text).toMatch(/^W\tR\t0\tchr\t20\t36\t>6>7>8>9$/m)
   const contained = await copyJumpCut(20, 36, true)
@@ -921,7 +921,7 @@ test('a contained cut splits a walk where it steps onto the reference off the wi
     ['H#1#h', 4, 12, '>6>7', 4, 16],
     ['H#1#h', 16, 28, '>6>7>8', 16, 0],
   ])
-  expect(contained.departures).toEqual(records)
+  expect(contained.departures).toEqual(departureRecords)
   expect(contained.text).not.toMatch(/^S\t11\t/m)
 })
 
@@ -1082,13 +1082,13 @@ async function expandedCut(walks: WalkReader, signal?: AbortSignal) {
 }
 
 test('detail records read at once, finishing in reverse, cut as reads one at a time do', async () => {
-  const pieces = (await twoRefs('abridged.R')).fragments.flatMap(f =>
+  const abridgedPieces = (await twoRefs('abridged.R')).fragments.flatMap(f =>
     f.abridged
       ? [`${f.abridged.detail.refName} ${f.abridged.detail.name}`]
       : [],
   )
-  const details = new Set(pieces).size
-  expect(details).toBeLessThan(pieces.length)
+  const details = new Set(abridgedPieces).size
+  expect(details).toBeLessThan(abridgedPieces.length)
   let queue = Promise.resolve()
   let reading = 0
   let most = 0
@@ -1332,15 +1332,15 @@ test.each([
     '\n',
   )
   const index = `${walks.replace(/\tbytes:i:\d+/, `\tbytes:i:${size}`)}\n${header}\nR#0#chr\t${end}\t${tableLength}\n`
-  const reader = WalkReader.fromFilehandles({
+  const headerReader = WalkReader.fromFilehandles({
     data: new BlobFile(new Blob(parts)),
     directory: new BlobFile(new Blob([index])),
   })
   expect(
-    (await reader.units('R#0#chr')).filter(u => u.length === 0),
+    (await headerReader.units('R#0#chr')).filter(u => u.length === 0),
   ).toHaveLength(1)
-  const cut = async (walks: WalkReader) => {
-    const { fragments, departures } = await walks.cut(
+  const cut = async (source: WalkReader) => {
+    const { fragments, departures } = await source.cut(
       'R#0#chr',
       { start: 0, end: 48 },
       { context: 0 },
@@ -1349,7 +1349,7 @@ test.each([
   }
   const whole = await cut(inline(copyJump))
   expect(whole[1]).toHaveLength(2)
-  expect(await cut(reader)).toEqual(whole)
+  expect(await cut(headerReader)).toEqual(whole)
 })
 
 test("a sequence's length, the bytes a cut reads and the reference nodes over a window come from its tiles", async () => {
@@ -1566,12 +1566,13 @@ test('a cut whose attach fetches take it past the byte budget attaches none and 
     zoomHelps: true,
   })
   const firstTile = bytesOf(start => start < 100 || start === 190)
+  const message: unknown = expect.stringMatching(
+    /^Too many departures here whose own steps the cut must fetch.*choose fewer haplotypes or a smaller attachBp$/,
+  )
   await expect(cut(firstTile - 1)).rejects.toMatchObject({
     regionTooLarge: true,
     zoomHelps: false,
-    message: expect.stringMatching(
-      /^Too many departures here whose own steps the cut must fetch.*choose fewer haplotypes or a smaller attachBp$/,
-    ),
+    message,
   })
 })
 
@@ -1709,7 +1710,7 @@ test("a link between two pieces of one W line holds though the contig's other W 
 
 const placedSteps = (f: WalkFragment) =>
   [...f.ids]
-    .map((id, k) => `${f.rev[k] ? '<' : '>'}${id}@${f.refStarts[k]}`)
+    .map((id, k) => `${f.rev[k]! !== 0 ? '<' : '>'}${id}@${f.refStarts[k]}`)
     .join('')
 
 // The reference passes 2 and 3 twice, 6 bp nodes in one tile (copies.R.gfa).
@@ -1982,7 +1983,7 @@ test.each([
 test("a reader that cannot learn the data's length skips the directory's bytes check", async () => {
   const path = `${DATA}header.GRCh38.walks.gz`
   const data = new LocalFile(path)
-  data.stat = async () => ({ size: 0 })
+  data.stat = () => Promise.resolve({ size: 0 })
   const directory = (
     await new LocalFile(`${path}.idx`).readFile('utf8')
   ).replace(/\tbytes:i:\d+/, '\tbytes:i:12')
@@ -1997,7 +1998,7 @@ test("a reader that cannot learn the data's length skips the directory's bytes c
 // the tile and the table, is a later addition: the cut reads around it, and
 // its ref row of node 2 joins nothing
 test('a unit of a kind the reader does not know is skipped', async () => {
-  const lengthOf = (blocks: Uint8Array[]) =>
+  const unitBytes = (blocks: Uint8Array[]) =>
     blocks.reduce((sum, block) => sum + block.length, 0)
   const walks = '#walks\tformat:i:7\ttile:i:16'
   const header = bgzf(`${walks}\n#reference\tR\n`)
@@ -2007,19 +2008,19 @@ test('a unit of a kind the reader does not know is skipped', async () => {
   const sketch = bgzf(
     '#unit\tR#0#chr\t0\t4\tsketch\t0\nR#0#chr\t0\t4\tref\tR#0#chr\t0\t0\t0\t1\t4\t4\t.\n',
   )
-  const tileAt = lengthOf(header)
-  const sketchAt = tileAt + lengthOf(tile)
-  const tableAt = sketchAt + lengthOf(sketch)
+  const tileAt = unitBytes(header)
+  const sketchAt = tileAt + unitBytes(tile)
+  const tableAt = sketchAt + unitBytes(sketch)
   const table = bgzf(
     [
       '#unit\tR#0#chr\t0\t4\ttable\t.',
-      `#entry\tR#0#chr\t0\t4\ttile\t0\t${tileAt}\t${lengthOf(tile)}`,
-      `#entry\tR#0#chr\t0\t4\tsketch\t0\t${sketchAt}\t${lengthOf(sketch)}`,
+      `#entry\tR#0#chr\t0\t4\ttile\t0\t${tileAt}\t${unitBytes(tile)}`,
+      `#entry\tR#0#chr\t0\t4\tsketch\t0\t${sketchAt}\t${unitBytes(sketch)}`,
       '',
     ].join('\n'),
   )
   const parts = [...header, ...tile, ...sketch, ...table]
-  const directory = `${walks}\tbytes:i:${lengthOf(parts)}\n#header\t0\t${tileAt}\nR#0#chr\t${tableAt}\t${lengthOf(table)}\n`
+  const directory = `${walks}\tbytes:i:${unitBytes(parts)}\n#header\t0\t${tileAt}\nR#0#chr\t${tableAt}\t${unitBytes(table)}\n`
   const walkFile = WalkReader.fromFilehandles({
     data: new BlobFile(new Blob(parts)),
     directory: new BlobFile(new Blob([directory])),

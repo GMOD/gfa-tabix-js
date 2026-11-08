@@ -284,6 +284,9 @@ export interface Unattached {
   departure: WalkDeparture
 }
 
+const edgeKey = (name: string, pos: number, reversed: boolean, hap: number) =>
+  `${name}\t${pos}\t${reversed ? '-' : '+'}\t${hap}`
+
 /**
  * The cut a window draws from its walks: the reference inside the window plus
  * its context, the drawn stretch, and each run from its first step on that
@@ -580,8 +583,6 @@ export function walkCut(
   // leave step is the last step on R of its piece and a rejoin step the
   // first of its, so the cut indexes those by name, breakpoint and contig
   // position
-  const edgeKey = (name: string, pos: number, reversed: boolean, hap: number) =>
-    `${name}\t${pos}\t${reversed ? '-' : '+'}\t${hap}`
   // a piece's last step on R and where the piece ends, and its first and
   // where the piece starts
   const leaves = new Map<string, [WalkRun, number, number]>()
@@ -714,7 +715,7 @@ export function surelyKept(
   into: Set<number>,
 ) {
   for (const id of chunk.nodes.keys()) {
-    if (nodes.get(id)?.onWindow) {
+    if (nodes.get(id)?.onWindow === true) {
       into.add(id)
     }
   }
@@ -726,13 +727,15 @@ export function surelyKept(
       const at = refStarts?.[i]
       const onR = at !== undefined && !Number.isNaN(at)
       if (
-        node?.onWindow &&
+        node?.onWindow === true &&
         onR &&
         at < end &&
         at + node.end - node.start > start
       ) {
-        for (let j = last + 1; last >= 0 && j < i; j++) {
-          into.add(ids[j]!)
+        if (last >= 0) {
+          for (let j = last + 1; j < i; j++) {
+            into.add(ids[j]!)
+          }
         }
         last = i
       } else if (contained && onR) {
@@ -800,7 +803,7 @@ export class WalkGraph {
 
   // Bases of nodes a chunk's rows give, for a window that asks for them
   addSequences(sequences: Map<number, string>) {
-    if (this.window.sequences) {
+    if (this.window.sequences === true) {
       for (const [id, bases] of sequences) {
         this.sequences.set(id, bases)
       }

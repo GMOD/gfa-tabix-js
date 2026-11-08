@@ -490,7 +490,7 @@ export class WalkReader {
       )
       let ref: ChunkRef | undefined
       for (const row of tileCut.rows) {
-        if (row.abridged && expand?.(row.name)) {
+        if (row.abridged && expand?.(row.name) === true) {
           const { name } = row.abridged.detail
           if (!detailsRead.has(name)) {
             detailsRead.add(name)

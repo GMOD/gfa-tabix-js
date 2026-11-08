@@ -244,9 +244,11 @@ export function walkGaps({
       const lastPlaced = backPlaced >= 0 ? placed[backPlaced] : undefined
       const nextPlaced = placed[firstStarting(placed, end)]
       const beforeFromPlaced =
-        lastPlaced && (!lastAnchor || lastPlaced.end > lastAnchor.end)
+        lastPlaced !== undefined &&
+        (!lastAnchor || lastPlaced.end > lastAnchor.end)
       const afterFromPlaced =
-        nextPlaced && (!nextAnchor || nextPlaced.start < nextAnchor.start)
+        nextPlaced !== undefined &&
+        (!nextAnchor || nextPlaced.start < nextAnchor.start)
       return {
         before: beforeFromPlaced
           ? lastPlaced.d.rejoinPos
