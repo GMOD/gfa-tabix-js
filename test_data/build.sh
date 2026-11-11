@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuilds the walk-file fixtures from their GFAs with gfa-to-tabix 4.0, in
+# Rebuilds the walk-file fixtures from their GFAs with gfa-to-tabix 4.1, in
 # walk format 7. Usage: test_data/build.sh <gfa-to-tabix binary>
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -44,3 +44,6 @@ build twolines twolines.R.gfa --refs R --tile 20
 build abredge abredge.R.gfa --refs R --tile 20 --abridge-bytes 1
 build drawnedge drawnedge.R.gfa --refs R --tile 10000 --abridge-steps 3
 build attachmany attachmany.R.gfa --refs R --tile 10
+build blocks blocks.R.gfa --refs R --tile 60 --abridge-bytes 1
+build hairpin hairpin.R.gfa --refs R --tile 36 --abridge-bytes 1
+build cover cover.R.gfa --refs R --abridge-bytes 1

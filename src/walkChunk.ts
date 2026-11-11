@@ -663,6 +663,11 @@ export function unloadedRow(
     n += j - i + (blocks.own[k]! > 0 ? 1 : 0)
     bp += length + blocks.own[k]!
   }
+  if (tail < 0) {
+    throw new WalkRowError(
+      `piece ${piece.piece + 1} of ${name} starts ${-tail} bp before piece ${piece.piece}'s ${abridged.bp} bp from ${piece.hapOffset} end`,
+    )
+  }
   if (
     bp !== abridged.bp ||
     blocks.own[0] !== 0 ||
