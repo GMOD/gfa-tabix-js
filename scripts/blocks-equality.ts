@@ -21,15 +21,19 @@
 //   node scripts/blocks-equality.ts <walks.gz or URL> [--windows 300]
 //     [--seed 1] [--width 1000] [--context 1000] [--contained-context 0]
 //     [--sequence <name>] [--against stated|full] [--from 0]
+//     [--haplotypes 64]
 //
 // Prints every difference, then the counts. Exits 1 on a difference from
 // the stated cut, 2 on differences from the full cut alone, 0 on none.
 // `--against` makes one of the two comparisons, at two thirds of the reads,
 // and `--from k` skips the first k windows of the seed's, to go on after a
-// stop or to share the windows between runs. One cut is held at a time and
-// each window's progress goes to stderr with the resident memory; a cut over
-// the densest tiles holds about 1 GB, so give node a heap bound under the
-// machine's, as `node --max-old-space-size=3072`.
+// stop or to share the windows between runs. Memory is bounded by one cut of
+// `--haplotypes` haplotypes at a time, 64 unless given: each window is cut
+// once per that many of the file's haplotypes and the cuts compared one by
+// one, as a walk's fragments, departures and gaps do not depend on the other
+// walks cut. 0 cuts every haplotype together, which on HPRC's densest tiles
+// holds over 4 GB. Each window's progress goes to stderr with the resident
+// memory.
 // A contained cut keeps `--contained-context` bp of a walk past its steps on
 // the window: above 0, an unloaded piece's own run there is one step, kept
 // whole where the loaded cut keeps the nodes of its first bp, so the two
@@ -41,6 +45,7 @@ import {
   isPlaceholder,
   structuralForms,
   walkDepartures,
+  walksKept,
 } from '../src/index.ts'
 
 import type {
@@ -72,6 +77,7 @@ const context = Number(flag('context') ?? 1000)
 const containedContext = Number(flag('contained-context') ?? 0)
 const onlySequence = flag('sequence')
 const firstWindow = Number(flag('from') ?? 0)
+const perCut = Number(flag('haplotypes') ?? 64)
 const AGAINST = ['stated', 'full'] as const
 const against = AGAINST.filter(
   name => flag('against') === undefined || flag('against') === name,
@@ -348,13 +354,12 @@ function report(
 // one cut held at a time
 async function compare(
   window: Window,
-  contained: boolean,
+  where: string,
   cut: (opts: {
     expand?: () => boolean
     expandStated?: boolean
   }) => Promise<Cut>,
 ) {
-  const where = `${window.refName}:${window.start}-${window.end}${contained ? ' contained' : ''}`
   const unloaded = summary(await cut({}), window)
   for (const name of against) {
     const loaded = summary(
@@ -412,8 +417,15 @@ async function main() {
       : new LocalFile(location),
   )
   const tiles = await abridgedTiles(reader)
+  const { haplotypes } = await reader.header()
+  const batches =
+    perCut > 0 && haplotypes.length > perCut
+      ? Array.from({ length: Math.ceil(haplotypes.length / perCut) }, (_, b) =>
+          haplotypes.slice(b * perCut, (b + 1) * perCut),
+        )
+      : [haplotypes]
   print(
-    `${path}: ${tiles.length} abridged tiles; windows ${firstWindow + 1} to ${windowCount} of ${width} bp, seed ${seed}, context ${context} plain and ${containedContext} contained`,
+    `${path}: ${tiles.length} abridged tiles, ${haplotypes.length} haplotypes cut ${batches.length > 1 ? `${perCut} at a time` : 'together'}; windows ${firstWindow + 1} to ${windowCount} of ${width} bp, seed ${seed}, context ${context} plain and ${containedContext} contained`,
   )
   const next = random(seed)
   for (let k = 0; k < windowCount && tiles.length > 0; k++) {
@@ -424,17 +436,26 @@ async function main() {
     const window = { refName: tile.refName, start, end: start + width }
     if (k >= firstWindow) {
       for (const contained of [false, true]) {
-        await compare(window, contained, expansion =>
-          reader.cut(window.refName, window, {
-            context: contained ? containedContext : context,
-            contained,
-            links: false,
-            stepBudget: Infinity,
-            byteBudget: Infinity,
-            departureByteBudget: Infinity,
-            ...expansion,
-          }),
-        )
+        for (const [b, batch] of batches.entries()) {
+          await compare(
+            window,
+            `${window.refName}:${window.start}-${window.end}${contained ? ' contained' : ''}${batches.length > 1 ? ` haplotypes ${b * perCut + 1}-${b * perCut + batch.length}` : ''}`,
+            expansion =>
+              reader.cut(window.refName, window, {
+                keep:
+                  batches.length > 1
+                    ? walksKept(batch, window.refName)
+                    : undefined,
+                context: contained ? containedContext : context,
+                contained,
+                links: false,
+                stepBudget: Infinity,
+                byteBudget: Infinity,
+                departureByteBudget: Infinity,
+                ...expansion,
+              }),
+          )
+        }
       }
       totals.windows++
       process.stderr.write(
