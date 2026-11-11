@@ -40,36 +40,13 @@ fragments' ends, in chains:
   span as `copied`
 - R that two chains of one haplotype reach, such as a contig's second visit to
   the window or a second contig over the same locus, is no call there
-- An abridged fragment's bp lie between the R its handles reach, so the
-  departure holding it is exact in net, and only placement inside it is lost.
-  Each abridged row is one piece's stretch from its first step on R to its last,
-  from its hapOffset to hapOffset + bp, so a piece of another chunk between two
-  moved pieces is a fragment of its own and the departures between them are
-  records. Before gfa-to-tabix wrote a row per piece, one row stood for a path's
-  moved pieces in a chunk with the bp of those pieces alone, and a reader had to
-  add what lay between them; leaving that out put AMY1's unexpanded HG03710#1 29
-  kb short: +167,764 bp against +196,894 expanded
-- Every departure record leaves at a piece's last step on R and rejoins at a
-  piece's first, where an abridged row's stretch ends, so a record keeps all its
-  own bp and shares none with a piece's net, and a piece's own steps at its
-  contig's start or end, which no record covers, are no change. While rows
-  covered the whole piece, graph-walks cut each by the records ending inside it,
-  which left those at a contig's ends in the net: L#1 and M#1 in
-  `test_data/contigends.R` read +30 bp unexpanded against 0 expanded. A piece
-  runs along R or against it as both its handles do, so one against R in a chain
-  read forward is inverted ALT, as its steps would be
-- The reader this replaced kept, of a departure with an end inside a piece, only
-  the bp the graph lacks and the own steps the cut held, which it attaches only
-  up to `ATTACH_BP`, and joined two pieces a departure left and rejoined inside
-  into one net. Own steps in no piece of the cut, such as a W line holding none
-  of R or a step on another reference sequence, counted nowhere, and a piece's
-  trailing own steps went into its net even where the departure rejoined
-  reversed and the walks read in full close nothing. On MC chr22 that put 11
-  haplotypes in 29 windows off their expanded net: HG03453#1 at
-  chr22:18,219,008-18,284,544 read +227,316 bp unexpanded against +2,382
-  expanded, HG00329#2 256,134 against 268,533. Unexpanded and expanded now give
-  all 463 haplotypes the same net and coverage in each of those 29 windows, the
-  28 of the forms arbitration and that one
+- An abridged piece the cut did not load reads as its loaded one does. Its
+  `blocks` row states its steps on R, each with its strand, and the bp of its
+  own between them, so every departure inside it is exact in place and size
+  (gfa-to-tabix's ADR 0012). Before that row, a reader had the piece's first and
+  last steps on R and its bp alone, and netted the bp between them: a piece that
+  turned back or jumped read as a block over R it never stepped on, and one
+  stepping past both end steps was absent there
 
 Walks give exact lengths. Each haplotype's summed departures across the truth
 table's span match its assembly in 2,779 of 2,780 scored cases, median gap 0 bp;
@@ -189,7 +166,6 @@ folds, and the rest becomes `~` or `other`, which claims no size.
 | `inversion`                            | Net change under the floor, inverted bp at or over it                      |
 | `duplication`                          | A step back along R; `repeatedBp` and `copied` give the copy               |
 | `shift`                                | A paired deletion and insertion or duplication; `shiftedBp` gives the size |
-| `net`                                  | An abridged walk left unexpanded: its net change somewhere in its span     |
 
 A replacement whose smaller side is under 5% of its larger one
 (`LOPSIDED_RATIO`) keeps kind `replacement`, its REF span, ALT length and delta,
@@ -258,44 +234,20 @@ rule gives that 5 kb window 50 bp and the five windows above 1 kb.
 
 ## Abridged walks
 
-`formsCut` expands abridged walks, fewest steps first, under `FORMS_STEP_BUDGET`
-(16 M steps), and leaves any past it as `net` marks.
+`formsCut` expands no abridged walk. A piece the cut does not load comes from
+its tile's `blocks` unit with its steps on R and the bp of its own between them,
+and its departures are those its detail record gives: forms key on a departure's
+place and size, never on its nodes.
 
-- Net-only is a poor default: at MHC 304 haplotypes get `net` marks spanning a
-  whole 60-65 kb chunk, and at LPA only 153 haplotypes can be scored at all (406
-  expanded)
-- An expanded MHC cut keeps 9.4 M steps, past `WALK_BUDGETS`' 4 M, so `formsCut`
-  has its own budget, which its cuts keep to in place of the reader's default
-- Expansion costs a second cut over the same chunks, since only the first lists
-  the abridged walks and their steps
-- `partial: false` reads every abridged walk or none. Where reading them all
-  would take the cut past `stepBudget`, `formsCut` throws
-  `ExpansionTooLargeError` after the plain cut, before the second. Partial
-  expansion is a poor middle: MHC at a 4 M budget costs 3.5 s and still leaves
-  191 haplotypes net-only, worse than the sidecar
-- A gfa-to-tabix `dp` tag listing departures on abridged rows would remove the
-  expansion. Readers skip unknown tags (`walkChunk.ts`), so it needs no format
-  bump, but the HPRC files would need a rebuild: 39 min and 13 GB on 24 cores,
-  plus the 64 GB base-level GFA
-
-`expand` false against true, measured by jb2hubs, wall time:
-
-| Window | Plain cut | All expanded | RSS               |
-| ------ | --------- | ------------ | ----------------- |
-| MHC    | 1.7-2.4 s | 9.5 s        | 0.41 → 1.5-1.7 GB |
-| KIR    | 3.6 s     | 7.3 s        |                   |
-| LPA    | 1.9 s     | 4.8 s        |                   |
-| AMY1   | 1.7 s     | 3.1 s        |                   |
-
-Expanded cuts before parallel detail reads, and `formsCut` with 16 at once
-(graph-walks after 4.0.0), cold / warm:
-
-| Window      | Plain cut     | Abridged walks | Expanded, serial    | `formsCut`    | Steps expanded |
-| ----------- | ------------- | -------------- | ------------------- | ------------- | -------------- |
-| GSTM1 35 kb | 0.85 / 0.24 s | 0              | (none)              | 0.46 / 0.31 s | 0.4 M          |
-| LPA 130 kb  | 0.82 / 0.74 s | 291            | 8.4-11.6 / 2.1 s    | 4.8 / 3.5 s   | 6.1 M          |
-| AMY1 150 kb | 0.72 / 0.60 s | 132            | 3.8-4.3 / 1.2-1.7 s | 2.5 / 2.1 s   | 4.0 M          |
-| MHC 90 kb   | 1.0 / 1.0 s   | 519            | 19-25 / 9-15 s      | 8.2 / 7.4 s   | 9.4 M          |
+- `scripts/blocks-equality.ts` holds the two equal on a walk file: over random
+  windows on its abridged tiles, each haplotype's cover and departures and the
+  structural forms from the cut that expands nothing against the cut that
+  expands every walk
+- Until graph-walks 7 the forms cut read abridged walks in full from their
+  detail records, fewest steps first under `FORMS_STEP_BUDGET`, and left any
+  past it as a `net` mark over its whole span. That cost a second cut over the
+  same tiles, and a haplotype whose piece the first cut dropped was never
+  expanded, so it came back with nothing covered
 
 `structuralForms` takes under 0.1 s in every window, so the cut dominates.
 `formsCut` spends about 1 s over a single expanded cut on its first, plain cut.

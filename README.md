@@ -57,7 +57,9 @@ const tables = graph.tables(kept, fragments, departures)
 - `WalkReader.fromFilehandles({ data, directory })` takes the two handles
   already open: `data` the `.walks.gz`, `directory` its `.idx`. Any object with
   a generic-filehandle2 handle's `read`, `readFile`, `stat` and `source` will do
-- A file gfa-to-tabix 4.0 or later wrote; a format 6 `.walks.bed.gz` has no
+- A file gfa-to-tabix 4.0 or later wrote, and 4.1 or later for a sequence with
+  abridged tiles, which the reader places from their `blocks` units
+  ([Abridged walks](#abridged-walks)); a format 6 `.walks.bed.gz` has no
   directory, and the reader says to rebuild it. jbrowse.org hosts the HPRC
   release 2.1 graph's walk file in format 7,
   `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38.GRCh38.walks.gz`
@@ -73,6 +75,48 @@ const tables = graph.tables(kept, fragments, departures)
   and the tile size, `tile`, read from the walk file's header unit
 - `reader.referenceSequences()` lists the sequences a region can be on, in full
   PanSN: `GRCh38#0#chr6`
+
+## Changes in 7
+
+graph-walks 7 reads an abridged piece it does not load from its tile's `blocks`
+unit (gfa-to-tabix's ADR 0012): its steps on the reference, exactly, and one
+placeholder step for each run of its own. The two-step fragment that stood for
+such a piece, and everything that netted it, is gone.
+
+- **Refused:** a sequence whose unit table lists a detail unit and no `blocks`
+  unit for its tile, with a `WalkFormatError` that says to rebuild the walk file
+  with gfa-to-tabix 4.1 or later. A sequence with no detail unit reads as before
+- **`WalkFragment.abridged`** is a list, one `{ steps, bp, detail }` per piece
+  of the fragment the cut did not load, in the walk's order. The fragment is an
+  ordinary one: `ids`, `refStarts`, `against`, `hapStart`, `hapEnd`,
+  `trimmedBefore` and `trimmedAfter` mean what they mean on any fragment, and an
+  unloaded piece joins the pieces beside it
+- **Placeholders:** a step with `isPlaceholder(id)`, an id below 0, is a run of
+  own steps the cut did not load. Its `WalkNode` has `placeholder: true`, the
+  run's bp as its length, and its place on its walk's contig. No two steps share
+  one, it has no links, and two of equal bp may hold different sequence. They
+  are in `kept`, and in a departure's `steps` and a gap's `steps` segment where
+  the run is that departure's own
+- **`GraphTables`:** `nodes.placeholders` flags placeholder nodes, whose names
+  are their ids, `-1` and below. `walks.abridgedSteps` is the steps of a walk's
+  unloaded pieces summed, NaN for a walk with none. `walks.abridgedBp` is gone:
+  the placeholders' lengths are the bp not loaded
+- **Gaps:** `GapKind` and `GAP_KINDS` lose `abridged`, so `own` is kind 2 and
+  `unread` kind 3 in a gap table. An unloaded piece's steps outside a fragment
+  are `read`, as a loaded piece's are. An `own` segment's `abridged` flag is set
+  where the record leaves from or rejoins at a piece the cut did not load
+- **Forms:** `Departure.abridged`, the `net` mark kind and
+  `StructuralForms.abridged` are gone, since an unloaded piece gives the
+  departures its loaded one gives. `formsCut` makes one cut and reads no detail
+  unit: its `expand` and `partial` options and `ExpansionTooLargeError` are
+  gone, and `stepBudget` bounds that cut, throwing `RegionTooLargeError`
+- **`expand`** reads a walk's detail unit only where its extent overlaps the
+  window and its context, or in a tile fetched for a record's own steps. An
+  abridged piece outside that is left out of the cut, whether or not its walk is
+  expanded
+- **`byteBudget`** counts the `blocks` units a cut reads
+- New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder`, and
+  `expandStated` on a cut, for checks
 
 ## Changes in 6
 
@@ -166,6 +210,7 @@ const { tables, refName, sample } = await reader.cutRegion(
 | `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                  |
 | `signal`              | An `AbortSignal` that stops the reads                                                   |
 | `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default     |
+| `expandStated`        | For checks: with `expand`, read each piece only as far as its `blocks` row states it    |
 | `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets            |
 
 - A cut over a budget or its node limit throws a `RegionTooLargeError`. The
@@ -188,9 +233,10 @@ const { tables, refName, sample } = await reader.cutRegion(
   fetched for records' own steps count against `byteBudget` with the window's,
   and a cut they would take past it throws the same `RegionTooLargeError` before
   fetching any of them, so a window attaches every eligible record's own steps
-  or none. The detail records `expand` names count only against `stepBudget`,
-  once read; the writer moves paths out of any tile whose rows would compress
-  past its header's `abridgebytes`
+  or none. The `blocks` units a cut reads for the pieces it leaves unloaded
+  count against `byteBudget` too. The detail records `expand` names count only
+  against `stepBudget`, once read; the writer moves paths out of any tile whose
+  rows would compress past its header's `abridgebytes`
 - A narrow window reads whole tiles, so a cut reads several times the steps it
   keeps. The rows a cut decodes from the window's tiles, and from the detail
   records `expand` names once they are decoded, may hold up to 8 times
@@ -236,10 +282,9 @@ follows (or precedes, for a row's start), and `segments` in contig order whose
 - `read`: steps of the walk's runs over the window's tiles that the cut kept
   out, such as reference steps off the drawn stretch or own steps of a departure
   over `attachBp`
-- `abridged`: an abridged run of those tiles that is not a fragment
 - `own`: a record's own sequence the cut did not read, with its `missingBp`, in
   no stated order, and `abridged` set where the record's leave or rejoin piece
-  is an abridged run
+  is one the cut did not load, so expanding the walk reads those steps
 - `unread`: pieces the cut did not read, with the reference breakpoints the cut
   knows `before` and `after` them
 
@@ -318,8 +363,9 @@ for (const d of departures) {
   `RegionTooLargeError` where they would take the cut past `byteBudget`, so
   whether a record gets its steps does not depend on the other walks the cut
   keeps, as gfa-to-tabix ADR 0009 asks
-- Own steps in an abridged piece come only for a walk `expand` names, which
-  reads its detail unit
+- Own steps after an unloaded piece's last step on the reference come only for a
+  walk `expand` names, which reads its detail unit; where the cut read the next
+  piece, a placeholder of their bp stands for them
 - `fromSteps` is true for a departure computed from a piece's steps
 - Those steps' nodes are kept, so the cut draws a short insertion or replacement
   at the window's edge whole, and counts them against `stepBudget`
@@ -332,23 +378,40 @@ for (const d of departures) {
 ## Abridged walks
 
 - In a tile over its budget, gfa-to-tabix moves the costliest paths' rows to
-  detail records and leaves one `abridged` row per moved piece. A satellite
-  array in a pggb graph is the usual case
-- The cut makes a separate fragment for each such row, with an `abridged` field:
-  the piece's `steps` and `bp`, and the `detail` unit that holds it with the
-  path's other moved pieces in the tile: its sequence `refName`, the tile's
-  nominal `start`, and its `name`, `tile:detail`. The fragment's two steps are
-  the piece's first and last handles on the reference, `hapStart`/`hapEnd` are
-  exactly where the stretch between them lies on its contig, and `steps` counts
-  all the piece's steps, its own before and after that stretch included
-- `graph.tables(kept, fragments, departures)` keeps them as `abridgedSteps` and
-  `abridgedBp` columns, NaN for every other walk
-- With `expand` naming a walk, the cut reads its detail records and cuts it in
-  full, as a file without abridging would
-- `walkDepartures` nets an unexpanded piece over its whole stretch, `bp` against
-  the reference between its handles, which may reach past the window; an
-  expanded one is trimmed to the drawn stretch like any walk, so the two reads
-  differ over a piece straddling the drawn stretch's edge
+  detail records and leaves one `abridged` row per moved piece, and a `blocks`
+  unit for the tile with a row per piece: its runs on the reference and the bp
+  of its own between them. A satellite array in a pggb graph is the usual case
+- A cut that does not expand a walk builds each of its abridged pieces from its
+  `blocks` row and the tile's reference path: the reference steps each block
+  covers, in the block's direction, and one placeholder step for each run of the
+  piece's own, with that run's bp and no node. The piece is then cut as a loaded
+  one is: kept where a step of it lies on the drawn stretch, trimmed to its
+  first and last steps there, joined to the pieces beside it, split by a
+  contained cut, and read for departures, gaps and forms
+- A fragment's `abridged` lists the pieces in it the cut did not load, each with
+  its `steps`, the `bp` of its stretch from its first step on the reference to
+  its last, and the `detail` unit that holds it: its sequence `refName`, the
+  tile's nominal `start`, and its `name`, `tile:detail`. `steps` counts all the
+  piece's steps, which reading the unit decodes
+- `isPlaceholder(id)` tells a placeholder step, whose id is below every node's.
+  Its node, in `graph.nodes` and in the tables' `nodes` with `placeholders` set,
+  has the run's bp as its length and lies on the walk's contig. Each run has its
+  own, so no two walks share one, and two of equal bp may hold different
+  sequence: only expanding tells
+- `graph.tables(kept, fragments, departures)` keeps the steps of a walk's
+  unloaded pieces, summed, as `abridgedSteps`, NaN for a walk with none
+- With `expand` naming a walk, the cut reads its detail records whose extent
+  overlaps the window and its context, and cuts those pieces in full, as a file
+  without abridging would. A cut that expands every piece it keeps reads no
+  `blocks` unit
+- A `blocks` row states a piece from its first step on the reference to its
+  last. Own steps before a line's first piece are the bp from the line's start,
+  and own steps after a piece's last step on the reference are the bp to the
+  next piece where the cut read it; where it did not, the cut knows them only as
+  the following record's `ownBp`, an `own` gap segment with `abridged` set
+- An abridged piece whose detail unit lies off the window and its context is
+  left out of the cut: it has no step there, and its stretch of the contig is
+  `unread` in the gaps
 
 ## Moved components
 
@@ -376,26 +439,22 @@ result.forms.map(f => formTag(f, result))
 // ['del 18.4kb', 'ref']
 ```
 
-- `formsCut` cuts the region uncontained and without links, reads abridged walks
-  in full while the cut stays under `FORMS_STEP_BUDGET` steps, and returns each
+- `formsCut` cuts the region uncontained and without links, and returns each
   haplotype's departures from the reference: exact REF span and ALT length,
-  inverted bp, and bp walked again by a step back along the reference
-- `formsCut` with `partial: false` reads every abridged walk or none: where
-  reading them all would take the cut past `stepBudget`, it throws
-  `ExpansionTooLargeError`, a `RegionTooLargeError` with the step count, before
-  the second cut
+  inverted bp, and bp walked again by a step back along the reference. It
+  expands no walk: an abridged piece's `blocks` row gives the departures its
+  detail record gives
+- `formsCut` keeps to `FORMS_STEP_BUDGET` steps, or its `stepBudget`, and throws
+  `RegionTooLargeError` past it
 - `formsCut` takes `byteBudget`, and a region whose tiles the table puts past it
-  throws `RegionTooLargeError` before any read. The budget covers the region's
-  tiles, not the detail records an expanded cut reads, which only the step
-  budget bounds
+  throws `RegionTooLargeError` before any read
 - `formsCut` reads each haplotype's departures off the cut's `departures`, every
   one over the region, and its fragments' ends, so a haplotype that leaves the
   region and rejoins the reference far away, or jumps over it whole, is a
   departure with no step on it; `walkDepartures` does the same for any cut
 - `structuralForms` groups the haplotypes that make the same changes at every
   informative site. Each change is a `Mark`: an insertion, deletion,
-  replacement, inversion, shift, duplication or `net`, the last for an abridged
-  walk left unexpanded
+  replacement, inversion, shift or duplication
 - Each mark in a result names its `site` in `sites` and its `state` key there. A
   site is `edge`, `shared` (no form differs there) or informative, and
   `formStateAt(result, form, site)` gives a form's state key at any of them.
@@ -444,7 +503,6 @@ result.forms.map(f => formTag(f, result))
 | other replacement              | `repl 32.7kb->58.7kb`                   |
 | shift, inversion, duplication  | `shift 94.2kb`, `inv 12kb`, `dup 49kb`  |
 | shift that changes length      | `shift 94.2kb net +2.81kb`              |
-| abridged walk left unexpanded  | `net +78kb`, `net -94kb`                |
 | no change, only shared changes | `ref`, `shared`                         |
 | rare change, no call           | `rarer`, `no call`                      |
 | more changes, in `formTag`     | `del 32.7kb +1`                         |
@@ -537,7 +595,8 @@ const gfa = await rgfaCut(
   either piece, the cut fetches the tiles the record's `ownTiles` names, every
   one wanted in one more read counted against `byteBudget`, and takes from them
   the records' own steps alone; a tile fetched again decodes only the walks it
-  was not decoded for. Expanding an abridged piece reads its `detail` unit
+  was not decoded for. An abridged piece over the window is read from its tile's
+  `blocks` unit, or from its `detail` unit where the cut expands its walk
 
 ## License
 

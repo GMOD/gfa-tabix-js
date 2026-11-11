@@ -356,8 +356,8 @@ export class WalkReader {
     )
   }
 
-  // The compressed bytes a cut of `region` reads before any attach fetch or
-  // expansion: its tiles and departure blocks
+  // The compressed bytes a cut of `region` reads before any attach fetch,
+  // expansion or blocks unit: its tiles and departure blocks
   async bytesFor(
     refName: string,
     region: { start: number; end: number },
