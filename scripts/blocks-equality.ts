@@ -20,11 +20,16 @@
 //
 //   node scripts/blocks-equality.ts <walks.gz or URL> [--windows 300]
 //     [--seed 1] [--width 1000] [--context 1000] [--contained-context 0]
-//     [--sequence <name>] [--against stated|full]
+//     [--sequence <name>] [--against stated|full] [--from 0]
 //
 // Prints every difference, then the counts. Exits 1 on a difference from
 // the stated cut, 2 on differences from the full cut alone, 0 on none.
-// `--against` makes one of the two comparisons, at two thirds of the reads.
+// `--against` makes one of the two comparisons, at two thirds of the reads,
+// and `--from k` skips the first k windows of the seed's, to go on after a
+// stop or to share the windows between runs. One cut is held at a time and
+// each window's progress goes to stderr with the resident memory; a cut over
+// the densest tiles holds about 1 GB, so give node a heap bound under the
+// machine's, as `node --max-old-space-size=3072`.
 // A contained cut keeps `--contained-context` bp of a walk past its steps on
 // the window: above 0, an unloaded piece's own run there is one step, kept
 // whole where the loaded cut keeps the nodes of its first bp, so the two
@@ -66,6 +71,7 @@ const width = Number(flag('width') ?? 1000)
 const context = Number(flag('context') ?? 1000)
 const containedContext = Number(flag('contained-context') ?? 0)
 const onlySequence = flag('sequence')
+const firstWindow = Number(flag('from') ?? 0)
 const AGAINST = ['stated', 'full'] as const
 const against = AGAINST.filter(
   name => flag('against') === undefined || flag('against') === name,
@@ -272,14 +278,31 @@ function differences(unloaded: Rows, loaded: Rows) {
   return out
 }
 
-function rowsOf(cut: Cut, window: Window) {
+const named = (fragments: WalkFragment[]) =>
+  fragments.map(f => `${f.name} from ${f.hapStart}`)
+
+// What a cut states, as rows to compare, with the fragments holding a piece
+// it did not load, those with a placeholder out of place, and its placeholder
+// steps; the cut itself is let go
+function summary(cut: Cut, window: Window) {
   const { covers, forms } = formRows(cut, window)
+  const walks = cut.fragments.filter(f => f.name !== window.refName)
   return {
-    fragment: fragmentRows(cut, window.refName),
-    departure: departureRows(cut.departures),
-    gap: gapRows(cut.gaps),
-    cover: covers,
-    forms,
+    rows: {
+      fragment: fragmentRows(cut, window.refName),
+      departure: departureRows(cut.departures),
+      gap: gapRows(cut.gaps),
+      cover: covers,
+      forms,
+    },
+    unloaded: named(
+      walks.filter(f => f.abridged !== undefined || f.ids.some(isPlaceholder)),
+    ),
+    misplaced: named(walks.filter(f => strayPlaceholders(f) > 0)),
+    placeholders: walks.reduce(
+      (sum, f) => sum + f.ids.filter(isPlaceholder).length,
+      0,
+    ),
   }
 }
 
@@ -321,49 +344,46 @@ function report(
   }
 }
 
-function compare(
+// A window's cut that expands nothing against those that expand every walk,
+// one cut held at a time
+async function compare(
   window: Window,
   contained: boolean,
-  cuts: { unloaded: Cut; stated?: Cut; full?: Cut },
+  cut: (opts: {
+    expand?: () => boolean
+    expandStated?: boolean
+  }) => Promise<Cut>,
 ) {
   const where = `${window.refName}:${window.start}-${window.end}${contained ? ' contained' : ''}`
-  const unloaded = rowsOf(cuts.unloaded, window)
-  for (const name of AGAINST) {
-    const cut = cuts[name]
-    if (cut) {
-      const loaded = rowsOf(cut, window)
-      for (const kind of KINDS) {
-        report(name, kind, where, differences(unloaded[kind], loaded[kind]))
-      }
+  const unloaded = summary(await cut({}), window)
+  for (const name of against) {
+    const loaded = summary(
+      await cut({ expand, expandStated: name === 'stated' }),
+      window,
+    )
+    for (const kind of KINDS) {
       report(
         name,
-        'unloaded-piece-in-loaded-cut',
+        kind,
         where,
-        cut.fragments.flatMap(f =>
-          f.abridged || f.ids.some(isPlaceholder)
-            ? [`${f.name} from ${f.hapStart}`]
-            : [],
-        ),
+        differences(unloaded.rows[kind], loaded.rows[kind]),
       )
     }
+    report(name, 'unloaded-piece-in-loaded-cut', where, loaded.unloaded)
   }
   report(
     against[0] ?? 'stated',
     'placeholder-misplaced',
     where,
-    cuts.unloaded.fragments.flatMap(f =>
-      strayPlaceholders(f) > 0 ? [`${f.name} from ${f.hapStart}`] : [],
-    ),
+    unloaded.misplaced,
   )
   totals.cuts++
-  totals.fragments += unloaded.fragment.size
-  for (const f of cuts.unloaded.fragments) {
-    totals.unloadedFragments += f.abridged ? 1 : 0
-    totals.placeholders += f.ids.filter(isPlaceholder).length
-  }
-  totals.departures += unloaded.departure.size
-  totals.gaps += unloaded.gap.size
-  totals.covers += unloaded.cover.size
+  totals.fragments += unloaded.rows.fragment.size
+  totals.unloadedFragments += unloaded.unloaded.length
+  totals.placeholders += unloaded.placeholders
+  totals.departures += unloaded.rows.departure.size
+  totals.gaps += unloaded.rows.gap.size
+  totals.covers += unloaded.rows.cover.size
 }
 
 async function abridgedTiles(reader: WalkReader) {
@@ -393,7 +413,7 @@ async function main() {
   )
   const tiles = await abridgedTiles(reader)
   print(
-    `${path}: ${tiles.length} abridged tiles; ${windowCount} windows of ${width} bp, seed ${seed}, context ${context} plain and ${containedContext} contained`,
+    `${path}: ${tiles.length} abridged tiles; windows ${firstWindow + 1} to ${windowCount} of ${width} bp, seed ${seed}, context ${context} plain and ${containedContext} contained`,
   )
   const next = random(seed)
   for (let k = 0; k < windowCount && tiles.length > 0; k++) {
@@ -402,30 +422,25 @@ async function main() {
       tile.start +
       Math.floor(next() * Math.max(1, tile.end - tile.start - width))
     const window = { refName: tile.refName, start, end: start + width }
-    for (const contained of [false, true]) {
-      const opts = {
-        context: contained ? containedContext : context,
-        contained,
-        links: false,
-        stepBudget: Infinity,
-        byteBudget: Infinity,
-        departureByteBudget: Infinity,
+    if (k >= firstWindow) {
+      for (const contained of [false, true]) {
+        await compare(window, contained, expansion =>
+          reader.cut(window.refName, window, {
+            context: contained ? containedContext : context,
+            contained,
+            links: false,
+            stepBudget: Infinity,
+            byteBudget: Infinity,
+            departureByteBudget: Infinity,
+            ...expansion,
+          }),
+        )
       }
-      compare(window, contained, {
-        unloaded: await reader.cut(window.refName, window, opts),
-        stated: against.includes('stated')
-          ? await reader.cut(window.refName, window, {
-              ...opts,
-              expand,
-              expandStated: true,
-            })
-          : undefined,
-        full: against.includes('full')
-          ? await reader.cut(window.refName, window, { ...opts, expand })
-          : undefined,
-      })
+      totals.windows++
+      process.stderr.write(
+        `window ${k + 1} of ${windowCount}, ${window.refName}:${window.start}-${window.end}: ${count(found.stated)} and ${count(found.full)} differences so far, ${Math.round(process.memoryUsage().rss / 1e6)} MB\n`,
+      )
     }
-    totals.windows++
   }
   print(
     `compared: ${totals.windows} windows, ${totals.cuts} cuts, ${totals.fragments} fragments (${totals.unloadedFragments} with unloaded pieces, ${totals.placeholders} placeholder steps), ${totals.departures} departures, ${totals.gaps} gaps, ${totals.covers} haplotype covers`,
