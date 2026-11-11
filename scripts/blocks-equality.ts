@@ -20,10 +20,15 @@
 //
 //   node scripts/blocks-equality.ts <walks.gz or URL> [--windows 300]
 //     [--seed 1] [--width 1000] [--context 1000] [--contained-context 0]
-//     [--sequence <name>]
+//     [--sequence <name>] [--against stated|full]
 //
 // Prints every difference, then the counts. Exits 1 on a difference from
 // the stated cut, 2 on differences from the full cut alone, 0 on none.
+// `--against` makes one of the two comparisons, at two thirds of the reads.
+// A contained cut keeps `--contained-context` bp of a walk past its steps on
+// the window: above 0, an unloaded piece's own run there is one step, kept
+// whole where the loaded cut keeps the nodes of its first bp, so the two
+// differ.
 import { LocalFile, RemoteFile } from 'generic-filehandle2'
 
 import {
@@ -61,6 +66,10 @@ const width = Number(flag('width') ?? 1000)
 const context = Number(flag('context') ?? 1000)
 const containedContext = Number(flag('contained-context') ?? 0)
 const onlySequence = flag('sequence')
+const AGAINST = ['stated', 'full'] as const
+const against = AGAINST.filter(
+  name => flag('against') === undefined || flag('against') === name,
+)
 
 const print = (line: string) => {
   process.stdout.write(`${line}\n`)
@@ -298,45 +307,48 @@ const count = (counts: Map<string, number>) =>
   [...counts.values()].reduce((sum, n) => sum + n, 0)
 
 function report(
-  against: 'stated' | 'full',
+  name: 'stated' | 'full',
   kind: string,
   where: string,
   lines: string[],
 ) {
   for (const line of lines) {
-    print(`DIFF ${against} ${kind} ${where} ${line}`)
+    print(`DIFF ${name} ${kind} ${where} ${line}`)
   }
   if (lines.length > 0) {
-    found[against].set(kind, (found[against].get(kind) ?? 0) + lines.length)
-    differing[against].add(where)
+    found[name].set(kind, (found[name].get(kind) ?? 0) + lines.length)
+    differing[name].add(where)
   }
 }
 
 function compare(
   window: Window,
   contained: boolean,
-  cuts: { unloaded: Cut; stated: Cut; full: Cut },
+  cuts: { unloaded: Cut; stated?: Cut; full?: Cut },
 ) {
   const where = `${window.refName}:${window.start}-${window.end}${contained ? ' contained' : ''}`
   const unloaded = rowsOf(cuts.unloaded, window)
-  for (const against of ['stated', 'full'] as const) {
-    const loaded = rowsOf(cuts[against], window)
-    for (const kind of KINDS) {
-      report(against, kind, where, differences(unloaded[kind], loaded[kind]))
+  for (const name of AGAINST) {
+    const cut = cuts[name]
+    if (cut) {
+      const loaded = rowsOf(cut, window)
+      for (const kind of KINDS) {
+        report(name, kind, where, differences(unloaded[kind], loaded[kind]))
+      }
+      report(
+        name,
+        'unloaded-piece-in-loaded-cut',
+        where,
+        cut.fragments.flatMap(f =>
+          f.abridged || f.ids.some(isPlaceholder)
+            ? [`${f.name} from ${f.hapStart}`]
+            : [],
+        ),
+      )
     }
-    report(
-      against,
-      'unloaded-piece-in-loaded-cut',
-      where,
-      cuts[against].fragments.flatMap(f =>
-        f.abridged || f.ids.some(isPlaceholder)
-          ? [`${f.name} from ${f.hapStart}`]
-          : [],
-      ),
-    )
   }
   report(
-    'stated',
+    against[0] ?? 'stated',
     'placeholder-misplaced',
     where,
     cuts.unloaded.fragments.flatMap(f =>
@@ -401,12 +413,16 @@ async function main() {
       }
       compare(window, contained, {
         unloaded: await reader.cut(window.refName, window, opts),
-        stated: await reader.cut(window.refName, window, {
-          ...opts,
-          expand,
-          expandStated: true,
-        }),
-        full: await reader.cut(window.refName, window, { ...opts, expand }),
+        stated: against.includes('stated')
+          ? await reader.cut(window.refName, window, {
+              ...opts,
+              expand,
+              expandStated: true,
+            })
+          : undefined,
+        full: against.includes('full')
+          ? await reader.cut(window.refName, window, { ...opts, expand })
+          : undefined,
       })
     }
     totals.windows++
@@ -414,9 +430,9 @@ async function main() {
   print(
     `compared: ${totals.windows} windows, ${totals.cuts} cuts, ${totals.fragments} fragments (${totals.unloadedFragments} with unloaded pieces, ${totals.placeholders} placeholder steps), ${totals.departures} departures, ${totals.gaps} gaps, ${totals.covers} haplotype covers`,
   )
-  for (const against of ['stated', 'full'] as const) {
+  for (const name of against) {
     print(
-      `differences from the ${against} loaded cut: ${count(found[against])} in ${differing[against].size} cuts${[...found[against]].map(([kind, n]) => `, ${kind} ${n}`).join('')}`,
+      `differences from the ${name} loaded cut: ${count(found[name])} in ${differing[name].size} cuts${[...found[name]].map(([kind, n]) => `, ${kind} ${n}`).join('')}`,
     )
   }
   process.exitCode = count(found.stated) > 0 ? 1 : count(found.full) > 0 ? 2 : 0
