@@ -412,6 +412,10 @@ for (const d of departures) {
 - An abridged piece whose detail unit lies off the window and its context is
   left out of the cut: it has no step there, and its stretch of the contig is
   `unread` in the gaps
+- `pnpm blocks-equality <walks.gz or URL>` holds the two readings equal on a
+  walk file: over random windows on its abridged tiles, the cut that expands
+  nothing against the cuts that expand every walk, plain and contained
+  (`scripts/blocks-equality.ts`)
 
 ## Moved components
 

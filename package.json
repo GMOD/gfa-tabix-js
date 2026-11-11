@@ -46,7 +46,8 @@
     "prepack": "pnpm build",
     "preversion": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
     "postversion": "git push --follow-tags",
-    "release-check": "vitest run --config release-check/vitest.config.ts"
+    "release-check": "vitest run --config release-check/vitest.config.ts",
+    "blocks-equality": "node --max-old-space-size=3072 scripts/blocks-equality.ts"
   },
   "engines": {
     "node": ">=20"
