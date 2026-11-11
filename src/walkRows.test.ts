@@ -1,4 +1,5 @@
 import { graphTablesGFA } from './testing.ts'
+import { GAP_KINDS } from './walkGaps.ts'
 import {
   WalkGraph,
   byteBudgetError,
@@ -849,7 +850,10 @@ describe('the stretches between and past a walk’s fragments', () => {
     const t = tables.gaps!
     expect(tables.walks.names).toEqual(['HG002#1#chr1', 'HG002#1#chr1'])
     expect([...t.walks]).toEqual([0])
-    expect([...t.segments.kinds]).toEqual([0, 3])
+    expect([...t.segments.kinds].map(k => GAP_KINDS[k])).toEqual([
+      'steps',
+      'own',
+    ])
     expect([...t.segments.steps].map(i => tables.nodes.names[i])).toEqual(['5'])
   })
 
@@ -901,7 +905,7 @@ describe('the stretches between and past a walk’s fragments', () => {
     ])
   })
 
-  test('an abridged run between fragments is abridged, and its handles are where the walk was last and next seen', () => {
+  test('an unloaded piece between fragments is read and kept out, its placeholder with it, and its steps on R are where the walk was last and next seen', () => {
     const g = graph()
     for (const [id, start] of [
       [7, 400],
@@ -915,6 +919,14 @@ describe('the stretches between and past a walk’s fragments', () => {
         passes: 1,
       })
     }
+    g.placeNode(-1, {
+      rank: 1,
+      refName: 'HG002#1#chr1',
+      start: 1100,
+      end: 1150,
+      passes: 0,
+      placeholder: true,
+    })
     const detail = { refName: 'GRCh38#0#chr1', start: 400, name: '400:0' }
     const runs = joinPieces([
       run(g, 'HG002#1#chr1', 100, [2]),
@@ -922,8 +934,8 @@ describe('the stretches between and past a walk’s fragments', () => {
         'HG002#1#chr1',
         3,
         1000,
-        forward(7, 8),
-        { abridged: { steps: 4, bp: 200, detail } },
+        forward(7, -1, 8),
+        { abridged: { steps: 4, bp: 250, detail } },
         g.nodes,
       ),
       walkRow('HG002#1#chr1', 6, 2000, forward(3), {}, g.nodes),
@@ -936,8 +948,8 @@ describe('the stretches between and past a walk’s fragments', () => {
         2000,
         [
           ['unread', 800, 200, 400],
-          ['abridged', 200],
-          ['unread', 800, 600, 200],
+          ['read', 250],
+          ['unread', 750, 600, 200],
         ],
       ],
     ])

@@ -15,6 +15,11 @@ export interface GraphTables {
     // 0 for a node placed off R, which may lie on the reference outside the
     // rows read; absent from tables another source builds
     passes?: Int32Array
+    // 1 for a placeholder, as WalkNode's `placeholder`: no node of the graph
+    // but one run of own steps the cut did not load, as long as the run and
+    // placed on its walk's contig. No two walks share one, and it has no
+    // links; absent from tables another source builds
+    placeholders?: Uint8Array
   }
   links: {
     from: Int32Array
@@ -32,10 +37,11 @@ export interface GraphTables {
     // from tables another source builds
     trimmedBefore?: Float64Array
     trimmedAfter?: Float64Array
-    // for a walk standing for pieces the writer abridged, their steps and bp,
-    // which its two steps on the reference leave out; NaN for any other walk
+    // for a walk with pieces the cut did not load, the steps reading them
+    // in full decodes, which `expand` does; NaN for any other walk. Its
+    // steps here are those pieces' steps on the reference and a placeholder
+    // for each run of their own
     abridgedSteps?: Float64Array
-    abridgedBp?: Float64Array
   }
   // every departure from the reference over the cut, each once
   departures: DepartureTable

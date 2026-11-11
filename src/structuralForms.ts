@@ -6,7 +6,7 @@ import type { Departure, HaplotypeDepartures } from './walkDepartures.ts'
  * What a haplotype's change does to R's bases over its REF span: inserts at a
  * point, deletes, replaces them, inverts them, or walks a stretch of R again
  * (`duplication`). A `shift` pairs a deletion with an insertion of about its
- * size near it, and `net` is an abridged walk's change somewhere in its span.
+ * size near it.
  */
 export type MarkKind =
   | 'insertion'
@@ -15,7 +15,6 @@ export type MarkKind =
   | 'inversion'
   | 'shift'
   | 'duplication'
-  | 'net'
 
 // `delta` is altLength minus the REF span. A duplication states the bp it
 // walks again and their span on R, and a shift the size of its deletion. A
@@ -126,8 +125,7 @@ export interface FormsOptions {
  * The forms a window's haplotypes fall into. `informative` indexes the sites
  * where a second state has minCarriers. `placed` counts the haplotypes in a
  * form, and `unplaced` lists those with no call in the window and no form.
- * `rareCarriers` carry a state or a form too rare to stand alone, and
- * `abridged` have a `net` mark.
+ * `rareCarriers` carry a state or a form too rare to stand alone.
  */
 export interface StructuralForms {
   sites: Site[]
@@ -136,7 +134,6 @@ export interface StructuralForms {
   placed: number
   unplaced: string[]
   rareCarriers: string[]
-  abridged: string[]
   minCarriers: number
   floorBp: number
 }
@@ -224,8 +221,8 @@ const shiftChanges = (m: Mark, floorBp = 0) =>
 /**
  * A mark's state, its size change to two significant figures: one repeat
  * unit is one state wherever the walk's boundaries fall (22,201 and 22,204 bp
- * are both `+22000`), and two units another. An inversion keys on its span,
- * and a net change apart from a placed one. A shift keys on its size, and on
+ * are both `+22000`), and two units another. An inversion keys on its
+ * span. A shift keys on its size, and on
  * its net change where that reaches `floorBp` and the size's last figure:
  * `s94000` rounds to 1 kb, so a 94 kb shift 62 bp short is `s94000` and one
  * 2.8 kb longer `s94000+2800`.
@@ -239,8 +236,6 @@ export function stateKey(m: Mark, floorBp = STRUCTURAL_BP) {
       return shiftChanges(m, floorBp)
         ? `s${twoFigures(m.shiftedBp!)}${sign}${twoFigures(Math.abs(m.delta))}`
         : `s${twoFigures(m.shiftedBp!)}`
-    case 'net':
-      return `n${sign}${twoFigures(Math.abs(m.delta))}`
     default:
       return `${sign}${twoFigures(Math.abs(m.delta))}`
   }
@@ -253,7 +248,6 @@ interface Joined {
   invertedBp: number
   repeatedBp: number
   copied?: [number, number]
-  abridged?: true
 }
 
 const deltaOf = (d: Departure) => d.altLength - (d.refEnd - d.refStart)
@@ -263,12 +257,7 @@ export function joinDepartures(departures: Departure[], joinBp: number) {
   const out: Joined[] = []
   for (const d of departures) {
     const last = out.at(-1)
-    if (
-      last &&
-      !last.abridged &&
-      !d.abridged &&
-      d.refStart - last.refEnd < joinBp
-    ) {
+    if (last && d.refStart - last.refEnd < joinBp) {
       last.refEnd = Math.max(last.refEnd, d.refEnd)
       last.delta += deltaOf(d)
       last.invertedBp += d.invertedBp
@@ -289,7 +278,6 @@ export function joinDepartures(departures: Departure[], joinBp: number) {
         invertedBp: d.invertedBp,
         repeatedBp: d.repeatedBp,
         ...(d.copied ? { copied: d.copied } : {}),
-        ...(d.abridged ? { abridged: true as const } : {}),
       })
     }
   }
@@ -300,11 +288,8 @@ function markOf(d: Joined, floorBp: number): Mark | undefined {
   const refLength = d.refEnd - d.refStart
   const altLength = Math.max(0, refLength + d.delta)
   const size = Math.abs(d.delta)
-  const kind: MarkKind | undefined = d.abridged
-    ? size >= floorBp
-      ? 'net'
-      : undefined
-    : size < floorBp
+  const kind: MarkKind | undefined =
+    size < floorBp
       ? d.invertedBp >= floorBp
         ? 'inversion'
         : undefined
@@ -377,7 +362,7 @@ export const SUMMED_SITE_BP = 1000
 /**
  * A haplotype's departures joined and kept where they touch the window, its
  * marks, and its plain pieces: the joined departures that make no mark of
- * their own kind, an inversion, duplication, shift or net change
+ * their own kind, an inversion, duplication or shift
  */
 function haplotypePieces(
   departures: Departure[],
@@ -404,7 +389,7 @@ function haplotypePieces(
   )
   return {
     marks,
-    plain: pieces.filter(d => !d.abridged && !ownKind.has(d)),
+    plain: pieces.filter(d => !ownKind.has(d)),
   }
 }
 
@@ -982,9 +967,6 @@ export function structuralForms(
     rareCarriers: haplotypes
       .filter(h => rare.has(h.haplotype))
       .map(h => h.haplotype),
-    abridged: haplotypes
-      .filter((_, j) => piecesBy[j]!.marks.some(m => m.kind === 'net'))
-      .map(h => h.haplotype),
     minCarriers,
     floorBp,
   }
@@ -1063,7 +1045,7 @@ const REPLACEMENT_VERB = {
 
 /**
  * A mark as a short token: "del 18.4kb", "ins 22kb", "repl 32.7kb->58.7kb",
- * "inv 12kb", "dup 49kb", "shift 94.2kb", "net -94kb". A replacement gives
+ * "inv 12kb", "dup 49kb", "shift 94.2kb". A replacement gives
  * its REF span and ALT length, and one under LOPSIDED_RATIO on a side reads
  * as a deletion or insertion: "del 6.46kb->94bp", "ins 178bp->13.9kb". A
  * shift gives its net change where that says more than its size can:
@@ -1080,8 +1062,6 @@ export function markTag(m: Mark | SiteMark) {
       return `dup ${sizeTag(m.delta)}`
     case 'inversion':
       return `inv ${sizeTag(span)}`
-    case 'net':
-      return `net ${signed(m.delta)}`
     case 'shift':
       return shiftChanges(m)
         ? `shift ${sizeTag(m.shiftedBp!)} net ${signed(m.delta)}`

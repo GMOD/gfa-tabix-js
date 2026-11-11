@@ -2,7 +2,6 @@ import { LocalFile } from 'generic-filehandle2'
 
 import { RegionTooLargeError } from './util.ts'
 import {
-  ExpansionTooLargeError,
   FORMS_STEP_BUDGET,
   formsCut,
   walkDepartures,
@@ -12,7 +11,7 @@ import { walkCut } from './walkRows.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { HaplotypeDepartures } from './walkDepartures.ts'
-import type { Abridged, WalkNode, WalkRun } from './walkRows.ts'
+import type { WalkNode, WalkRun } from './walkRows.ts'
 
 const R = 'GRCh38#0#chr1'
 
@@ -61,7 +60,6 @@ function walk(
   steps: string,
   more: {
     hapStart?: number
-    abridged?: Abridged
     against?: number[]
     refStarts?: number[]
   } = {},
@@ -87,7 +85,6 @@ function walk(
       more.against === undefined
         ? Uint8Array.from(parsed, ([, rev]) => (rev ? 1 : 0))
         : Uint8Array.from(more.against),
-    ...(more.abridged ? { abridged: more.abridged } : {}),
   }
 }
 
@@ -129,8 +126,6 @@ const plain = {
   invertedBp: 0,
   repeatedBp: 0,
 }
-
-const detail = { refName: R, start: 0, name: '0:0' }
 
 test('a walk along R departs nowhere and covers what it reaches', () => {
   expect(departuresOf([walk('A#1#c', '+1 +2 +3')])).toEqual([
@@ -200,24 +195,6 @@ test('steps off R past either end of a walk are no departure', () => {
     { haplotype: 'A#1', covered: [[0, 600]], departures: [] },
   ])
   expect(departuresOf([walk('B#1#c', '+50 +52')])).toEqual([])
-})
-
-test('an abridged walk is its net change over its anchors on R', () => {
-  const abridged = { steps: 4000, bp: 1200, detail }
-  const [a] = departuresOf([walk('A#1#c', '+2 +5', { abridged })])
-  expect(a).toEqual({
-    haplotype: 'A#1',
-    covered: [[100, 1800]],
-    departures: [
-      {
-        refStart: 100,
-        refEnd: 1800,
-        altLength: 1200,
-        ...plain,
-        abridged: true,
-      },
-    ],
-  })
 })
 
 test("a haplotype's paths join into one list, the reference's are left out", () => {
@@ -292,179 +269,6 @@ test("a departure across a contig's W lines counts the sequence the graph lacks 
   })
 })
 
-test('an abridged fragment is net between its handles, and the departures either side stay exact', () => {
-  const abridged = { steps: 900, bp: 1500, detail }
-  const [a] = departuresOf(
-    [
-      walk('A#1#c', '+1 +51'),
-      walk('A#1#c', '+2 +4', { hapStart: 120, abridged }),
-      walk('A#1#c', '+51 +5 +6', { hapStart: 1620 }),
-    ],
-    [
-      record('A#1#c', 100, 20, '+100', '+100'),
-      record('A#1#c', 1620, 20, '+1700', '+1700'),
-    ],
-  )
-  expect(a).toEqual({
-    haplotype: 'A#1',
-    covered: [[0, 1900]],
-    departures: [
-      { refStart: 100, refEnd: 100, altLength: 20, ...plain },
-      {
-        refStart: 100,
-        refEnd: 1700,
-        altLength: 1500,
-        ...plain,
-        abridged: true,
-      },
-      { refStart: 1700, refEnd: 1700, altLength: 20, ...plain },
-    ],
-  })
-})
-
-const netOf = (h: HaplotypeDepartures) =>
-  h.departures.reduce(
-    (sum, d) => sum + d.altLength - (d.refEnd - d.refStart),
-    0,
-  )
-
-// What a path's abridged reading and its expanded one must agree on: each
-// haplotype's net change and the R it covers
-const netAndCover = (hs: HaplotypeDepartures[]) =>
-  hs.map(h => ({ haplotype: h.haplotype, net: netOf(h), covered: h.covered }))
-
-// A contig's W lines: an abridged piece over 2 and 3 running 100 bp of its
-// own after them to its line's end, 50 bp no line covers, and an abridged
-// piece of the next line running 100 bp of its own before 4. Each row spans
-// its piece from its first step on R to its last, and the record the own bp
-test('a departure across W lines between abridged pieces is exact, and each piece a net over its stretch on R', () => {
-  const [a] = departuresOf(
-    [
-      walk('A#1#c', '+2 +3', {
-        hapStart: 100,
-        abridged: { steps: 3, bp: 600, detail },
-      }),
-      walk('A#1#c', '+4 +4', {
-        hapStart: 950,
-        abridged: { steps: 2, bp: 1000, detail },
-      }),
-      walk('A#1#c', '+5 +6', { hapStart: 1950 }),
-    ],
-    [record('A#1#c', 700, 250, '+700', '+700', 50)],
-  )
-  expect(a).toEqual({
-    haplotype: 'A#1',
-    covered: [[100, 1900]],
-    departures: [
-      { refStart: 100, refEnd: 700, altLength: 600, ...plain, abridged: true },
-      { refStart: 700, refEnd: 700, altLength: 250, ...plain },
-      {
-        refStart: 700,
-        refEnd: 1700,
-        altLength: 1000,
-        ...plain,
-        abridged: true,
-      },
-    ],
-  })
-})
-
-test('a departure leaving an abridged piece keeps its own bp, and the piece ends at its leave', () => {
-  const abridged = { steps: 900, bp: 1480, detail }
-  const [a] = departuresOf(
-    [
-      walk('A#1#c', '+2 +4', { hapStart: 120, abridged }),
-      walk('A#1#c', '+51 +5 +6', { hapStart: 1620 }),
-    ],
-    [record('A#1#c', 1600, 40, '+1700', '+1700')],
-  )
-  expect(a!.departures).toEqual([
-    { refStart: 100, refEnd: 1700, altLength: 1480, ...plain, abridged: true },
-    { refStart: 1700, refEnd: 1700, altLength: 40, ...plain },
-  ])
-})
-
-// A path 1 2 then 300 bp off R in node 50 and 2,000 in node 52, rejoining at
-// 5: its first piece, 1 2 50, abridged, leaves R at 2, its row spans 1 2,
-// and 52 lies in a piece the cut does not read
-test("a departure over an abridged piece's trailing own steps nets as the path read in full", () => {
-  const unexpanded = departuresOf(
-    [
-      walk('A#1#c', '+1 +2', { abridged: { steps: 3, bp: 600, detail } }),
-      walk('A#1#c', '+5 +6', { hapStart: 2900 }),
-    ],
-    [record('A#1#c', 600, 2300, '+600', '+1700')],
-  )
-  const expanded = departuresOf([walk('A#1#c', '+1 +2 +50 +52 +5 +6')])
-  expect(netAndCover(expanded)).toEqual([
-    { haplotype: 'A#1', net: 1200, covered: [[0, 1900]] },
-  ])
-  expect(netAndCover(unexpanded)).toEqual(netAndCover(expanded))
-})
-
-// The same path leaving R for good, rejoining it reversed past the window:
-// its own bp lie on no stretch of R read here
-test('a departure leaving an abridged piece and rejoining reversed nets as the path read in full', () => {
-  const unexpanded = departuresOf(
-    [walk('A#1#c', '+1 +2', { abridged: { steps: 3, bp: 600, detail } })],
-    [record('A#1#c', 600, 2300, '+600', '-1700')],
-  )
-  const expanded = departuresOf(
-    [walk('A#1#c', '+1 +2 +50 +52')],
-    [record('A#1#c', 600, 2300, '+600', '-1700')],
-  )
-  expect(netAndCover(unexpanded)).toEqual(netAndCover(expanded))
-})
-
-// A path 1 2, 2,000 bp in node 52 and 300 in node 50, then 3 4 and 5 6: the
-// piece 50 3 4 is abridged, its row spans 3 4, and the departure from 2
-// rejoins at 3
-test("a departure over an abridged piece's leading own steps nets as the path read in full", () => {
-  const unexpanded = departuresOf(
-    [
-      walk('A#1#c', '+1 +2'),
-      walk('A#1#c', '+3 +4', {
-        hapStart: 2900,
-        abridged: { steps: 3, bp: 1100, detail },
-      }),
-      walk('A#1#c', '+5 +6', { hapStart: 4000 }),
-    ],
-    [record('A#1#c', 600, 2300, '+600', '+600')],
-  )
-  const expanded = departuresOf([walk('A#1#c', '+1 +2 +52 +50 +3 +4 +5 +6')])
-  expect(netAndCover(expanded)).toEqual([
-    { haplotype: 'A#1', net: 2300, covered: [[0, 1900]] },
-  ])
-  expect(netAndCover(unexpanded)).toEqual(netAndCover(expanded))
-})
-
-// A piece 51 2 3 50, 20 bp of its own before R and 300 after, its row
-// spanning 2 3, with a departure rejoining at 2 and one leaving after 3, each
-// running 2,000 bp more in node 52 outside it
-test('departures at both ends of one abridged piece net as the path read in full', () => {
-  const unexpanded = departuresOf(
-    [
-      walk('A#1#c', '+1'),
-      walk('A#1#c', '+2 +3', {
-        hapStart: 2120,
-        abridged: { steps: 4, bp: 600, detail },
-      }),
-      walk('A#1#c', '+4 +5', { hapStart: 5020 }),
-    ],
-    [
-      record('A#1#c', 100, 2020, '+100', '+100'),
-      record('A#1#c', 2720, 2300, '+700', '+700'),
-    ],
-  )
-  const expanded = departuresOf([
-    walk('A#1#c', '+1 +52 +51 +2 +3 +50 +52 +4 +5'),
-  ])
-  expect(netAndCover(expanded)).toEqual([
-    { haplotype: 'A#1', net: 4320, covered: [[0, 1800]] },
-  ])
-  expect(netAndCover(unexpanded)).toEqual(netAndCover(expanded))
-})
-
 test("a contig's second visit to the window gives the R both reach no call", () => {
   const [a] = departuresOf([
     walk('A#1#c', '+1 +2 +3'),
@@ -504,47 +308,6 @@ test("a fragment's ends lie where their pass does, where R passes a node again",
   })
 })
 
-// An abridged row stands for one piece, from its hapOffset to hapOffset +
-// bp, with its first and last steps on R as two steps, so pieces 0 and 2 abridged with piece 1 between them in another chunk
-// are two nets, and piece 1 reads as itself between them
-test('each abridged piece is a net over its own stretch, and a piece between two reads as itself', () => {
-  const [a] = departuresOf([
-    walk('A#1#c', '+1 +1', { abridged: { steps: 1, bp: 100, detail } }),
-    walk('A#1#c', '+2 +3', { hapStart: 100 }),
-    walk('A#1#c', '+4 +4', {
-      hapStart: 700,
-      abridged: { steps: 4, bp: 1300, detail },
-    }),
-    walk('A#1#c', '+5 +6', { hapStart: 2000 }),
-  ])
-  expect(a).toEqual({
-    haplotype: 'A#1',
-    covered: [[0, 1900]],
-    departures: [
-      { refStart: 0, refEnd: 100, altLength: 100, ...plain, abridged: true },
-      {
-        refStart: 700,
-        refEnd: 1700,
-        altLength: 1300,
-        ...plain,
-        abridged: true,
-      },
-    ],
-  })
-})
-
-test("a departure leaving abridged pieces' last step keeps its own bp whole", () => {
-  const abridged = { steps: 2, bp: 600, detail }
-  const [a] = departuresOf(
-    [walk('A#1#c', '+1 +2', { abridged })],
-    [record('A#1#c', 600, 5020, '+600', '+50000', 5000)],
-  )
-  expect(a!.departures).toEqual([
-    { refStart: 0, refEnd: 600, altLength: 600, ...plain, abridged: true },
-    { refStart: 600, refEnd: 50000, altLength: 5020, ...plain },
-  ])
-})
-
 describe('a forms cut', () => {
   const DATA = new URL('../test_data/', import.meta.url).pathname
   const reader = (name: string) => {
@@ -556,75 +319,93 @@ describe('a forms cut', () => {
   }
   const region = { refName: 'chr', start: 0, end: 30 }
   const byHaplotype = (hs: HaplotypeDepartures[]) =>
-    Object.fromEntries(hs.map(h => [h.haplotype, h]))
+    Object.fromEntries(
+      hs
+        .filter(h => h.covered.length > 0 || h.departures.length > 0)
+        .map(h => [h.haplotype, h]),
+    )
   const net = (h: HaplotypeDepartures) =>
     h.departures.reduce(
       (sum, d) => sum + d.altLength - (d.refEnd - d.refStart),
       0,
     )
-
-  test('reads abridged walks in full, as the unabridged file gives them', async () => {
-    const whole = byHaplotype(await formsCut(reader('unabridged.R'), region))
-    expect(byHaplotype(await formsCut(reader('abridged.R'), region))).toEqual(
-      whole,
+  // the departures of a cut that reads every abridged walk in full
+  const loaded = async (
+    name: string,
+    window: { refName: string; start: number; end: number },
+  ) => {
+    const walks = reader(name)
+    const { references } = await walks.header()
+    const refName = await walks.sequenceFor(references[0]!, window.refName)
+    const cut = await walks.cut(refName!, window, {
+      links: false,
+      expand: () => true,
+    })
+    return byHaplotype(
+      walkDepartures(
+        {
+          fragments: cut.fragments,
+          departures: cut.departures,
+          nodes: cut.graph.nodes,
+        },
+        refName!,
+      ),
     )
+  }
+  const unloaded = async (
+    name: string,
+    window: { refName: string; start: number; end: number },
+  ) => byHaplotype(await formsCut(reader(name), window))
+
+  test('reads unloaded pieces as the unabridged file gives them', async () => {
+    const whole = await unloaded('unabridged.R', region)
+    expect(await unloaded('abridged.R', region)).toEqual(whole)
     expect(Object.keys(whole).sort()).toEqual(['D#1', 'H#1', 'I#1', 'Q#0'])
   })
 
-  test('keeps the net of each abridged walk past its step budget', async () => {
-    const whole = await formsCut(reader('unabridged.R'), region)
-    const abridged = byHaplotype(
-      await formsCut(reader('abridged.R'), region, { stepBudget: 0 }),
+  test('reads no detail unit', async () => {
+    const path = `${DATA}abridged.R.walks.gz`
+    const data = new LocalFile(path)
+    const details = new Set(
+      (await reader('abridged.R').units('R#0#chr'))
+        .filter(u => u.kind === 'detail')
+        .map(u => u.offset),
     )
-    for (const h of whole) {
-      expect(abridged[h.haplotype]!.departures.some(d => d.abridged)).toBe(true)
-      expect(net(abridged[h.haplotype]!)).toBe(net(h))
-      expect(abridged[h.haplotype]!.covered).toEqual(h.covered)
+    const read = data.read.bind(data)
+    let detailReads = 0
+    data.read = (length, position = 0, opts = {}) => {
+      detailReads += details.has(position) ? 1 : 0
+      return read(length, position, opts)
     }
-  })
-
-  test('with partial: false reads every abridged walk, or throws before reading any', async () => {
-    const whole = byHaplotype(await formsCut(reader('unabridged.R'), region))
-    expect(
-      byHaplotype(
-        await formsCut(reader('abridged.R'), region, { partial: false }),
-      ),
-    ).toEqual(whole)
-    const error: unknown = await formsCut(reader('abridged.R'), region, {
-      partial: false,
-      stepBudget: 3,
-    }).catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(ExpansionTooLargeError)
-    expect(error).toBeInstanceOf(RegionTooLargeError)
-    const { steps, limit, fitsBp } = error as ExpansionTooLargeError
-    expect(limit).toBe(3)
-    expect(steps).toBeGreaterThan(3)
-    expect(fitsBp).toBe(Math.max(1, Math.floor((30 * 3) / steps)))
-    expect(
-      byHaplotype(
-        await formsCut(reader('unabridged.R'), region, {
-          partial: false,
-          stepBudget: 0,
-        }),
-      ),
-    ).toEqual(whole)
-  })
-
-  test("keeps an abridged walk's net exact when a piece of it lies in another chunk", async () => {
-    // X#1's pieces 0 and 2 are abridged in chunk 0, and piece 1 between them
-    // walks R in chunk 10
-    const window = { refName: 'c', start: 0, end: 36 }
-    const [abridged, expanded] = await Promise.all(
-      [false, true].map(async expand =>
-        byHaplotype(
-          await formsCut(reader('interleaved.R'), window, { expand }),
-        ),
-      ),
+    await formsCut(
+      WalkReader.fromFilehandles({
+        data,
+        directory: new LocalFile(`${path}.idx`),
+      }),
+      region,
     )
-    const x = abridged!['X#1']!
-    expect(net(expanded!['X#1']!)).toBe(84)
-    expect(net(x)).toBe(84)
-    expect(x.covered).toEqual(expanded!['X#1']!.covered)
+    expect(details.size).toBeGreaterThan(0)
+    expect(detailReads).toBe(0)
+  })
+
+  test('throws RegionTooLargeError past its step budget', async () => {
+    await expect(
+      formsCut(reader('abridged.R'), region, { stepBudget: 3 }),
+    ).rejects.toBeInstanceOf(RegionTooLargeError)
+    expect(
+      await formsCut(reader('abridged.R'), region, {
+        stepBudget: FORMS_STEP_BUDGET,
+      }),
+    ).toEqual(await formsCut(reader('abridged.R'), region))
+  })
+
+  test('reads an unloaded walk as its loaded one when a piece of it lies in another tile', async () => {
+    // X#1's pieces 0 and 2 are abridged in tile 0, and piece 1 between them
+    // walks R in tile 10
+    const window = { refName: 'c', start: 0, end: 36 }
+    const whole = await loaded('interleaved.R', window)
+    expect(net(whole['X#1']!)).toBe(84)
+    expect(await unloaded('interleaved.R', window)).toEqual(whole)
   })
 
   // X#1 and Z#1 leave R from an abridged piece whose last steps are their
@@ -632,25 +413,15 @@ describe('a forms cut', () => {
   // their own, Q#1 through a W line no piece holds, P#1 through a step on
   // another reference sequence, and S#1 rejoins reversed into a piece
   // against R
-  test('reads each haplotype to the net and coverage its walks give in full when a departure covers own steps of an abridged piece, or a piece runs against R', async () => {
+  test('reads each haplotype as its walks loaded when a departure covers own steps of an unloaded piece, or a piece runs against R', async () => {
     const window = { refName: 'c', start: 0, end: 36 }
-    const [abridged, expanded] = await Promise.all(
-      [false, true].map(async expand =>
-        (await formsCut(reader('ownends.R'), window, { expand }))
-          .map(h => ({
-            haplotype: h.haplotype,
-            net: net(h),
-            covered: h.covered,
-            abridged: h.departures.some(d => d.abridged),
-          }))
-          .sort((a, b) => (a.haplotype < b.haplotype ? -1 : 1)),
-      ),
-    )
-    expect(abridged!.every(h => h.abridged)).toBe(true)
-    expect(abridged!.map(h => ({ ...h, abridged: false }))).toEqual(
-      expanded!.map(h => ({ ...h, abridged: false })),
-    )
-    expect(expanded!.map(h => [h.haplotype, h.net])).toEqual([
+    const whole = await loaded('ownends.R', window)
+    expect(await unloaded('ownends.R', window)).toEqual(whole)
+    expect(
+      Object.keys(whole)
+        .sort()
+        .map(haplotype => [haplotype, net(whole[haplotype]!)]),
+    ).toEqual([
       ['P#1', 70_110],
       ['Q#1', 70_028],
       ['S#1', 0],
@@ -665,29 +436,14 @@ describe('a forms cut', () => {
   // L#1 starts with 30 bp of its own before R's 3 and M#1 ends with them
   // after it, at their contigs' ends, where no departure record covers them;
   // their pieces there are abridged
-  test("reads each haplotype to the net and coverage its walks give in full when an abridged piece holds its contig's first or last steps", async () => {
+  test("reads each haplotype as its walks loaded when an unloaded piece holds its contig's first or last steps", async () => {
     const window = { refName: 'c', start: 0, end: 36 }
-    const [abridged, expanded] = await Promise.all(
-      [0, FORMS_STEP_BUDGET].map(async stepBudget =>
-        (await formsCut(reader('contigends.R'), window, { stepBudget }))
-          .map(h => ({
-            haplotype: h.haplotype,
-            net: net(h),
-            covered: h.covered,
-            abridged: h.departures.some(d => d.abridged),
-          }))
-          .sort((a, b) => (a.haplotype < b.haplotype ? -1 : 1)),
-      ),
-    )
-    expect(abridged!.map(h => [h.haplotype, h.abridged])).toEqual([
-      ['L#1', true],
-      ['M#1', true],
-    ])
-    expect(expanded).toEqual([
-      { haplotype: 'L#1', net: 0, covered: [[12, 36]], abridged: false },
-      { haplotype: 'M#1', net: 0, covered: [[0, 18]], abridged: false },
-    ])
-    expect(abridged!.map(h => ({ ...h, abridged: false }))).toEqual(expanded)
+    const whole = await loaded('contigends.R', window)
+    expect(whole).toEqual({
+      'L#1': { haplotype: 'L#1', covered: [[12, 36]], departures: [] },
+      'M#1': { haplotype: 'M#1', covered: [[0, 18]], departures: [] },
+    })
+    expect(await unloaded('contigends.R', window)).toEqual(whole)
   })
 
   // R over five 2000 bp nodes in tile 0 and 1000 bp nodes from 10000
@@ -695,16 +451,12 @@ describe('a forms cut', () => {
   // R at 4000 and walks it again to 14000; its pieces in tile 10000 are
   // abridged. Over 10500-13500 the drawn stretch is 8000-15000, so the
   // piece after the rejoin starts outside it and the cut trims its first
-  // steps
-  test("chains a departure record's rejoin to a piece whose first steps lie outside the drawn stretch, as the expanded read does", async () => {
+  // steps. G#1's one abridged piece walks R from 10000 to 20000 and drops
+  // 1000 bp of it for 300 of its own at 16000, past the drawn stretch
+  test("chains a departure record's rejoin to an unloaded piece whose first steps lie outside the drawn stretch, and trims a piece reaching past it, as the loaded read does", async () => {
     const window = { refName: 'chr', start: 10_500, end: 13_500 }
-    const [abridged, expanded] = await Promise.all(
-      [false, true].map(async expand =>
-        byHaplotype(await formsCut(reader('drawnedge.R'), window, { expand })),
-      ),
-    )
-    const whole = expanded!['H#1']!
-    expect(whole).toEqual({
+    const whole = await loaded('drawnedge.R', window)
+    expect(whole['H#1']).toEqual({
       haplotype: 'H#1',
       covered: [[8000, 14_000]],
       departures: [
@@ -718,42 +470,12 @@ describe('a forms cut', () => {
         },
       ],
     })
-    expect(abridged!['H#1']!.covered).toEqual(whole.covered)
-    expect(net(abridged!['H#1']!)).toBe(net(whole))
-  })
-
-  // G#1's one abridged piece walks R from 10000 to 20000 and drops 1000 bp
-  // of it for 300 of its own at 16000, past the drawn stretch 8000-15000 of
-  // the window 10500-13500. Unexpanded it nets -700 over its whole stretch,
-  // as the format says: "a reader that leaves the piece unexpanded nets
-  // `bp` against the R between `start` and `end`"; expanded it is trimmed to
-  // the drawn stretch, where it follows R
-  test('an abridged piece reaching past the drawn stretch nets over its whole stretch unexpanded, and over the drawn stretch alone expanded', async () => {
-    const window = { refName: 'chr', start: 10_500, end: 13_500 }
-    const [abridged, expanded] = await Promise.all(
-      [false, true].map(async expand =>
-        byHaplotype(await formsCut(reader('drawnedge.R'), window, { expand })),
-      ),
-    )
-    expect(abridged!['G#1']).toEqual({
-      haplotype: 'G#1',
-      covered: [[8000, 20_000]],
-      departures: [
-        {
-          refStart: 10_000,
-          refEnd: 20_000,
-          altLength: 9300,
-          invertedBp: 0,
-          repeatedBp: 0,
-          abridged: true,
-        },
-      ],
-    })
-    expect(expanded!['G#1']).toEqual({
+    expect(whole['G#1']).toEqual({
       haplotype: 'G#1',
       covered: [[8000, 15_000]],
       departures: [],
     })
+    expect(await unloaded('drawnedge.R', window)).toEqual(whole)
   })
 
   test('throws RegionTooLargeError past its byte budget', async () => {

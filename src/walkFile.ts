@@ -29,9 +29,10 @@ export class WalkFormatError extends Error {
 
 /**
  * One unit of a sequence's table: `start end` is a tile's true extent, a
- * departure block's span, or a detail record's pieces' span on the
- * reference; `name` a tile's nominal start, a detail's `tile:detail`, or `.`
- * for a block; `offset length` its compressed bytes in the data file
+ * departure block's span, a detail record's pieces' span on the reference,
+ * or the span of a tile's abridged pieces' blocks; `name` a tile's nominal
+ * start, a detail's `tile:detail`, a `blocks` unit's tile, or `.` for a
+ * departure block; `offset length` its compressed bytes in the data file
  */
 export interface WalkUnit {
   refName: string
@@ -58,6 +59,7 @@ const ROW_KINDS = new Map([
   ['tile', ['ref', 'nodes', 'route', 'walk', 'abridged']],
   ['departures', ['departure']],
   ['detail', ['nodes', 'route', 'walk']],
+  ['blocks', ['blocks']],
 ])
 
 async function unitLines(bytes: Uint8Array, unit: string) {
@@ -77,7 +79,7 @@ async function unitLines(bytes: Uint8Array, unit: string) {
   return text.split('\n').filter(line => line !== '')
 }
 
-function unitName(unit: WalkUnit) {
+export function unitName(unit: WalkUnit) {
   return `The unit at byte ${unit.offset} of the walk file, ${unit.refName}'s ${unit.kind} ${unit.name} over [${unit.start}, ${unit.end}) as its table lists it,`
 }
 
@@ -210,6 +212,16 @@ export function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal) {
 
 const FORMAT_6_NAME = /\.walks\.bed\.gz(?=$|[?#])/
 
+// A detail unit `cs:d` whose tile has no `blocks` unit `cs`, as a file
+// written before the unit existed has them
+function detailWithoutBlocks(units: WalkUnit[]) {
+  const tiles = new Set(units.filter(u => u.kind === 'blocks').map(u => u.name))
+  return units.find(
+    u =>
+      u.kind === 'detail' && !tiles.has(u.name.slice(0, u.name.indexOf(':'))),
+  )
+}
+
 /**
  * A format 7 walk file read by byte ranges: the directory and the header
  * once, each sequence's table once, and units as asked, the ranges of units
@@ -303,7 +315,7 @@ export class WalkFile {
         `${refName}'s table, at byte ${offset} of the walk file, starts ${JSON.stringify(head.slice(0, 80))}`,
       )
     }
-    return entries.map(line => {
+    const units = entries.map(line => {
       const [tag, seq = '', start, end, kind = '', name = '', at, size] =
         line.split('\t')
       const unit = {
@@ -326,6 +338,13 @@ export class WalkFile {
       }
       return unit
     })
+    const bare = detailWithoutBlocks(units)
+    if (bare) {
+      throw new WalkFormatError(
+        `${refName}'s unit table lists the detail unit ${bare.name} and no blocks unit for its tile, as a walk file written before gfa-to-tabix 4.1 does; @jbrowse/graph-walks reads an abridged piece's place on the reference from its blocks, so rebuild the walk file with gfa-to-tabix 4.1 or later`,
+      )
+    }
+    return units
   }
 
   /**

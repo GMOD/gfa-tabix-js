@@ -3,15 +3,14 @@ import { expect, test } from 'vitest'
 
 import { formContradictions } from '../src/formsCheck.ts'
 import { structuralForms } from '../src/structuralForms.ts'
-import { formsCut } from '../src/walkDepartures.ts'
+import { formsCut, walkDepartures } from '../src/walkDepartures.ts'
 import { WalkReader } from '../src/walkReader.ts'
 
 import type { HaplotypeDepartures } from '../src/walkDepartures.ts'
 
-// The unexpanded and expanded reads are compared on each window snapped to
-// the extents of the tiles its drawn stretch overlaps, so that no abridged
-// piece straddles the drawn stretch's edge: such a piece is netted over its
-// whole stretch unexpanded and trimmed to the drawn stretch expanded
+// The forms cut, which expands no walk, and a cut that expands every one are
+// compared on each window snapped to the extents of the tiles its drawn
+// stretch overlaps
 
 // The 28 MC chr22 windows of gfa-to-tabix's
 // docs/departures/results/minimal/mc22.forms-compare-review.txt
@@ -83,9 +82,29 @@ test.runIf(walks !== '').each(WINDOWS)(
       start: tiles[0]!.start + 1000,
       end: tiles.at(-1)!.end - 1000,
     }
-    const cut = (expand: boolean) =>
-      formsCut(reader(), region, { ...lifted, expand, partial: false })
-    const [unexpanded, expanded] = [await cut(false), await cut(true)]
+    const unexpanded = await formsCut(reader(), region, lifted)
+    const loaded = await reader().cut(sequence, region, {
+      ...lifted,
+      links: false,
+      expand: () => true,
+    })
+    const called = new Set<string>()
+    const expanded = walkDepartures(
+      {
+        fragments: loaded.fragments,
+        departures: loaded.departures,
+        nodes: loaded.graph.nodes,
+      },
+      sequence,
+    )
+    for (const h of expanded) {
+      called.add(h.haplotype)
+    }
+    for (const h of unexpanded) {
+      if (!called.has(h.haplotype)) {
+        expanded.push({ haplotype: h.haplotype, covered: [], departures: [] })
+      }
+    }
     expect(new Map(unexpanded.map(h => [h.haplotype, summary(h)]))).toEqual(
       new Map(expanded.map(h => [h.haplotype, summary(h)])),
     )

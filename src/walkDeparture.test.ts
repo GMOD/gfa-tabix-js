@@ -82,9 +82,7 @@ test('ref and abridged rows from a writer before pass counts are refused, saying
     decodeChunk([ref('\t.'), abridged('0,2')], 0, undefined),
   ).toThrow(/abridged row of several pieces.*rebuild the walk file/)
   expect(
-    decodeChunk([ref('\t.'), abridged('0')], 0, undefined).rows.filter(
-      r => r.abridged,
-    ),
+    decodeChunk([ref('\t.'), abridged('0')], 0, undefined).abridged,
   ).toHaveLength(1)
 })
 

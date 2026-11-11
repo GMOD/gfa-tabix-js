@@ -90,6 +90,14 @@ class GappedFile extends BlobFile {
   }
 }
 
+// A detail or blocks unit's key, `kind name`, as its kind, its name, its
+// tile's start and its detail number, a blocks unit after its tile's details
+function movedUnit(key: string) {
+  const [kind = '', name = ''] = key.split(' ')
+  const [tileStart, detail = Infinity] = name.split(':').map(Number)
+  return { kind, name, tileStart: tileStart ?? 0, detail }
+}
+
 const spanOf = (cols: string[]) =>
   (cols[9] ?? '').split(',').reduce((end, n) => end + Number(n), +cols[5]!)
 
@@ -98,10 +106,14 @@ const spanOf = (cols: string[]) =>
  * header's `#` lines; tile rows as `seq tile kind ...`, a tile's rows from
  * `kind` on under its nominal start; and departure lines as the file holds
  * them, `seq start end departure ...`, each filed in every block of the
- * tile size it overlaps. A tile's extent is its ref rows' span, and each of
- * its lines states that extent; every inline tile has ref rows. `reversed`
- * writes a sequence's units last first, and `gap` puts that many bytes the
- * file never reads between the header and the first unit.
+ * tile size it overlaps; a detail unit's rows as `seq tile:detail start end
+ * kind ...`; and a blocks unit's as `seq tile start end blocks ...`. A
+ * tile's extent is its ref rows' span, and each of its lines states that
+ * extent; every inline tile has ref rows. A detail or blocks unit's extent
+ * is its rows' span, and its units follow the sequence's tiles and
+ * departure blocks. `reversed` writes a sequence's tiles and departure
+ * blocks last first, and `gap` puts that many bytes the file never reads
+ * between the header and the first unit.
  */
 export function walkFileOf(
   lines: string[],
@@ -130,8 +142,13 @@ export function walkFileOf(
     const items: { start: number; order: number; unit: () => WalkUnit }[] = []
     const tiles = new Map<number, string[][]>()
     const blocks = new Map<number, string[]>()
+    // the rows of each detail and blocks unit, by kind and name
+    const moved = new Map<string, string[][]>()
     for (const r of body.filter(row => row[0] === seq)) {
-      if (Number.isNaN(Number(r[2]))) {
+      if (r[1]!.includes(':') || r[4] === 'blocks') {
+        const key = `${r[4] === 'blocks' ? 'blocks' : 'detail'} ${r[1]}`
+        moved.set(key, [...(moved.get(key) ?? []), [seq, ...r.slice(2)]])
+      } else if (Number.isNaN(Number(r[2]))) {
         tiles.set(+r[1]!, [...(tiles.get(+r[1]!) ?? []), r])
       } else {
         for (
@@ -179,6 +196,18 @@ export function walkFileOf(
         : a.start - b.start || a.order - b.order,
     )
     const held = items.map(item => item.unit())
+    for (const [key, unitRows] of [...moved].sort(
+      ([a], [b]) =>
+        movedUnit(a).tileStart - movedUnit(b).tileStart ||
+        movedUnit(a).detail - movedUnit(b).detail,
+    )) {
+      const { kind, name } = movedUnit(key)
+      const lo = unitRows.reduce((at, r) => Math.min(at, +r[1]!), Infinity)
+      const hi = unitRows.reduce((at, r) => Math.max(at, +r[2]!), -Infinity)
+      const text = [['#unit', seq, lo, hi, kind, name], ...unitRows]
+      const at = write(`${text.map(c => c.join('\t')).join('\n')}\n`)
+      held.push({ refName: seq, start: lo, end: hi, kind, name, ...at })
+    }
     for (const unit of held) {
       units.push(unit)
     }

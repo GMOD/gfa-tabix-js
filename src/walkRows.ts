@@ -34,23 +34,28 @@ export interface WalkRow {
     against?: Uint8Array
   }
   chunkStart: number
-  // an `abridged` row, standing for one piece: `steps` holds the handles on
-  // R it starts and ends on
+  // set on a piece built from its `blocks` row, which the cut did not load
   abridged?: Abridged
 }
 
 /**
- * A piece the writer moved to a detail record: all its steps, which reading
- * the record decodes; the bp of its stretch from its first step on R to its
- * last, which runs from its row's hapOffset to hapOffset + bp on the contig;
- * and the record's `detail` unit, by its sequence, its tile's nominal start
- * and its name, `tile:detail`, which a cut that expands the path reads
+ * A piece the writer moved to a detail record and the cut did not load: all
+ * its steps, which reading the record decodes; the bp of its stretch from
+ * its first step on R to its last; and the record's `detail` unit, by its
+ * sequence, its tile's nominal start and its name, `tile:detail`, which a cut
+ * that expands the path reads. The cut holds its steps on R, from its
+ * `blocks` row, and a placeholder step for each run of its own.
  */
 export interface Abridged {
   steps: number
   bp: number
   detail: { refName: string; start: number; name: string }
 }
+
+// Whether a step's id is a placeholder's: a run of an unloaded piece's own
+// steps, of known bp and no node identity. A cut gives each run its own id,
+// below every node's
+export const isPlaceholder = (id: number) => id < 0
 
 export interface WalkNode {
   refName: string
@@ -63,6 +68,10 @@ export interface WalkNode {
   passes: number
   // on the reference inside the window plus the cut's context
   onWindow: boolean
+  // no node of the graph: one run of an unloaded piece's own steps, on
+  // `refName`, its contig, from `start` to `end`. No two share an id, and
+  // two of equal bp may hold different sequence
+  placeholder?: true
 }
 
 export interface WalkWindow {
@@ -160,17 +169,14 @@ export interface WalkRun {
   // it runs against R's orientation at its pass
   refStarts: Float64Array
   against: Uint8Array
-  abridged?: Abridged
+  // the pieces the cut did not load, each by its index among the run's
+  pieceAbridged?: Map<number, Abridged>
 }
 
 export function joinPieces(rows: WalkRow[]) {
   const byPath = new Map<string, WalkRow[]>()
   const runs: WalkRun[] = []
   for (const row of rows) {
-    if (row.abridged) {
-      runs.push(decodeRun([row]))
-      continue
-    }
     const key = `${row.name}\t${row.fragStart}`
     const list = byPath.get(key)
     if (list) {
@@ -220,6 +226,11 @@ function decodeRun(pieces: WalkRow[]): WalkRun {
     at += p.n
   }
   const first = pieces[0]!
+  const pieceAbridged = new Map(
+    pieces.flatMap((p, k) =>
+      p.abridged ? [[k, p.abridged] satisfies [number, Abridged]] : [],
+    ),
+  )
   return {
     name: first.name,
     fragStart: first.fragStart,
@@ -231,7 +242,7 @@ function decodeRun(pieces: WalkRow[]): WalkRun {
     rev,
     refStarts,
     against,
-    ...(first.abridged ? { abridged: first.abridged } : {}),
+    ...(pieceAbridged.size > 0 ? { pieceAbridged } : {}),
   }
 }
 
@@ -255,9 +266,10 @@ export interface WalkFragment {
   against: Uint8Array
   trimmedBefore: number
   trimmedAfter: number
-  // set on the fragment of an abridged row, from the piece's first step on R
-  // to its last, which runs `abridged.bp` on the haplotype
-  abridged?: Abridged
+  // the pieces with a step here that the cut did not load, in the walk's
+  // order: each one's own runs are placeholder steps, which isPlaceholder
+  // tells by id, and expanding the walk reads its `detail` unit
+  abridged?: Abridged[]
 }
 
 export interface WalkCutOptions {
@@ -347,10 +359,12 @@ export function walkCut(
     for (const run of runs) {
       for (let i = 0; i < run.ids.length; i++) {
         const start = run.refStarts[i]!
-        const end = start + length(run.ids[i]!)
-        if (start < drawn.end && end > drawn.start) {
-          windowStart = Math.min(windowStart, start)
-          windowEnd = Math.max(windowEnd, end)
+        if (start < drawn.end) {
+          const end = start + length(run.ids[i]!)
+          if (end > drawn.start) {
+            windowStart = Math.min(windowStart, start)
+            windowEnd = Math.max(windowEnd, end)
+          }
         }
       }
     }
@@ -411,10 +425,12 @@ export function walkCut(
     }
   }
   const stretchSpan = (run: WalkRun) => {
+    const bp = before(run)
     let first = -1
     let last = -1
     for (let i = 0; i < run.ids.length; i++) {
-      if (stepOnWindow(run, i)) {
+      const start = run.refStarts[i]!
+      if (start < windowEnd && start + bp[i + 1]! - bp[i]! > windowStart) {
         if (first < 0) {
           first = i
         }
@@ -425,25 +441,8 @@ export function walkCut(
       spans.push({ run, first, last })
     }
   }
-  // an abridged run is kept where its stretch of R overlaps the window
-  const abridgedSpan = (run: WalkRun) => {
-    const a = run.refStarts[0]!
-    const b = run.refStarts[1]!
-    if (Number.isNaN(a) || Number.isNaN(b)) {
-      return
-    }
-    const ends = [a + length(run.ids[0]!), b + length(run.ids[1]!)]
-    if (
-      Math.max(ends[0]!, ends[1]!) > windowStart &&
-      Math.min(a, b) < windowEnd
-    ) {
-      spans.push({ run, first: 0, last: 1 })
-    }
-  }
   for (const run of runs) {
-    if (run.abridged) {
-      abridgedSpan(run)
-    } else if (contained) {
+    if (contained) {
       containedSpans(run)
     } else {
       stretchSpan(run)
@@ -460,30 +459,16 @@ export function walkCut(
       kept.add(span.run.ids[i]!)
     }
   }
-  const runEnd = (run: WalkRun) =>
-    run.hapOffset + (run.abridged?.bp ?? before(run)[run.ids.length]!)
+  const runEnd = (run: WalkRun) => run.hapOffset + before(run)[run.ids.length]!
   const fragments: WalkFragment[] = []
   for (const { run, first, last } of spans) {
     const { ids, rev } = run
-    if (run.abridged) {
-      fragments.push({
-        name: run.name,
-        fragStart: run.fragStart,
-        hapStart: run.hapOffset,
-        hapEnd: runEnd(run),
-        ids,
-        rev,
-        refStarts: run.refStarts,
-        against: run.against,
-        trimmedBefore: 0,
-        trimmedAfter: 0,
-        abridged: run.abridged,
-      })
-      continue
-    }
     const bp = before(run)
     const hapStart = run.hapOffset + bp[first]!
     const hapEnd = run.hapOffset + bp[last + 1]!
+    const abridged = unloadedPieces(run).flatMap(({ from, to, piece }) =>
+      from <= last && to > first ? [piece] : [],
+    )
     fragments.push({
       name: run.name,
       fragStart: run.fragStart,
@@ -495,6 +480,7 @@ export function walkCut(
       against: run.against.subarray(first, last + 1),
       trimmedBefore: hapStart - run.hapOffset,
       trimmedAfter: runEnd(run) - hapEnd,
+      ...(abridged.length > 0 ? { abridged } : {}),
     })
   }
   // A step's breakpoint on R: where the path's sequence stops following R,
@@ -519,7 +505,7 @@ export function walkCut(
     }
   }
   for (const run of runs) {
-    if (run.abridged || run.name === refName) {
+    if (run.name === refName) {
       continue
     }
     const { ids, rev, refStarts, against } = run
@@ -588,9 +574,6 @@ export function walkCut(
   const leaves = new Map<string, [WalkRun, number, number]>()
   const rejoins = new Map<string, [WalkRun, number, number]>()
   for (const run of [...runs, ...attach]) {
-    if (run.abridged) {
-      continue
-    }
     const bp = before(run)
     const bounds = pieceBounds(run)
     for (let p = 0; p + 1 < bounds.length; p++) {
@@ -680,7 +663,7 @@ export function walkCut(
       departures,
       refName,
       before,
-      length,
+      unloaded: unloadedPieces,
       attached,
       breakpoint,
       spans,
@@ -688,6 +671,16 @@ export function walkCut(
     return gaps
   }
   return { kept, fragments, departures, unattached, gapsOf }
+}
+
+// The pieces of a run the cut did not load, each with its steps' range
+function unloadedPieces(run: WalkRun) {
+  const bounds = run.pieceAbridged ? pieceBounds(run) : []
+  return [...(run.pieceAbridged ?? [])].map(([p, piece]) => ({
+    from: bounds[p]!,
+    to: bounds[p + 1]!,
+    piece,
+  }))
 }
 
 // Where each of a run's pieces starts, and where the last ends
@@ -861,6 +854,9 @@ export class WalkGraph {
     const starts = new Float64Array(held.length)
     const ranks = new Int32Array(held.length)
     const passes = new Int32Array(held.length)
+    const placeholders = Uint8Array.from(held, node =>
+      node.placeholder ? 1 : 0,
+    )
     held.forEach(({ id, refName, start, end, rank, passes: n }, i) => {
       index.set(id, i)
       names.push(String(id))
@@ -928,7 +924,16 @@ export class WalkGraph {
       reversed.set(rev, at)
     })
     return {
-      nodes: { names, lengths, refs, starts, ranks, refNames, passes },
+      nodes: {
+        names,
+        lengths,
+        refs,
+        starts,
+        ranks,
+        refNames,
+        passes,
+        placeholders,
+      },
       links: { from, to, strands },
       walks: {
         names: walks.map(f => f.name),
@@ -939,8 +944,9 @@ export class WalkGraph {
         reversed,
         trimmedBefore: Float64Array.from(walks, f => f.trimmedBefore),
         trimmedAfter: Float64Array.from(walks, f => f.trimmedAfter),
-        abridgedSteps: Float64Array.from(walks, f => f.abridged?.steps ?? NaN),
-        abridgedBp: Float64Array.from(walks, f => f.abridged?.bp ?? NaN),
+        abridgedSteps: Float64Array.from(walks, f =>
+          f.abridged ? f.abridged.reduce((sum, a) => sum + a.steps, 0) : NaN,
+        ),
       },
       departures: departureTable(departures, nodeIndex),
       gaps: gapTable(gaps, new Map(walks.map((f, p) => [f, p])), nodeIndex),

@@ -7,6 +7,7 @@ import {
   decodeChunk,
   pieceLinks,
   referenceNodes,
+  unloadedRow,
 } from './walkChunk.ts'
 import {
   ATTACH_BP,
@@ -14,7 +15,13 @@ import {
   parseDepartureRow,
   squeezer,
 } from './walkDeparture.ts'
-import { WalkFile, WalkFormatError, once, raceAbort } from './walkFile.ts'
+import {
+  WalkFile,
+  WalkFormatError,
+  once,
+  raceAbort,
+  unitName,
+} from './walkFile.ts'
 import {
   WalkGraph,
   byteBudgetError,
@@ -29,7 +36,13 @@ import {
   walksKept,
 } from './walkRows.ts'
 
-import type { ChunkRef, DecodedChunk } from './walkChunk.ts'
+import type {
+  AbridgedPiece,
+  ChunkRef,
+  DecodedChunk,
+  PlacedNode,
+  RefPath,
+} from './walkChunk.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkFilehandle, WalkUnit } from './walkFile.ts'
 import type { BudgetNames, WalkHeader, WalkRow } from './walkRows.ts'
@@ -141,8 +154,17 @@ export interface WalkCutOptions {
   // walk where it steps onto the reference off them
   contained?: boolean
   // the abridged walks to read in full from their detail records, by
-  // `sample#haplotype#contig`; none by default
+  // `sample#haplotype#contig`; none by default. A detail record is read
+  // where its extent overlaps the window and its context, and in a tile
+  // fetched for a record's own steps; any other abridged piece of the walk
+  // is left out, as the cut has no step of it to keep
   expand?: (name: string) => boolean
+  // for checks that hold a cut expanding nothing equal to one expanding
+  // every walk: read each expanded piece as far as a cut that leaves it
+  // unloaded knows it, without its own steps after its last step on R where
+  // the window's tiles lack the next piece, and expand none in a tile
+  // fetched for own steps
+  expandStated?: boolean
 }
 
 export interface RegionCutOptions extends Omit<WalkCutOptions, 'keep'> {
@@ -176,6 +198,29 @@ export function attachTiles(units: WalkUnit[], ownTiles: number[]) {
   return units.filter(
     u => u.kind === 'tile' && u.length > 0 && ownTiles.includes(Number(u.name)),
   )
+}
+
+const pieceKey = (name: string, fragStart: number, piece: number) =>
+  `${name}\t${fragStart}\t${piece}`
+
+// A decoded piece without its steps after its last step on R
+function toLastStepOnR(row: WalkRow): WalkRow {
+  const { ids, rev, refStarts, against } = row.steps
+  let n = row.n
+  while (n > 1 && Number.isNaN(refStarts?.[n - 1])) {
+    n--
+  }
+  return {
+    ...row,
+    n,
+    interior: Math.max(0, (row.interior ?? 0) - (row.n - n)),
+    steps: {
+      ids: ids.subarray(0, n),
+      rev: rev.subarray(0, n),
+      refStarts: refStarts?.subarray(0, n),
+      against: against?.subarray(0, n),
+    },
+  }
 }
 
 // The directory beside a data file's URL, before any query or fragment
@@ -214,8 +259,11 @@ function departureRecords(
  * a window, the tiles and departure blocks overlapping the window and its
  * context, in one read wherever their bytes touch, each tile decoded once;
  * then every tile holding the own steps of records within `attachBp` the
- * read lacks, which give those steps alone, and the detail records of the
- * walks `expand` names. The table gives each read's bytes before it is made;
+ * read lacks, which give those steps alone, the detail records of the
+ * walks `expand` names, and the `blocks` unit of each tile with an abridged
+ * piece over the window that the cut does not expand, which gives the
+ * piece's steps on the reference and the bp of its own between them. The
+ * table gives each read's bytes before it is made;
  * a window whose tiles are past the byte budget reads no row, and one whose
  * attach tiles take it past reads none of them. Only the walks `keep`
  * accepts are decoded. The step budget bounds the steps the cut keeps, and
@@ -365,6 +413,7 @@ export class WalkReader {
       contained = false,
       nodeLimit = Infinity,
       expand,
+      expandStated = false,
     } = opts
     checkRange(refName, region.start, region.end)
     const [header, units] = await Promise.all([
@@ -374,7 +423,7 @@ export class WalkReader {
     const { tile } = header
     const drawn = drawnSpan(region, context)
     const tiles = units.filter(u => u.kind === 'tile' && overlaps(u, drawn))
-    const blocks = units.filter(
+    const departureBlocks = units.filter(
       u => u.kind === 'departures' && overlaps(u, drawn),
     )
     const tileBytesTo = (end: number) =>
@@ -398,7 +447,7 @@ export class WalkReader {
       }
     }
     checkBytes(tileBytesTo)
-    const departureBytes = bytesOf(blocks)
+    const departureBytes = bytesOf(departureBlocks)
     if (departureBytes > departureByteBudget) {
       throw new DepartureReadError(departureBytes, departureByteBudget)
     }
@@ -431,28 +480,30 @@ export class WalkReader {
       end: region.end + context,
     }
     const filtered = keep !== undefined
-    const detailUnits = new Map(
-      units.filter(u => u.kind === 'detail').map(u => [u.name, u]),
-    )
+    const unitsOf = (kind: string) =>
+      new Map(units.filter(u => u.kind === kind).map(u => [u.name, u]))
+    const detailUnits = unitsOf('detail')
+    const blocksUnits = unitsOf('blocks')
     // the detail records of the expanded walks, each once, with the R of
     // their tile and the rows they join; a path's abridged pieces in a tile
     // share one
-    let details: { ref: ChunkRef; row: WalkRow; into: WalkRow[] }[] = []
+    let details: { ref: ChunkRef; piece: AbridgedPiece; into: WalkRow[] }[] = []
     const detailsRead = new Set<string>()
-    const place = (tileCut: DecodedChunk, readTo: number) => {
-      for (const [id, node] of tileCut.nodes) {
-        graph.placeNode(id, node)
-      }
-      for (const { id, ...node } of tileCut.revisits) {
-        graph.placeNode(id, node)
-      }
-      graph.addSequences(tileCut.sequences)
-      graph.addChunk(tileCut.chunk)
-      for (const end of tileCut.ends) {
-        ends.push(end)
-      }
+    // the abridged pieces over the window that the cut does not expand, by
+    // tile, each with its tile's R
+    let unloaded = new Map<
+      WalkUnit,
+      { piece: AbridgedPiece; path: RefPath }[]
+    >()
+    // where each piece of the window's tiles starts on its contig
+    const pieceStarts = new Map<string, number>()
+    let placeholders = 0
+    const checkNodes = (
+      chunk: { nodes: Map<number, unknown>; rows: WalkRow[] },
+      readTo: number,
+    ) => {
       if (Number.isFinite(nodeLimit)) {
-        surelyKept(tileCut, graph.nodes, bounds, surely)
+        surelyKept(chunk, graph.nodes, bounds, surely)
         if (surely.size > nodeLimit) {
           surely.clear()
           surelyKept({ nodes: graph.nodes, rows }, graph.nodes, bounds, surely)
@@ -469,9 +520,30 @@ export class WalkReader {
         }
       }
     }
+    const placeNodes = (nodes: Map<number, PlacedNode>) => {
+      for (const [id, node] of nodes) {
+        graph.placeNode(id, node)
+      }
+    }
+    const place = (tileCut: DecodedChunk, readTo: number) => {
+      placeNodes(tileCut.nodes)
+      for (const { id, ...node } of tileCut.revisits) {
+        graph.placeNode(id, node)
+      }
+      graph.addSequences(tileCut.sequences)
+      graph.addChunk(tileCut.chunk)
+      for (const end of tileCut.ends) {
+        ends.push(end)
+      }
+      checkNodes(tileCut, readTo)
+    }
     // a tile is decoded into `into`, with its nodes and the links between
     // pieces, for the names `only` takes that no earlier decode of it took,
-    // and a cut over its node limit stops there
+    // and a cut over its node limit stops there. An abridged piece of a
+    // window tile is read from its detail record where the cut expands its
+    // walk and built from its blocks row where it does not, in either case
+    // only where the record's extent overlaps the drawn stretch; one of a
+    // tile fetched for own steps is read where the cut expands its walk
     const decode = (
       unit: WalkUnit,
       lines: string[],
@@ -488,52 +560,142 @@ export class WalkReader {
         name => wanted(name) && !earlier.some(took => took(name)),
         opts.sequences,
       )
+      const windowed = into === rows
       let ref: ChunkRef | undefined
       for (const row of tileCut.rows) {
-        if (row.abridged && expand?.(row.name) === true) {
-          const { name } = row.abridged.detail
-          if (!detailsRead.has(name)) {
-            detailsRead.add(name)
-            ref ??= chunkRef(tileRows)
-            details.push({ ref, row, into })
+        into.push(row)
+        if (windowed) {
+          pieceStarts.set(
+            pieceKey(row.name, row.fragStart, row.piece),
+            row.hapOffset,
+          )
+        }
+      }
+      for (const piece of tileCut.abridged) {
+        const { name } = piece.abridged.detail
+        const detail = detailUnits.get(name)
+        if (!detail) {
+          throw new WalkFormatError(
+            `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${piece.name} names`,
+          )
+        }
+        if (windowed) {
+          pieceStarts.set(
+            pieceKey(piece.name, piece.fragStart, piece.piece),
+            piece.hapOffset,
+          )
+        }
+        if (windowed ? overlaps(detail, drawn) : !expandStated) {
+          if (expand?.(piece.name) === true) {
+            if (!detailsRead.has(name)) {
+              detailsRead.add(name)
+              ref ??= chunkRef(tileRows)
+              details.push({ ref, piece, into })
+            }
+          } else if (windowed) {
+            unloaded.set(unit, [
+              ...(unloaded.get(unit) ?? []),
+              { piece, path: tileCut.chunk.path },
+            ])
           }
-        } else {
-          into.push(row)
         }
       }
       place(tileCut, unit.end)
     }
-    const readDetail = async ({ row }: { row: WalkRow }) => {
-      const { name } = row.abridged!.detail
-      const unit = detailUnits.get(name)
-      if (!unit) {
-        throw new WalkFormatError(
-          `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${row.name} names`,
-        )
-      }
-      const [lines = []] = await this.file.read([unit], reads.signal)
+    const nextPieceRead = (row: WalkRow) =>
+      pieceStarts.has(pieceKey(row.name, row.fragStart, row.piece + 1))
+    const readDetail = async ({ piece }: { piece: AbridgedPiece }) => {
+      const unit = detailUnits.get(piece.abridged.detail.name)
+      const [lines = []] = await this.file.read(
+        unit ? [unit] : [],
+        reads.signal,
+      )
       return lines.map(line => line.split('\t'))
     }
     const decodeDetail = (
-      { ref, row, into }: { ref: ChunkRef; row: WalkRow; into: WalkRow[] },
+      {
+        ref,
+        piece,
+        into,
+      }: { ref: ChunkRef; piece: AbridgedPiece; into: WalkRow[] },
       held: string[][],
     ) => {
       const tileCut = decodeChunk(
         held,
-        row.chunkStart,
-        name => name === row.name,
+        piece.chunkStart,
+        name => name === piece.name,
         opts.sequences,
         ref,
       )
       for (const decodedRow of tileCut.rows) {
-        if (decodedRow.name === row.name) {
-          into.push(decodedRow)
+        if (decodedRow.name === piece.name) {
+          into.push(
+            expandStated && !nextPieceRead(decodedRow)
+              ? toLastStepOnR(decodedRow)
+              : decodedRow,
+          )
         }
       }
-      place(tileCut, row.chunkStart + tile)
+      place(tileCut, piece.chunkStart + tile)
     }
-    // the detail records the tiles decoded asked for, then the links
-    // between pieces
+    // each unloaded piece's row from its tile's blocks unit, a run of its own
+    // after its last step on R as long as the next piece's start says
+    const buildUnloaded = async () => {
+      const pending = [...unloaded]
+      unloaded = new Map()
+      const blocksOf = pending.map(([tileUnit]) => {
+        const unit = blocksUnits.get(tileUnit.name)
+        if (!unit) {
+          throw new WalkFormatError(
+            `${refName}'s unit table lists no blocks unit ${tileUnit.name}, which the abridged rows of that tile need`,
+          )
+        }
+        return unit
+      })
+      if (pending.length > 0) {
+        checkBytes(
+          end =>
+            tileBytesTo(end) +
+            bytesOf(
+              blocksOf.filter((_, k) => pending[k]![0].start < end + context),
+            ),
+        )
+      }
+      const read = await this.file.read(blocksOf, reads.signal)
+      pending.forEach(([tileUnit, pieces], k) => {
+        const lists = new Map<string, string>()
+        for (const line of read[k]!) {
+          const [, , , , name = '', fragStart, piece, list = ''] =
+            line.split('\t')
+          lists.set(pieceKey(name, Number(fragStart), Number(piece)), list)
+        }
+        for (const { piece, path } of pieces) {
+          const list = lists.get(
+            pieceKey(piece.name, piece.fragStart, piece.piece),
+          )
+          if (list === undefined) {
+            throw new WalkFormatError(
+              `${unitName(blocksOf[k]!)} holds no row for piece ${piece.piece} of ${piece.name}, which tile ${tileUnit.name} abridges`,
+            )
+          }
+          const next = pieceStarts.get(
+            pieceKey(piece.name, piece.fragStart, piece.piece + 1),
+          )
+          const { row, nodes } = unloadedRow(
+            piece,
+            list,
+            path,
+            next === undefined ? 0 : next - piece.hapOffset - piece.abridged.bp,
+            () => --placeholders,
+          )
+          rows.push(row)
+          placeNodes(nodes)
+          checkNodes({ nodes, rows: [row] }, tileUnit.end)
+        }
+      })
+    }
+    // the detail records and blocks units the tiles decoded asked for, then
+    // the links between pieces
     const finish = async () => {
       const pending = details
       details = []
@@ -544,6 +706,7 @@ export class WalkReader {
         readDetail,
         decodeDetail,
       )
+      await buildUnloaded()
       if (links) {
         for (const [a, b] of pieceLinks(ends)) {
           graph.addLinkEnds(a, b)
@@ -552,7 +715,10 @@ export class WalkReader {
     }
     let cut: ReturnType<typeof walkCut>
     try {
-      const read = await this.file.read([...tiles, ...blocks], reads.signal)
+      const read = await this.file.read(
+        [...tiles, ...departureBlocks],
+        reads.signal,
+      )
       tiles.forEach((unit, k) => {
         decode(unit, read[k]!, rows)
       })

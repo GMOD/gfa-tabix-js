@@ -2,6 +2,7 @@ export {
   BUDGET_NAMES,
   WalkGraph,
   byteBudgetError,
+  isPlaceholder,
   joinPieces,
   keptNodesError,
   keptStepsError,
@@ -12,6 +13,7 @@ export {
   walksKept,
 } from './walkRows.ts'
 export type {
+  Abridged,
   BudgetNames,
   WalkFragment,
   WalkHeader,
@@ -71,7 +73,6 @@ export type {
   StructuralForms,
 } from './structuralForms.ts'
 export {
-  ExpansionTooLargeError,
   FORMS_STEP_BUDGET,
   formsCut,
   walkDepartures,

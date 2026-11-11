@@ -1,23 +1,18 @@
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkFragment, WalkRun } from './walkRows.ts'
 
-export type GapKind = 'steps' | 'read' | 'abridged' | 'own' | 'unread'
+export type GapKind = 'steps' | 'read' | 'own' | 'unread'
 
-export const GAP_KINDS: GapKind[] = [
-  'steps',
-  'read',
-  'abridged',
-  'own',
-  'unread',
-]
+export const GAP_KINDS: GapKind[] = ['steps', 'read', 'own', 'unread']
 
 /**
  * One segment of a walk's stretch, by ADR 0001: `steps` the cut attached as
  * own sequence, with their ids; `read`, steps the cut read and kept out;
- * `abridged`, an abridged run that is not a fragment; `own`, a record's
- * unread middle, with its `missingBp` and whether an end piece was abridged;
- * `unread`, pieces the cut did not read, between the breakpoints on the
- * reference it knows `before` and `after` them
+ * `own`, a record's unread middle, with its `missingBp` and whether the
+ * piece it leaves or rejoins is one the cut did not load, whose own steps
+ * expanding the walk reads; `unread`, pieces the cut did not read, between
+ * the breakpoints on the reference it knows `before` and `after` them. A
+ * step of an unloaded piece counts as any other, its placeholders included.
  */
 export interface GapSegment {
   kind: GapKind
@@ -71,7 +66,8 @@ export interface GapInputs {
   departures: WalkDeparture[]
   refName: string
   before: (run: WalkRun) => Float64Array
-  length: (id: number) => number
+  // the pieces of a run the cut did not load, each with its steps' range
+  unloaded: (run: WalkRun) => { from: number; to: number }[]
   attached: Map<WalkRun, Set<number>>
   spans: { run: WalkRun; first: number; last: number }[]
   breakpoint: (run: WalkRun, i: number, leave: boolean) => { pos: number }
@@ -124,7 +120,7 @@ function firstStarting<T extends Span>(spans: T[], at: number) {
 }
 
 const runEnd = (run: WalkRun, bp: Float64Array) =>
-  run.hapOffset + (run.abridged?.bp ?? bp[run.ids.length]!)
+  run.hapOffset + bp[run.ids.length]!
 
 /**
  * Each walk's stretches between and past its fragments, and its departures
@@ -138,7 +134,7 @@ export function walkGaps({
   departures,
   refName,
   before,
-  length,
+  unloaded,
   attached,
   breakpoint,
   spans,
@@ -150,9 +146,6 @@ export function walkGaps({
   const fragmentStep = (run: WalkRun, i: number) =>
     inFragment.get(run)?.some(([first, last]) => i >= first && i <= last) ??
     false
-  const fragmentAbridged = new Set(
-    fragments.flatMap(f => (f.abridged ? [f.abridged] : [])),
-  )
   const runsBy = groupByName(runs, refName)
   const attachBy = groupByName(attach, refName)
   const fragmentsBy = groupByName(fragments, refName)
@@ -166,18 +159,25 @@ export function walkGaps({
     const walkRuns = [...(runsBy.get(name) ?? [])].sort(
       (a, b) => a.hapOffset - b.hapOffset,
     )
-    const stepRuns = walkRuns.filter(run => !run.abridged)
-    const abridgedSpans = walkRuns.flatMap(run =>
-      run.abridged
-        ? [
-            {
-              start: run.hapOffset,
-              end: run.hapOffset + run.abridged.bp,
-              fragment: fragmentAbridged.has(run.abridged),
-            },
-          ]
-        : [],
-    )
+    // where each unloaded piece's stretch on R starts on the contig, and
+    // where it ends
+    const unloadedStarts = new Set<number>()
+    const unloadedEnds = new Set<number>()
+    for (const run of walkRuns) {
+      const bp = before(run)
+      for (const { from, to } of unloaded(run)) {
+        let first = from
+        let last = to - 1
+        while (first < last && Number.isNaN(run.refStarts[first])) {
+          first++
+        }
+        while (last > first && Number.isNaN(run.refStarts[last])) {
+          last--
+        }
+        unloadedStarts.add(run.hapOffset + bp[first]!)
+        unloadedEnds.add(run.hapOffset + bp[last + 1]!)
+      }
+    }
     const attachSteps: Step[] = []
     for (const run of attachBy.get(name) ?? []) {
       const marks = attached.get(run)
@@ -201,36 +201,21 @@ export function walkGaps({
       (a, b) => a.hapStart - b.hapStart,
     )
 
-    // the reference steps of the walk's runs, and an abridged run's two
-    // handles, built once a stretch needs a breakpoint
+    // the reference steps of the walk's runs, built once a stretch needs a
+    // breakpoint
     let anchors: Anchor[] | undefined
     const anchorsOf = () => {
       anchors ??= walkRuns
         .flatMap(run => {
           const bp = before(run)
-          return run.abridged
-            ? [
-                {
-                  run,
-                  i: 0,
-                  start: run.hapOffset,
-                  end: run.hapOffset + length(run.ids[0]!),
-                },
-                {
-                  run,
-                  i: 1,
-                  start: runEnd(run, bp) - length(run.ids[1]!),
-                  end: runEnd(run, bp),
-                },
-              ]
-            : [...run.ids.keys()]
-                .filter(i => !Number.isNaN(run.refStarts[i]))
-                .map(i => ({
-                  run,
-                  i,
-                  start: run.hapOffset + bp[i]!,
-                  end: run.hapOffset + bp[i + 1]!,
-                }))
+          return [...run.ids.keys()]
+            .filter(i => !Number.isNaN(run.refStarts[i]))
+            .map(i => ({
+              run,
+              i,
+              start: run.hapOffset + bp[i]!,
+              end: run.hapOffset + bp[i + 1]!,
+            }))
         })
         .sort((a, b) => a.start - b.start)
       return anchors
@@ -267,7 +252,7 @@ export function walkGaps({
     // edge
     const stepsIn = (start: number, end: number) => {
       const out: Step[] = []
-      for (const run of stepRuns) {
+      for (const run of walkRuns) {
         const bp = before(run)
         if (run.hapOffset <= end && runEnd(run, bp) >= start) {
           const marks = attached.get(run)
@@ -381,9 +366,6 @@ export function walkGaps({
       const inSteps = stepsIn(start, end)
       const sized = inSteps.filter(x => x.end > x.start)
       const zeroSteps = inSteps.filter(x => x.end === x.start && x.attached)
-      const inAbridged = abridgedSpans.filter(
-        x => !x.fragment && x.end > start && x.start < end,
-      )
       const from = firstEnding(placed, start, true)
       const inPlaced: Placed[] = []
       for (let k = from; k < placed.length && placed[k]!.start <= end; k++) {
@@ -394,12 +376,7 @@ export function walkGaps({
         x => x.end === x.start && x.start > start && x.start < end,
       )
       const points = new Set([start, end])
-      for (const x of [
-        ...sized,
-        ...inAbridged,
-        ...sizedPlaced,
-        ...zeroPlaced,
-      ]) {
+      for (const x of [...sized, ...sizedPlaced, ...zeroPlaced]) {
         for (const p of [x.start, x.end]) {
           if (p > start && p < end) {
             points.add(p)
@@ -468,7 +445,6 @@ export function walkGaps({
           candidate && candidate.start <= a && candidate.end >= b
             ? candidate
             : undefined
-        const piece = inAbridged.find(x => x.start <= a && x.end >= b)
         const own = sizedPlaced.find(x => x.start <= a && x.end >= b)
         const bp = b - a
         if (step) {
@@ -477,17 +453,14 @@ export function walkGaps({
             bp,
             step.attached ? { ids: [step.id], rev: [step.rev] } : {},
           )
-        } else if (piece) {
-          add('abridged', bp)
         } else if (own) {
           add(
             'own',
             bp,
             {
               missingBp: own.d.missingBp,
-              abridged: abridgedSpans.some(
-                x => x.end === own.start || x.start === own.end,
-              ),
+              abridged:
+                unloadedEnds.has(own.start) || unloadedStarts.has(own.end),
             },
             own.d,
           )

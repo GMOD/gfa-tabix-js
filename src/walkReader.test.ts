@@ -11,7 +11,7 @@ import {
   WalkReader,
   readInOrder,
 } from './walkReader.ts'
-import { walkNameFilter } from './walkRows.ts'
+import { isPlaceholder, walkNameFilter } from './walkRows.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
@@ -983,29 +983,68 @@ async function twoRefs(name: string, expand?: (name: string) => boolean) {
   }
 }
 
-test('an abridged walk cuts to a fragment from where it leaves R to where it rejoins, with its steps and bp', async () => {
+// H#1#h is >1>2 in tile 0, >3>7>4 in tile 10, with 3 bp of its own in 7,
+// and >5 in tile 20
+test('an unloaded walk cuts to the fragment its loaded one does, a placeholder for its run of own steps, and lists the pieces it did not load', async () => {
   const { tables, fragments } = await twoRefs('abridged.R')
+  const loaded = await twoRefs('abridged.R', () => true)
+  const steps = (f: WalkFragment) =>
+    [...f.ids].map((id, k) =>
+      isPlaceholder(id) ? 'placeholder' : `${id}@${f.refStarts[k]}`,
+    )
   const h = fragments.filter(f => f.name === 'H#1#h')
-  expect(h.map(f => [f.hapStart, f.hapEnd, f.abridged?.steps])).toEqual([
-    [100, 112, 2],
-    [112, 127, 3],
-    [127, 133, 1],
+  expect(
+    h.map(f => [f.hapStart, f.hapEnd, f.trimmedBefore, f.trimmedAfter]),
+  ).toEqual([[100, 133, 0, 0]])
+  expect(h.map(steps)).toEqual([
+    ['1@0', '2@6', '3@12', 'placeholder', '4@18', '5@24'],
   ])
-  const { names, abridgedSteps } = tables.walks
-  const abridged = new Set(fragments.filter(f => f.abridged).map(f => f.name))
-  expect([...abridged].sort()).toEqual(['D#1#d', 'H#1#h', 'I#1#i', 'Q#0#chr'])
-  names.forEach((name, i) => {
-    expect(Number.isNaN(abridgedSteps![i])).toBe(
-      name === 'R#0#chr' ||
-        !abridged.has(name) ||
-        fragments.some(
-          f =>
-            f.name === name &&
-            !f.abridged &&
-            f.hapStart === tables.walks.starts[i],
-        ),
+  expect(
+    h[0]!.abridged!.map(a => [a.steps, a.bp, a.detail.refName, a.detail.name]),
+  ).toEqual([
+    [2, 12, 'R#0#chr', '0:2'],
+    [3, 15, 'R#0#chr', '10:0'],
+    [1, 6, 'R#0#chr', '20:1'],
+  ])
+  const whole = loaded.fragments.filter(f => f.name === 'H#1#h')
+  expect(whole.map(f => [f.hapStart, f.hapEnd, f.abridged])).toEqual([
+    [100, 133, undefined],
+  ])
+  expect(whole.map(steps)).toEqual([
+    ['1@0', '2@6', '3@12', '7@NaN', '4@18', '5@24'],
+  ])
+  const { nodes, walks } = tables
+  const placeholders = [...nodes.placeholders!].flatMap((flag, i) =>
+    flag === 1
+      ? [
+          {
+            name: nodes.names[i],
+            bp: nodes.lengths[i],
+            on: nodes.refNames[nodes.refs[i]!],
+            from: nodes.starts[i],
+          },
+        ]
+      : [],
+  )
+  expect(placeholders).toContainEqual({
+    name: String(h[0]!.ids[3]),
+    bp: 3,
+    on: 'H#1#h',
+    from: 118,
+  })
+  expect(new Set(placeholders.map(p => p.name)).size).toBe(placeholders.length)
+  expect(placeholders.every(p => Number(p.name) < 0)).toBe(true)
+  expect(loaded.tables.nodes.placeholders!.some(flag => flag === 1)).toBe(false)
+  walks.names.forEach((name, i) => {
+    expect(walks.abridgedSteps![i]).toBe(
+      name === 'R#0#chr'
+        ? NaN
+        : fragments
+            .find(f => f.name === name && f.hapStart === walks.starts[i])!
+            .abridged!.reduce((sum, a) => sum + a.steps, 0),
     )
   })
+  expect(walks.abridgedSteps![walks.names.indexOf('H#1#h')]).toBe(6)
 })
 
 // R over four 5 bp nodes in 20 bp tiles, and H abridged from 3 at 10 to 4
@@ -1083,9 +1122,7 @@ async function expandedCut(walks: WalkReader, signal?: AbortSignal) {
 
 test('detail records read at once, finishing in reverse, cut as reads one at a time do', async () => {
   const abridgedPieces = (await twoRefs('abridged.R')).fragments.flatMap(f =>
-    f.abridged
-      ? [`${f.abridged.detail.refName} ${f.abridged.detail.name}`]
-      : [],
+    (f.abridged ?? []).map(a => `${a.detail.refName} ${a.detail.name}`),
   )
   const details = new Set(abridgedPieces).size
   expect(details).toBeLessThan(abridgedPieces.length)
@@ -1751,7 +1788,8 @@ test('a route naming no :k leaves from the first pass of its entry the walk reac
   )
 })
 
-// Every walk abridged, in one tile (copyends.R.gfa). Y's end is 3 at its
+// Every walk abridged, in one tile (copyends.R.gfa), and each unloaded piece
+// read from its blocks as its loaded one is. Y's end is 3 at its
 // second pass, the one nearest its start, and V's is 3 at its second pass
 // too, which `end@1` names as the first is nearer its start:
 //   W R 0 chr >1>2>3>6>7>8>4>2>3>5
@@ -1771,8 +1809,8 @@ test("an abridged row's end takes the pass end@k names, else the one nearest its
       .sort(),
   ).toEqual([
     'R#0#chr 0-60 >1@0>2@6>3@12>6@18>7@24>8@30>4@36>2@42>3@48>5@54',
-    'V#1#v 0-54 >1@0>3@48',
-    'Y#1#y 0-18 >4@36>3@48',
+    'V#1#v 0-54 >1@0>2@6>3@12>6@18>7@24>8@30>4@36>2@42>3@48',
+    'Y#1#y 0-18 >4@36>2@42>3@48',
   ])
   const expanded = await cut(() => true)
   expect(
@@ -1920,6 +1958,7 @@ test.each([
 test.each([
   ['departures', '.', REF_ROW, "R#0#chr's departure rows"],
   ['detail', '0:0', REF_ROW, "R#0#chr's nodes, route, walk rows"],
+  ['blocks', '0', REF_ROW, "R#0#chr's blocks rows"],
   [
     'tile',
     '0',
@@ -1930,11 +1969,14 @@ test.each([
   'a %s unit holding a row of a kind it does not hold is refused',
   async (kind, name, row, kinds) => {
     const unit = bgzf(`#unit\tR#0#chr\t0\t4\t${kind}\t${name}\n${row}`)
-    const { data, directory } = oneUnit(unit, (at, length) =>
-      tableOf(at, length, kind, name),
+    const { data, directory } = oneUnit(
+      unit,
+      (at, length) =>
+        `${tableOf(at, length, kind, name)}${kind === 'detail' ? `#entry\tR#0#chr\t0\t4\tblocks\t0\t${at}\t${length}\n` : ''}`,
     )
     const file = new WalkFile(data, directory)
-    await expect(file.read(await file.units('R#0#chr'))).rejects.toThrow(
+    const units = await file.units('R#0#chr')
+    await expect(file.read(units.filter(u => u.kind === kind))).rejects.toThrow(
       `holds a row that is not one of ${kinds}`,
     )
   },
@@ -2103,10 +2145,14 @@ test("a tag after an abridged row's detail column names no other detail unit", a
     '#haplotype H#1',
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
     'R#0#chr 0 abridged H#1#h 0 0 0 3 18 6 8 0 xx:i:1',
+    'R#0#chr 0:0 10 20 nodes 5 8',
+    'R#0#chr 0:0 10 20 route 6 10 -4',
+    'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
+    'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,0+5:8 xx:i:1',
   ]).cut('R#0#chr', { start: 0, end: 20 }, { context: 0 })
-  expect(fragments.map(f => f.abridged?.detail.name).filter(Boolean)).toEqual([
-    '0:0',
-  ])
+  expect(
+    fragments.flatMap(f => (f.abridged ?? []).map(a => a.detail.name)),
+  ).toEqual(['0:0'])
 })
 
 // R's chr0 is two nodes of 0 bp: its tile states [0, 0), so a window from 0

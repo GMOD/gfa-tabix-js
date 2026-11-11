@@ -1,9 +1,4 @@
-import {
-  RegionTooLargeError,
-  bpString,
-  panSNHaplotype,
-  panSNSample,
-} from './util.ts'
+import { panSNHaplotype, panSNSample } from './util.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkReader, WalkReaderHeader } from './walkReader.ts'
@@ -14,9 +9,7 @@ import type { WalkFragment, WalkNode } from './walkRows.ts'
  * `refStart`–`refEnd` against `altLength` of its own. `invertedBp` counts the
  * steps along R against its orientation. A step back along R walks a tandem
  * copy again: the departure is then a point at the junction, `repeatedBp`
- * counts the bp walked again, and `copied` spans them on R. An `abridged`
- * departure stands for the pieces a writer abridged, so only its net change
- * is exact.
+ * counts the bp walked again, and `copied` spans them on R.
  */
 export interface Departure {
   refStart: number
@@ -25,7 +18,6 @@ export interface Departure {
   invertedBp: number
   repeatedBp: number
   copied?: [number, number]
-  abridged?: true
 }
 
 /**
@@ -47,42 +39,31 @@ export interface DepartureSource {
 }
 
 // What a path does along its contig: follows R over [lo, hi), along or
-// against it; runs `bp` of its own; or runs `bp` the writer abridged between
-// R's bases lo and hi, along R or against it as its ends are
+// against it, or runs `bp` of its own
 type Event =
   | { kind: 'on'; lo: number; hi: number; reversed: boolean }
   | { kind: 'own'; bp: number }
-  | { kind: 'abridged'; lo: number; hi: number; bp: number; reversed: boolean }
 
 // A point on a path's contig: where it is on R until (a fragment's last step
-// or a departure's leave, `order` 0), from (a fragment's first step or a
-// departure's rejoin, 1), or where an abridged stretch starts (2). `own` is
-// the bp of the path's own that follow a leave
+// or a departure's leave, `order` 0) or from (a fragment's first step or a
+// departure's rejoin, 1). `own` is the bp of the path's own that follow a
+// leave
 interface Anchor {
   hap: number
-  order: 0 | 1 | 2
+  order: 0 | 1
   pos: number
   reversed: boolean
   exit?: true
   own?: number
-  abridged?: { lo: number; hi: number; bp: number; reversed: boolean }
 }
 
-// A fragment or departure as the bp of its contig it holds, the R it reaches
-// and the bp of the path it stands for
-type Item = {
-  hap: [number, number]
-  lo: number
-  hi: number
-  bp: number
-} & ({ fragment: WalkFragment } | { departure: WalkDeparture })
+// A fragment or departure as the bp of its contig it holds
+type Item = { hap: [number, number] } & (
+  | { fragment: WalkFragment }
+  | { departure: WalkDeparture }
+)
 
 const onR = (start: number) => !Number.isNaN(start)
-// the lower and the higher of two positions, those off R left out
-const least = (a: number, b: number) =>
-  onR(a) ? (onR(b) ? Math.min(a, b) : a) : b
-const most = (a: number, b: number) =>
-  onR(a) ? (onR(b) ? Math.max(a, b) : a) : b
 
 /**
  * Each haplotype's departures from R, `refName`, read off a cut: its
@@ -95,9 +76,9 @@ const most = (a: number, b: number) =>
  * walked against it reads as inverted, a jump back as a tandem copy, and
  * sequence between a contig's W lines as the path's own. R that two chains
  * of a haplotype reach, such as a contig's second visit to the window, has
- * no call. An abridged fragment's bp are a net change between the R its
- * handles reach, along R or against it as both handles are. The walks on R's
- * own haplotype are left out.
+ * no call. A piece the cut did not load reads as any other, from its steps
+ * on R and the bp of its own between them. The walks on R's own haplotype
+ * are left out.
  */
 export function walkDepartures(
   { fragments, departures, nodes }: DepartureSource,
@@ -118,16 +99,13 @@ export function walkDepartures(
     }
   }
   for (const f of fragments) {
-    add(f.name, fragmentItem(f, length))
+    add(f.name, {
+      hap: [f.hapStart - f.trimmedBefore, f.hapEnd + f.trimmedAfter],
+      fragment: f,
+    })
   }
   for (const d of departures) {
-    add(d.name, {
-      hap: [d.hapStart, d.hapStart + d.ownBp],
-      lo: Math.min(d.leavePos, d.rejoinPos),
-      hi: Math.max(d.leavePos, d.rejoinPos),
-      bp: d.ownBp,
-      departure: d,
-    })
+    add(d.name, { hap: [d.hapStart, d.hapStart + d.ownBp], departure: d })
   }
   const byHaplotype = new Map<string, HaplotypeDepartures>()
   for (const [name, items] of byPath) {
@@ -152,33 +130,12 @@ export function walkDepartures(
   return out
 }
 
-function fragmentItem(f: WalkFragment, length: (id: number) => number): Item {
-  const n = f.ids.length
-  const sa = f.refStarts[0]!
-  const sb = f.refStarts[n - 1]!
-  const lo = least(sa, sb)
-  const hi = most(sa + length(f.ids[0]!), sb + length(f.ids[n - 1]!))
-  return f.abridged
-    ? { hap: [f.hapStart, f.hapEnd], lo, hi, bp: f.abridged.bp, fragment: f }
-    : {
-        hap: [f.hapStart - f.trimmedBefore, f.hapEnd + f.trimmedAfter],
-        lo,
-        hi,
-        bp: f.hapEnd + f.trimmedAfter - f.hapStart + f.trimmedBefore,
-        fragment: f,
-      }
-}
-
 /**
  * A path's chains, each its events in the path's order: a fragment with the
  * departures leaving its last step, rejoining its first or lying inside it,
  * fragments that abut, and a departure touching no fragment on its own. What
  * the read did not see lies between chains, so each reads on its own, and R
- * that two chains reach has no call. An abridged fragment is a net over the
- * stretch of one piece a writer moved out of a chunk, from its first step on
- * R to its last, its row's hapOffset to hapOffset + bp on the contig. Every
- * departure record leaves at a piece's last step on R and rejoins at a
- * piece's first, so its own bp and the stretch share no base.
+ * that two chains reach has no call.
  */
 function pathChains(items: Item[], length: (id: number) => number) {
   // items chain where one's contig stretch touches another's: a departure's
@@ -219,19 +176,6 @@ function chainEvents(items: Item[], length: (id: number) => number) {
   for (const item of items) {
     if ('fragment' in item) {
       const f = item.fragment
-      if (f.abridged) {
-        if (onR(item.lo) && onR(item.hi)) {
-          const reversed = f.against.every(r => r === 1)
-          anchors.push({
-            hap: item.hap[0],
-            order: 2,
-            pos: item.lo,
-            reversed,
-            abridged: { lo: item.lo, hi: item.hi, bp: item.bp, reversed },
-          })
-        }
-        continue
-      }
       const n = f.ids.length
       const sa = f.refStarts[0]!
       const sb = f.refStarts[n - 1]!
@@ -278,13 +222,10 @@ function chainEvents(items: Item[], length: (id: number) => number) {
     end = undefined
   }
   for (const a of anchors) {
-    if (cur && !a.abridged && cur.reversed !== a.reversed) {
+    if (cur && cur.reversed !== a.reversed) {
       close()
     }
-    if (a.abridged) {
-      close()
-      events.push({ kind: 'abridged', ...a.abridged })
-    } else if (a.order === 1) {
+    if (a.order === 1) {
       cur ??= { pos: a.pos, reversed: a.reversed }
     } else if (a.exit) {
       if (cur) {
@@ -319,26 +260,9 @@ function readPath(events: Event[], h: HaplotypeDepartures) {
   let reach = -Infinity
   let alt = 0
   let inverted = 0
-  // set while an abridged stretch's bp are in `alt`: the far end of the R
-  // its handles reach where it runs along R, and true where it runs against
-  let abridgedEnd = NaN
-  let abridgedAgainst = false
   for (const e of flip ? events.toReversed() : events) {
     if (e.kind === 'own') {
       alt += e.bp
-    } else if (e.kind === 'abridged' && e.reversed !== flip) {
-      alt += e.bp
-      inverted += e.hi - e.lo
-      abridgedAgainst = true
-    } else if (e.kind === 'abridged') {
-      if (Number.isNaN(prevEnd)) {
-        first = e.lo
-        prevEnd = e.lo
-      }
-      alt += e.bp
-      abridgedEnd = Number.isNaN(abridgedEnd)
-        ? e.hi
-        : Math.max(abridgedEnd, e.hi)
     } else if (e.reversed !== flip) {
       alt += e.hi - e.lo
       inverted += e.hi - e.lo
@@ -346,17 +270,6 @@ function readPath(events: Event[], h: HaplotypeDepartures) {
       const start = e.lo
       if (Number.isNaN(prevEnd)) {
         first = start
-      } else if (!Number.isNaN(abridgedEnd)) {
-        h.departures.push({
-          refStart: prevEnd,
-          refEnd: Math.max(start, prevEnd),
-          altLength: alt + Math.max(0, prevEnd - start),
-          invertedBp: inverted,
-          repeatedBp: 0,
-          abridged: true,
-        })
-        reach = Math.max(reach, abridgedEnd)
-        abridgedEnd = NaN
       } else if (start !== prevEnd || alt > 0) {
         const repeated = start < prevEnd ? prevEnd - start : 0
         h.departures.push({
@@ -366,26 +279,13 @@ function readPath(events: Event[], h: HaplotypeDepartures) {
           invertedBp: inverted,
           repeatedBp: repeated,
           ...(repeated > 0 ? { copied: [start, prevEnd] } : {}),
-          ...(abridgedAgainst ? { abridged: true as const } : {}),
         })
       }
       prevEnd = e.hi
       reach = Math.max(reach, e.hi)
       alt = 0
       inverted = 0
-      abridgedAgainst = false
     }
-  }
-  if (!Number.isNaN(abridgedEnd)) {
-    h.departures.push({
-      refStart: prevEnd,
-      refEnd: Math.max(abridgedEnd, prevEnd),
-      altLength: alt,
-      invertedBp: inverted,
-      repeatedBp: 0,
-      abridged: true,
-    })
-    reach = Math.max(reach, abridgedEnd)
   }
   if (!Number.isNaN(first)) {
     h.covered.push([first, reach])
@@ -419,63 +319,32 @@ function coveredOnce(spans: [number, number][]) {
   return out
 }
 
-// The most steps a forms cut keeps, expanded abridged walks included; an
-// expanded cut at the MHC keeps 9.4 M
+// The most steps a forms cut keeps; a cut at the MHC with every abridged walk
+// read in full keeps 9.4 M
 export const FORMS_STEP_BUDGET = 16_000_000
 
 export interface FormsCutOptions {
-  // read abridged walks in full, as far as the step budget allows; true by
-  // default
-  expand?: boolean
-  // false reads every abridged walk in full, or throws ExpansionTooLargeError
-  // before the second cut where that takes the cut past stepBudget; true by
-  // default, which reads them fewest steps first while the budget lasts
-  partial?: boolean
-  // the most steps the cut keeps with the abridged walks it reads in full,
-  // FORMS_STEP_BUDGET by default; each cut keeps at least FORMS_STEP_BUDGET
+  // the most steps the cut keeps, past which it throws RegionTooLargeError;
+  // FORMS_STEP_BUDGET by default
   stepBudget?: number
-  // the most compressed bytes either cut fetches from the region's chunks,
-  // past which the cut throws RegionTooLargeError, on a source with
-  // bytesForRegions; WALK_BUDGETS' by default. Only stepBudget bounds the
-  // detail records expansion reads
+  // the most compressed bytes the cut fetches from the region's tiles, past
+  // which it throws RegionTooLargeError; WALK_BUDGETS' by default
   byteBudget?: number
-  // the most compressed bytes either cut's departure read fetches, past
-  // which the cut throws DepartureReadError, on a source with
-  // bytesForRegions; WALK_BUDGETS' by default
+  // the most compressed bytes the cut's departure read fetches, past which
+  // it throws DepartureReadError; WALK_BUDGETS' by default
   departureByteBudget?: number
   signal?: AbortSignal
 }
 
 /**
- * A forms cut with `partial: false` whose abridged walks, read in full, would
- * keep `steps` past `limit`, the step budget. `fitsBp` scales the region by
- * how far over it is.
- */
-export class ExpansionTooLargeError extends RegionTooLargeError {
-  readonly steps: number
-
-  constructor(steps: number, limit: number, windowBp: number) {
-    const fitsBp = Math.max(1, Math.floor((windowBp * limit) / steps))
-    super(
-      `Zoom in to about ${bpString(fitsBp)} to read every walk in full`,
-      limit,
-      windowBp,
-      fitsBp,
-    )
-    this.steps = steps
-  }
-}
-
-/**
  * Every haplotype's departures over a region, for structuralForms, from a
  * cut without links: its departures hold every one over the region, those
- * leaving it and rejoining far away or jumping over it whole included.
- * Abridged walks are read in full, those with the fewest steps first, while
- * the cut stays under `stepBudget`; any left keep their net change only.
- * `partial: false` reads every abridged walk or throws
- * ExpansionTooLargeError. A haplotype the header names with no walk in the
- * cut is listed with nothing covered. A region the index estimates past
- * `byteBudget` throws the reader's RegionTooLargeError before any read.
+ * leaving it and rejoining far away or jumping over it whole included. No
+ * abridged walk is read in full: a piece the cut does not load gives the
+ * same departures from its `blocks` row, which states its steps on R and
+ * the bp of its own between them. A haplotype the header names with no walk
+ * in the cut is listed with nothing covered. A region the index estimates
+ * past `byteBudget` throws the reader's RegionTooLargeError before any read.
  */
 export async function formsCut(
   reader: Pick<WalkReader, 'header' | 'sequenceFor' | 'cut'>,
@@ -483,8 +352,6 @@ export async function formsCut(
   opts: FormsCutOptions = {},
 ) {
   const {
-    expand = true,
-    partial = true,
     stepBudget = FORMS_STEP_BUDGET,
     byteBudget,
     departureByteBudget,
@@ -495,23 +362,13 @@ export async function formsCut(
   const refName =
     (await reader.sequenceFor(sample, region.refName, { signal })) ??
     region.refName
-  const cutOpts = {
+  const cut = await reader.cut(refName, region, {
     links: false,
-    stepBudget: Math.max(stepBudget, FORMS_STEP_BUDGET),
+    stepBudget,
     byteBudget,
     departureByteBudget,
     signal,
-  }
-  let cut = await reader.cut(refName, region, cutOpts)
-  if (expand) {
-    const expanded = expandedWalks(cut.fragments, stepBudget, partial, region)
-    if (expanded.size > 0) {
-      cut = await reader.cut(refName, region, {
-        ...cutOpts,
-        expand: name => expanded.has(name),
-      })
-    }
-  }
+  })
   const haplotypes = walkDepartures(
     {
       fragments: cut.fragments,
@@ -527,43 +384,4 @@ export async function formsCut(
     }
   }
   return haplotypes
-}
-
-// The abridged walks a cut can read in full within `stepBudget`, fewest
-// steps first, or all of them where `partial` is false
-function expandedWalks(
-  fragments: WalkFragment[],
-  stepBudget: number,
-  partial: boolean,
-  region: { start: number; end: number },
-) {
-  let kept = 0
-  const abridged = new Map<string, number>()
-  for (const f of fragments) {
-    if (f.abridged) {
-      abridged.set(f.name, (abridged.get(f.name) ?? 0) + f.abridged.steps)
-    } else {
-      kept += f.ids.length
-    }
-  }
-  if (!partial) {
-    const steps = [...abridged.values()].reduce((sum, n) => sum + n, kept)
-    if (abridged.size > 0 && steps > stepBudget) {
-      throw new ExpansionTooLargeError(
-        steps,
-        stepBudget,
-        region.end - region.start,
-      )
-    }
-    return new Set(abridged.keys())
-  }
-  const expanded = new Set<string>()
-  for (const [name, steps] of [...abridged].sort((a, b) => a[1] - b[1])) {
-    if (kept + steps > stepBudget) {
-      break
-    }
-    kept += steps
-    expanded.add(name)
-  }
-  return expanded
 }

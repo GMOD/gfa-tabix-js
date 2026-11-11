@@ -56,7 +56,6 @@ interface Piece {
   delta: number
   invertedBp: number
   repeatedBp: number
-  abridged: boolean
 }
 
 // A change a haplotype makes, as the tolerance compares it: its net change
@@ -97,12 +96,7 @@ function joined(departures: Departure[], joinBp: number) {
   )) {
     const delta = d.altLength - (d.refEnd - d.refStart)
     const last = out.at(-1)
-    if (
-      last &&
-      !last.abridged &&
-      !d.abridged &&
-      d.refStart - last.refEnd < joinBp
-    ) {
+    if (last && d.refStart - last.refEnd < joinBp) {
       last.refEnd = Math.max(last.refEnd, d.refEnd)
       last.delta += delta
       last.invertedBp += d.invertedBp
@@ -114,7 +108,6 @@ function joined(departures: Departure[], joinBp: number) {
         delta,
         invertedBp: d.invertedBp,
         repeatedBp: d.repeatedBp,
-        abridged: d.abridged === true,
       })
     }
   }
@@ -124,13 +117,13 @@ function joined(departures: Departure[], joinBp: number) {
 /**
  * A haplotype's changes of at least `floorBp` over the window, from its
  * departures: pieces joined where nearer than joinBp; one changing R's
- * length by floorBp or more changes it, an abridged one by its net, and one
- * that does not but walks floorBp of R against it inverts that span. A
+ * length by floorBp or more changes it, and one that does not but walks
+ * floorBp of R against it inverts that span. A
  * deletion of SHIFT_MIN_BP or more pairs with the first insertion or step
  * back in R order within SHIFT_TOLERANCE of its size and twice its size of
  * it, largest deletion first, into one shift. `plain` lists the pieces a
- * summed site adds up: those neither abridged nor making a change other than
- * an unpaired insertion, deletion or replacement.
+ * summed site adds up: those making no change other than an unpaired
+ * insertion, deletion or replacement.
  */
 function haplotypeChanges(
   departures: Departure[],
@@ -145,21 +138,17 @@ function haplotypeChanges(
     const span = p.refEnd - p.refStart
     const alt = Math.max(0, span + p.delta)
     const size = Math.abs(p.delta)
-    return p.abridged
-      ? size >= floorBp
-        ? 'net'
+    return size < floorBp
+      ? p.invertedBp >= floorBp
+        ? 'inversion'
         : undefined
-      : size < floorBp
-        ? p.invertedBp >= floorBp
-          ? 'inversion'
-          : undefined
-        : p.repeatedBp >= STRUCTURAL_BP && p.delta > 0
-          ? 'duplication'
-          : alt > span && span < STRUCTURAL_BP
-            ? 'insertion'
-            : alt < span && alt < STRUCTURAL_BP
-              ? 'deletion'
-              : 'replacement'
+      : p.repeatedBp >= STRUCTURAL_BP && p.delta > 0
+        ? 'duplication'
+        : alt > span && span < STRUCTURAL_BP
+          ? 'insertion'
+          : alt < span && alt < STRUCTURAL_BP
+            ? 'deletion'
+            : 'replacement'
   })
   const paired = new Map<number, number>()
   const deletions = pieces
@@ -200,9 +189,7 @@ function haplotypeChanges(
         })
       }
     } else if (kind === undefined) {
-      if (!p.abridged) {
-        plain.push(p)
-      }
+      plain.push(p)
     } else {
       changes.push({
         refStart: p.refStart,

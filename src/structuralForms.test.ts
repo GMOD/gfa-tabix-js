@@ -315,18 +315,6 @@ test('a step back along R is a duplication, which shifts like an insertion', () 
   ).toEqual(['shift'])
 })
 
-test('an abridged departure is a net mark, and its haplotype is listed', () => {
-  const result = forms([
-    hap('A#1', [dep(10_000, 75_000, 60_000, { abridged: true })]),
-    hap('B#1'),
-  ])
-  expect(result.forms[1]!.marks).toEqual([
-    { ...mark('net', 10_000, 75_000, -5000), site: 0, state: 'n-5000@10000' },
-  ])
-  expect(describeForm(result.forms[1]!)).toBe('net -5kb')
-  expect(result.abridged).toEqual(['A#1'])
-})
-
 test('a gain at a site wider than 50 bp replaces it', () => {
   const result = forms([
     ...haps('L', 6, [dep(1000, 31_000, 108_000)]),
@@ -953,8 +941,6 @@ test('each mark names its site and state, and formStateAt reads a form at any si
 test('markTag says a change in a short token', () => {
   expect(markTag(mark('insertion', 0, 0, 78_000))).toBe('ins 78kb')
   expect(markTag(mark('deletion', 0, 18_445, -18_445))).toBe('del 18.4kb')
-  expect(markTag(mark('net', 0, 160_000, -94_000))).toBe('net -94kb')
-  expect(markTag(mark('net', 0, 10_000, 78_000))).toBe('net +78kb')
   expect(markTag(mark('replacement', 0, 32_700, 26_000))).toBe(
     'repl 32.7kb->58.7kb',
   )
