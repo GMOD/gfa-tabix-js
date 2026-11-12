@@ -73,6 +73,17 @@ const tables = graph.tables(kept, fragments, departures)
   and the tile size, `tile`, read from the walk file's header unit
 - `reader.referenceSequences()` lists the sequences a region can be on, in full
   PanSN: `GRCh38#0#chr6`
+- `reader.units(refName)` is a sequence's unit table,
+  `reader.sequenceLength(refName)` where its reference ends, and
+  `reader.referenceNodes(refName, region)` every pass of the reference over a
+  region
+- `reader.bytesFor(refName, region)` is the compressed bytes of the tiles under
+  a window and its context, of those tiles' `blocks` units and of the window's
+  departure blocks. A cut reads other bytes than that where it fetches tiles to
+  attach records' own steps, with their `blocks` units, or expands walks
+- Links are written the way round with more `+` ends, as a walk along the
+  reference takes them, and with the smaller first handle on a tie: a walk
+  `>7>3` gives `L 7 + 3 +`
 
 ## Changes in 7
 
@@ -101,10 +112,13 @@ gone.
 - **Placeholders:** a step with `isPlaceholder(id)`, an id below 0, is a run of
   steps off the tile's reference path that the cut did not load. Its `WalkNode`
   has `placeholder: true`, the run's bp as its length, and its place on its
-  walk's contig. One run keeps one id from cut to cut of a reader, while the
-  reader holds it among the last million or so, and no two runs share one. They
-  are in `kept`, in a departure's `steps`, in a gap's `steps` segment and in the
-  links
+  walk's contig. An id is its cut's alone: in a cut each run has one id and each
+  id one run, and the same cut gives the same ids and the same tables whatever
+  its reader cut before or cuts beside it, while another cut gives the run
+  another id. A placeholder's name in the tables, `walk:start-end`, is its walk
+  and its stretch of the contig whatever the cut, so a consumer that merges cuts
+  matches placeholders by name. Placeholders are in `kept`, in a departure's
+  `steps`, in a gap's `steps` segment and in the links
 - **`GraphTables`:** `nodes.placeholders` flags placeholder nodes, each named
   for its walk and its stretch of the contig, `HG002#1#chr1:118-121`, which is
   no node's name. `walks.abridgedSteps` is the steps of a walk's unloaded
@@ -121,13 +135,14 @@ gone.
   departures its loaded one gives. `formsCut` makes one cut and reads no detail
   unit: its `expand` and `partial` options and `ExpansionTooLargeError` are gone
 - **`expand`** reads the detail units of the pieces whose steps the cut keeps or
-  attaches, and no other: those whose span lies over the drawn stretch, by their
-  `abridged` rows alone, and of the rest those a record attaches steps of, which
-  their `blocks` rows tell
+  attaches, and no other: those whose span lies over the drawn stretch and those
+  between two such pieces of a line, by their `abridged` rows alone, and of the
+  rest those a record attaches steps of, which their `blocks` rows tell
 - **When a cut reads a `blocks` unit:** any cut that keeps a piece it does not
   expand reads that piece's tile's unit; and an expanding cut does where an
-  expanded walk has a piece in a tile it reads that lies off the drawn stretch.
-  A cut whose expanded walks' pieces all lie over the drawn stretch reads none
+  expanded walk has a piece in a tile it reads that lies off the drawn stretch
+  and not between two pieces of its line over it. A cut whose expanded walks'
+  pieces all lie over the drawn stretch reads none
 - **Later additions:** a tag, `NAME:T:value`, after a row's fixed columns is
   ignored on every row kind and on the `#walks` line; so are a header or
   directory line whose first word the reader does not know, and a unit of a kind
@@ -137,74 +152,15 @@ gone.
 - **Budgets:** a step built for an unloaded piece counts toward `stepBudget` as
   any step does. A placeholder does not count toward `nodeLimit`, which bounds
   the nodes a layout places; a cut's `placeholders` says how many it returned,
-  for a consumer that lays them out. `byteBudget` and `bytesFor` count the
-  `blocks` units a cut reads
+  for a consumer that lays them out. `byteBudget` counts the `blocks` units a
+  cut reads. `bytesFor` counts those of the tiles under the window and its
+  context, and none of a tile fetched to attach a record's own steps
 - **Contained cuts:** a fragment can end on a placeholder of exactly `context`
   bp, the part of a longer run within the cut's context, with the rest of the
   run as another placeholder outside it
 - New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder`,
   `WalkFragment.unloadedSteps`, `WalkDeparture.abridged`,
   `departures.abridgedSteps` and `placeholders` on a cut
-
-## Changes in 6
-
-graph-walks 6 reads walk format 7 only (gfa-to-tabix's ADR 0010): a series of
-gzip units with a unit table per sequence and a directory, not a Tabix file.
-
-- Open a walk file with `WalkReader.open(url)` or
-  `WalkReader.fromFilehandles({ data, directory })`, in place of
-  `new WalkReader(new TabixIndexedFile(...))`. `cut`, `cutRegion`, `header`,
-  `referenceSequences` and `sequenceFor` keep their calls, and `cut` its return
-  shape
-- A cut reads the tiles and departure blocks overlapping the window and its
-  context, by extent, and nothing before them: no chunk before the window, no
-  `maxnode` lookback, no `#long` widening, no reach on the departure read, no
-  `~departure` or `~cs` sequences. An attach fetch reads the tiles a record's
-  `ownTiles` names, for the record's own steps alone. Units whose bytes touch
-  come in one range request
-- Since a cut reads less, a fragment's `trimmedBefore` and `trimmedAfter`, the
-  bp of its walk the cut read and kept out, can be smaller than graph-walks 5
-  gave for the same window
-- An abridged fragment's `abridged.detail` names its detail unit: the sequence,
-  the tile's nominal start and `name`, `tile:detail`
-- The byte budgets count the table's exact unit lengths, so they hold on every
-  source
-- New: `reader.units(refName)`, a sequence's unit table;
-  `reader.sequenceLength(refName)`, where its reference ends;
-  `reader.bytesFor(refName, region)`, the bytes a cut there reads;
-  `reader.referenceNodes(refName, region)`, every pass of the reference over it;
-  `WalkFile`, `WalkUnit`, `WalkFilehandle` and `WALK_FORMAT`
-- Removed: `queryStart`, `chunkQueryStart`, `lookbackChunks`, `walkQueryStart`,
-  `LongPass`, and the header's `chunk`, `maxNode` and `long`; `byteBudgetError`
-  takes a synchronous `bytesTo`. `TabixSource` now types only the segment index
-- Links are written the way round with more `+` ends, as a walk along the
-  reference takes them, and with the smaller first handle on a tie: a walk
-  `>7>3` gives `L 7 + 3 +`, where graph-walks 5 gave `L 3 - 7 -`
-- Fixed: two departure records whose leave pieces lie in adjacent tiles both get
-  their own steps; graph-walks 5.0.2 dropped one's
-
-## Changes in 5
-
-graph-walks 5 reads walk format 6 only and changes the API:
-
-- `cut` returns `departures`, every departure from the reference over the window
-  once, in place of `skips`, `open` and `across`; a fragment runs from its
-  walk's first step on the window to its last, with no follow rounds, crossings
-  or stop kinds. `WalkGraph.tables` takes the departures
-- Removed: `CROSSING_BP`, `WalkChunk`, `WalkCrossing`, `WalkGap`, `WalkSkip`,
-  `WalkStop`, `WalkStopTable`; `WalkFragment`, `WalkRow`, `GraphTables` and
-  `HaplotypeDepartures` lost fields, and `keptStepsError` takes the departures
-  as its second argument
-- Budgets default to `WALK_BUDGETS`, so a cut that read without limit now throws
-  `RegionTooLargeError` or `DepartureReadError` past them; pass `Infinity` to
-  lift one
-- A departure states how many times the reference passes each end's node, and
-  `placementChoice` says where its position was the writer's choice
-- Structural forms state nothing a member's own walks contradict: a rare state
-  folds only into one it agrees with, a no call never folds, a member no common
-  form fits goes to `other` (key `*`), and a change at a site wider than 1 kb
-  keys on its place. `formContradictions` checks a result against the members'
-  departures
 
 ## A region by contig
 
@@ -422,8 +378,9 @@ for (const d of departures) {
 - `isPlaceholder(id)` tells a placeholder step, whose id is below every node's.
   Its node, in `graph.nodes` and in the tables' `nodes` with `placeholders` set,
   has the run's bp as its length, lies on the walk's contig and is named for
-  both. A run off the reference path can hold nodes of the reference, where the
-  reference passes a node more than once, and two runs of equal bp may hold
+  both, `walk:start-end`. The id is its cut's alone, and the name the same in
+  any cut. A run off the reference path can hold nodes of the reference, where
+  the reference passes a node more than once, and two runs of equal bp may hold
   different sequence: only expanding tells
 - A contained cut keeps `context` bp of a walk past its steps on the window. It
   keeps a loaded node whole, so it can run less than that node past `context`;
@@ -439,18 +396,20 @@ for (const d of departures) {
   first departure holding it, NaN for a walk or departure with none. A walk's
   unloaded steps are the two together
 - With `expand` naming a walk, the cut reads the detail records of its pieces
-  whose span lies over the drawn stretch, from their `abridged` rows alone, and
-  of its pieces in a tile fetched for a record's own steps, and cuts those
-  pieces in full, as a file without abridging would. A piece of the walk
-  elsewhere in a tile read is built from its `blocks` row, or read in full where
-  a record within `attachBp` attaches a run off its end
+  whose span lies over the drawn stretch and of every piece between two such
+  pieces of a line, by piece number, from their `abridged` rows alone, and of
+  its pieces in a tile fetched for a record's own steps, and cuts those pieces
+  in full, as a file without abridging would. A piece of the walk elsewhere in a
+  tile read is built from its `blocks` row, or read in full where a record
+  within `attachBp` attaches a run off its end
 - The cut builds whole only what it draws of an unloaded piece: from the first
   block over the drawn stretch to the last, the piece's end steps, and each
   departure that can lie over the stretch. What lies between counts in bp
 - `pnpm blocks-equality <walks.gz or URL>` holds the two readings equal on a
   walk file: over random windows on its abridged tiles, the cut that expands
   nothing against the cut that expands every walk, plain, contained and
-  contained with context (`scripts/blocks-equality.ts`)
+  contained with context, and against the same cut from a fresh reader
+  (`scripts/blocks-equality.ts`)
 
 ## Moved components
 
@@ -609,7 +568,7 @@ const gfa = await rgfaCut(
   gfa-to-tabix's
   [walks-format.md](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/walks-format.md)
   describes the rows, and its ADR 0010 the file
-- At open the reader reads the directory, refusing any format but 7, then the
+- At open the reader reads the directory, refusing any format but 8, then the
   header unit and the sequence's unit table at once, and refuses a directory
   whose first line differs from the header's `#walks` line or whose `bytes`
   differs from the data's length. Over HTTP the length comes from Content-Range,
