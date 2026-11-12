@@ -404,26 +404,32 @@ function traverse(
 }
 
 // A walk row's steps as node ids, reverse flags, where each lies on the
-// reference, NaN off R, and whether each runs against R at its pass
+// reference, NaN off R, whether each runs against R at its pass, and its bp,
+// -1 where `lengthOf` has none
 function decodeWalk(
   path: RefPath,
   routes: Route[],
   cols: string[],
   choices: number[],
+  lengthOf: (id: number) => number,
 ) {
   const n = +cols[8]!
   const ids = new Int32Array(n)
   const rev = new Uint8Array(n)
   const refStarts = new Float64Array(n).fill(Number.NaN)
   const against = new Uint8Array(n)
+  const bp = new Int32Array(n)
   let at = 0
   const push = (h: number, i?: number) => {
     if (at >= n) {
       throw new WalkRowError('a walk row decodes to more steps than it states')
     }
-    if (i !== undefined) {
+    if (i === undefined) {
+      bp[at] = lengthOf(idOf(h))
+    } else {
       refStarts[at] = path.starts[i]!
       against[at] = path.handles[i] === h ? 0 : 1
+      bp[at] = path.before[i + 1]! - path.before[i]!
     }
     ids[at] = idOf(h)
     rev[at++] = h & 1
@@ -453,7 +459,7 @@ function decodeWalk(
   if (at !== n) {
     throw new WalkRowError(`a walk row decodes to ${at} steps, not ${n}`)
   }
-  return { ids, rev, refStarts, against }
+  return { ids, rev, refStarts, against, bp }
 }
 
 // A chunk as decoded, kept until the cut knows its nodes: tables() then
@@ -882,7 +888,7 @@ export function unloadedRow(
       rev: Uint8Array.from(rev),
       refStarts: Float64Array.from(refStarts),
       against: Uint8Array.from(against),
-      bp: Float64Array.from(bp),
+      bp: Int32Array.from(bp),
     },
     cuts: cuts.filter(at => at > 0 && at < n),
     abridged,
@@ -991,6 +997,7 @@ export function decodeChunk(
           rev: Uint8Array.from(handles, h => h & 1),
           refStarts: Float64Array.from(path.starts.slice(first)),
           against: new Uint8Array(handles.length),
+          bp: Int32Array.from(nodeLengths),
         },
       })
     }
@@ -1055,7 +1062,13 @@ export function decodeChunk(
           }
         }
       }
-      const steps = decodeWalk(path, routes, cols, choices)
+      const steps = decodeWalk(
+        path,
+        routes,
+        cols,
+        choices,
+        id => lengths.get(id) ?? ref?.lengths.get(id) ?? -1,
+      )
       const n = steps.ids.length
       out.ends.push({
         name,

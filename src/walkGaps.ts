@@ -224,13 +224,14 @@ export function walkGaps({
     }
 
     // a stretch's read steps, a 0 bp one included where it lies on either
-    // edge
+    // edge, and consecutive steps the cut did not attach as one
     const stepsIn = (start: number, end: number) => {
       const out: Step[] = []
       for (const run of walkRuns) {
         const bp = before(run)
         if (run.hapOffset <= end && runEnd(run, bp) >= start) {
           const marks = attached.get(run)
+          let read: Step | undefined
           let lo = 0
           let hi = run.ids.length
           while (lo < hi) {
@@ -249,17 +250,23 @@ export function walkGaps({
             const s = run.hapOffset + bp[i]!
             const e = run.hapOffset + bp[i + 1]!
             const isAttached = marks?.has(i) ?? false
-            if (
+            const inStretch =
               !fragmentStep(run, i) &&
               ((e > start && s < end) || (s === e && isAttached))
-            ) {
-              out.push({
+            if (inStretch && !isAttached && read?.end === s) {
+              read.end = e
+            } else if (inStretch) {
+              const step = {
                 start: s,
                 end: e,
                 id: run.ids[i]!,
                 rev: run.rev[i]!,
                 attached: isAttached,
-              })
+              }
+              out.push(step)
+              read = isAttached ? undefined : step
+            } else {
+              read = undefined
             }
           }
         }

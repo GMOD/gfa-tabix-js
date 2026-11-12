@@ -1,11 +1,7 @@
 import { LocalFile } from 'generic-filehandle2'
 
 import { RegionTooLargeError } from './util.ts'
-import {
-  FORMS_STEP_BUDGET,
-  formsCut,
-  walkDepartures,
-} from './walkDepartures.ts'
+import { formsCut, walkDepartures } from './walkDepartures.ts'
 import { DepartureReadError, WalkReader } from './walkReader.ts'
 import { walkCut } from './walkRows.ts'
 

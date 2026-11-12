@@ -27,13 +27,13 @@ export interface WalkRow {
   interior?: number
   // refStarts: where each step lies on the reference, NaN off R or unknown;
   // against: 1 where the step runs against R's orientation at its pass
-  // bp: each step's bp, on a row that states them
+  // bp: each step's bp, -1 where only its node states it
   steps: {
     ids: Int32Array
     rev: Uint8Array
     refStarts?: Float64Array
     against?: Uint8Array
-    bp?: Float64Array
+    bp?: Int32Array
   }
   chunkStart: number
   // the piece's span on R, as its line states it
@@ -167,8 +167,8 @@ export interface WalkRun {
   // it runs against R's orientation at its pass
   refStarts: Float64Array
   against: Uint8Array
-  // each step's bp, NaN where its node gives it
-  bp?: Float64Array
+  // each step's bp, -1 where only its node states it
+  bp?: Int32Array
   // the pieces the cut did not load, each with its steps' range
   unloaded?: { from: number; to: number; piece: Abridged }[]
 }
@@ -210,7 +210,7 @@ function decodeRun(pieces: WalkRow[]): WalkRun {
   const pieceStarts: number[] = []
   const pieceChunks: number[] = []
   const bp = pieces.some(p => p.steps.bp)
-    ? new Float64Array(n).fill(Number.NaN)
+    ? new Int32Array(n).fill(-1)
     : undefined
   const unloaded: NonNullable<WalkRun['unloaded']> = []
   let at = 0
@@ -387,13 +387,10 @@ export function walkCut(
     let out = prefixes.get(run)
     if (!out) {
       out = new Float64Array(run.ids.length + 1)
+      const stated = run.bp
       for (let i = 0; i < run.ids.length; i++) {
-        const stated = run.bp?.[i]
-        out[i + 1] =
-          out[i]! +
-          (stated === undefined || Number.isNaN(stated)
-            ? length(run.ids[i]!)
-            : stated)
+        const bp = stated === undefined ? -1 : stated[i]!
+        out[i + 1] = out[i]! + (bp < 0 ? length(run.ids[i]!) : bp)
       }
       prefixes.set(run, out)
     }
@@ -481,7 +478,7 @@ export function walkCut(
     const rev = new Uint8Array(n)
     const refStarts = new Float64Array(n).fill(Number.NaN)
     const against = new Uint8Array(n)
-    const stepBp = new Float64Array(n)
+    const stepBp = new Int32Array(n)
     const shifted = new Int32Array(run.ids.length + 1)
     let s = 0
     let out = 0

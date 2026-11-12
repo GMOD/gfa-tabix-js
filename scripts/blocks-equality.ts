@@ -212,7 +212,9 @@ function summary(cut: Cut, window: Window) {
   const fragments = new Map<string, Fragment[]>()
   for (const f of walks) {
     const key = `${f.name} line ${f.fragStart}`
-    fragments.set(key, [...(fragments.get(key) ?? []), fragmentOf(cut, f)])
+    const held = fragments.get(key) ?? []
+    fragments.set(key, held)
+    held.push(fragmentOf(cut, f))
   }
   const departures: Rows = new Map()
   for (const d of cut.departures) {
@@ -230,7 +232,9 @@ function summary(cut: Cut, window: Window) {
   }
   const gaps = new Map<string, WalkGap[]>()
   for (const g of cut.gaps) {
-    gaps.set(g.name, [...(gaps.get(g.name) ?? []), g])
+    const held = gaps.get(g.name) ?? []
+    gaps.set(g.name, held)
+    held.push(g)
   }
   const haplotypes = walkDepartures(
     {
