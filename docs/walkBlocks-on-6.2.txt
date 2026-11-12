@@ -1,5 +1,7 @@
 src/walkBlocks.test.ts run against the src of @jbrowse/graph-walks 6.2 (commit f7a17bf), with this
-branch's src/testing.ts and test_data: every test fails. Each test and what 6.2 gave:
+branch's src/testing.ts and test_data, while the fixtures were walk format 7 with blocks units
+(commit dc217b4): every test fails. Since then the fixtures are walk format 8, which 6.2 refuses
+at open, so every test fails there on that alone. Each test and what 6.2 gave:
 
 - a hairpin that starts and ends on one node at its tile’s start is kept where it steps, both passes and the bp off R between them, cut 90-100
     AssertionError: expected [] to deeply equal [ [ 30, 57, '>10@90 off:7 <10@90' ] ]

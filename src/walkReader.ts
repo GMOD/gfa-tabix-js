@@ -703,6 +703,8 @@ export class WalkReader {
           ))
       )
     }
+    const loaded = (item: Met) =>
+      detailsRead.has(item.piece.abridged.detail.name)
     const detailOf = (item: Met) => {
       const { name } = item.piece.abridged.detail
       const unit = detailUnits.get(name)
@@ -739,8 +741,6 @@ export class WalkReader {
           wantDetail(item)
         }
       }
-      const loaded = (item: Met) =>
-        detailsRead.has(item.piece.abridged.detail.name)
       const blocked = batch.filter(item => !loaded(item))
       const tilesMet = new Map<WalkUnit, number>()
       for (const { unit, from } of blocked) {
