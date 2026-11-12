@@ -8,6 +8,7 @@ import {
   chunkRef,
   decodeChunk,
   parseBlocks,
+  pieceEnds,
   pieceLinks,
   referenceNodes,
   unloadedRow,
@@ -257,7 +258,7 @@ function departureRecords(
 }
 
 /**
- * A `gfa-to-tabix --walks` file of walk format 7, `<prefix>.<sample>.walks.gz`
+ * A `gfa-to-tabix --walks` file of walk format 8, `<prefix>.<sample>.walks.gz`
  * and its directory `<prefix>.<sample>.walks.gz.idx`, read a window at a
  * time. At open the directory, the header and the sequence's unit table; for
  * a window, the tiles and departure blocks overlapping the window and its
@@ -630,9 +631,11 @@ export class WalkReader {
       }
       place(tileCut, piece.chunkStart + tile)
     }
+    const onDrawn = (span: { start: number; end: number }) =>
+      span.start < over.end && span.end > over.start
     // each window piece's blocks to build whole: those from the first block
     // over the drawn stretch to the last, of the pieces that join it
-    const coresOf = (pieces: Read[]) => {
+    const coresOf = (pieces: Read[], others: Met[]) => {
       const lines = new Map<
         string,
         { piece: number; on: boolean; read?: Read }[]
@@ -644,12 +647,18 @@ export class WalkReader {
         lines.set(key, line)
         line.push({ piece, on: read.on.first >= 0, read })
       }
+      for (const { piece } of others) {
+        lines.get(`${piece.name}\t${piece.fragStart}`)?.push({
+          piece: piece.piece,
+          on: onDrawn(piece.span),
+        })
+      }
       for (const row of rows) {
         lines.get(`${row.name}\t${row.fragStart}`)?.push({
           piece: row.piece,
           on:
             row.span === undefined ||
-            (row.span[0] < over.end && row.span[1] > over.start),
+            onDrawn({ start: row.span[0], end: row.span[1] }),
         })
       }
       const cores = new Map<Read, [number, number]>()
@@ -681,33 +690,60 @@ export class WalkReader {
       }
       return cores
     }
-    const attachNeeds = ({ piece, blocks }: Read) =>
-      (blocks.after > 0 &&
-        attachLeaves.has(
-          edgeKey(
-            piece.name,
-            piece.leave.pos,
-            piece.leave.reversed,
-            piece.hapOffset + piece.abridged.bp,
-          ),
-        )) ||
-      (blocks.before > 0 &&
-        attachRejoins.has(
-          edgeKey(
-            piece.name,
-            piece.rejoin.pos,
-            piece.rejoin.reversed,
-            piece.hapOffset,
-          ),
-        ))
-    // every abridged row met is read: from its detail record where the cut
-    // expands its walk and keeps or attaches the piece's steps, and else from
-    // its blocks row
+    const attachNeeds = ({ piece, blocks }: Read) => {
+      const { leave, rejoin } = pieceEnds(piece, blocks)
+      return (
+        (blocks.after > 0 &&
+          attachLeaves.has(
+            edgeKey(piece.name, leave.pos, leave.reversed, leave.hap),
+          )) ||
+        (blocks.before > 0 &&
+          attachRejoins.has(
+            edgeKey(piece.name, rejoin.pos, rejoin.reversed, rejoin.hap),
+          ))
+      )
+    }
+    const detailOf = (item: Met) => {
+      const { name } = item.piece.abridged.detail
+      const unit = detailUnits.get(name)
+      if (!unit) {
+        throw new WalkFormatError(
+          `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${item.piece.name} names`,
+        )
+      }
+      const ref = refs.get(item.unit) ?? chunkRef(item.tileRows)
+      refs.set(item.unit, ref)
+      return { unit, ref, piece: item.piece, into: item.into }
+    }
+    // every abridged row met is read. A walk the cut expands is read from
+    // its detail records: those of its pieces over the drawn stretch and of
+    // the tiles fetched for own steps, by its abridged rows alone, and those
+    // of its other pieces a record attaches steps of. Every other piece is
+    // built from its blocks row
     const resolve = async (attaching: boolean) => {
       const batch = met
       met = []
+      const details: ReturnType<typeof detailOf>[] = []
+      const wantDetail = (item: Met) => {
+        const { name } = item.piece.abridged.detail
+        if (!detailsRead.has(name)) {
+          detailsRead.add(name)
+          details.push(detailOf(item))
+        }
+      }
+      for (const item of batch) {
+        if (
+          expand?.(item.piece.name) === true &&
+          (attaching || onDrawn(item.piece.span))
+        ) {
+          wantDetail(item)
+        }
+      }
+      const loaded = (item: Met) =>
+        detailsRead.has(item.piece.abridged.detail.name)
+      const blocked = batch.filter(item => !loaded(item))
       const tilesMet = new Map<WalkUnit, number>()
-      for (const { unit, from } of batch) {
+      for (const { unit, from } of blocked) {
         tilesMet.set(unit, Math.min(tilesMet.get(unit) ?? from, from))
       }
       const wanted = [...tilesMet].map(([tileUnit, from]) => {
@@ -739,7 +775,7 @@ export class WalkReader {
         }
         listed.set(tileUnit, byPiece)
       }
-      const pieces = batch.map(item => {
+      const pieces = blocked.map(item => {
         const { name, fragStart, piece } = item.piece
         const cols = listed
           .get(item.unit)
@@ -754,32 +790,10 @@ export class WalkReader {
       })
       const cores = attaching
         ? new Map<Read, [number, number]>()
-        : coresOf(pieces)
-      const details: {
-        unit: WalkUnit
-        ref: ChunkRef
-        piece: AbridgedPiece
-        into: WalkRow[]
-      }[] = []
+        : coresOf(pieces, batch.filter(loaded))
       for (const read of pieces) {
-        const { name } = read.piece.abridged.detail
-        if (
-          expand?.(read.piece.name) === true &&
-          !detailsRead.has(name) &&
-          (cores.has(read) ||
-            (!attaching && read.on.offOver) ||
-            attachNeeds(read))
-        ) {
-          const unit = detailUnits.get(name)
-          if (!unit) {
-            throw new WalkFormatError(
-              `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${read.piece.name} names`,
-            )
-          }
-          const ref = refs.get(read.unit) ?? chunkRef(read.tileRows)
-          refs.set(read.unit, ref)
-          detailsRead.add(name)
-          details.push({ unit, ref, piece: read.piece, into: read.into })
+        if (expand?.(read.piece.name) === true && attachNeeds(read)) {
+          wantDetail(read)
         }
       }
       await readInOrder(
@@ -791,7 +805,7 @@ export class WalkReader {
       )
       for (const read of pieces) {
         const { piece } = read
-        if (!detailsRead.has(piece.abridged.detail.name)) {
+        if (!loaded(read)) {
           const built = unloadedRow(
             piece,
             read.blocks,

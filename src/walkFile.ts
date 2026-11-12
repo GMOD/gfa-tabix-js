@@ -3,14 +3,14 @@ import { unzip } from '@gmod/bgzf-filehandle'
 import type { GenericFilehandle } from 'generic-filehandle2'
 
 /**
- * Walk format 7 (gfa-to-tabix's ADR 0010): `<prefix>.<sample>.walks.gz`, a
+ * Walk format 8 (gfa-to-tabix's ADRs 0010 and 0012): `<prefix>.<sample>.walks.gz`, a
  * series of gzip units, and its directory `<prefix>.<sample>.walks.gz.idx`.
  * The directory's first line is the data's `#walks` line plus
  * `bytes:i:<data length>`, then `#header 0 <length>` and one
  * `seq <offset> <length>` line per reference sequence, giving the unit that
  * lists the sequence's units: `#entry seq start end kind name offset length`.
  */
-export const WALK_FORMAT = 7
+export const WALK_FORMAT = 8
 
 // What the reader needs of a file: generic-filehandle2's handles are ones,
 // and `stat` gives the data's length, from Content-Range on a RemoteFile's
@@ -21,7 +21,7 @@ export type WalkFilehandle = Pick<
   'read' | 'readFile' | 'stat' | 'source'
 >
 
-// A walk file the reader refuses: one in a format other than 7, or one whose
+// A walk file the reader refuses: one in a format other than 8, or one whose
 // units do not hold what its directory and tables say
 export class WalkFormatError extends Error {
   override name = 'WalkFormatError'
@@ -127,7 +127,7 @@ function formatError(format: number) {
   return new WalkFormatError(
     format > WALK_FORMAT
       ? `This walk file is format ${format}; this version of @jbrowse/graph-walks reads format ${WALK_FORMAT}, so update the viewer, or @jbrowse/graph-walks, to one that reads format ${format}`
-      : `This walk file is format ${format}; @jbrowse/graph-walks reads format ${WALK_FORMAT}, so rebuild it with gfa-to-tabix 4.0 or later`,
+      : `This walk file is format ${format}; @jbrowse/graph-walks reads format ${WALK_FORMAT}, so rebuild it with gfa-to-tabix 5.0 or later`,
   )
 }
 
@@ -212,18 +212,8 @@ export function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal) {
 
 const FORMAT_6_NAME = /\.walks\.bed\.gz(?=$|[?#])/
 
-// A detail unit `cs:d` whose tile has no `blocks` unit `cs`, as a file
-// written before the unit existed has them
-function detailWithoutBlocks(units: WalkUnit[]) {
-  const tiles = new Set(units.filter(u => u.kind === 'blocks').map(u => u.name))
-  return units.find(
-    u =>
-      u.kind === 'detail' && !tiles.has(u.name.slice(0, u.name.indexOf(':'))),
-  )
-}
-
 /**
- * A format 7 walk file read by byte ranges: the directory and the header
+ * A format 8 walk file read by byte ranges: the directory and the header
  * once, each sequence's table once, and units as asked, the ranges of units
  * that touch merged into one single-range read
  */
@@ -244,7 +234,7 @@ export class WalkFile {
       throw !(error instanceof WalkFormatError) &&
         FORMAT_6_NAME.test(this.data.source ?? '')
         ? new WalkFormatError(
-            `${this.data.source} names a walk file of format 6 or earlier, which has no .idx directory; @jbrowse/graph-walks reads format ${WALK_FORMAT}, so rebuild it with gfa-to-tabix 4.0 or later`,
+            `${this.data.source} names a walk file of format 6 or earlier, which has no .idx directory; @jbrowse/graph-walks reads format ${WALK_FORMAT}, so rebuild it with gfa-to-tabix 5.0 or later`,
             { cause: error },
           )
         : error
@@ -315,7 +305,7 @@ export class WalkFile {
         `${refName}'s table, at byte ${offset} of the walk file, starts ${JSON.stringify(head.slice(0, 80))}`,
       )
     }
-    const units = entries.map(line => {
+    return entries.map(line => {
       const [tag, seq = '', start, end, kind = '', name = '', at, size] =
         line.split('\t')
       const unit = {
@@ -338,13 +328,6 @@ export class WalkFile {
       }
       return unit
     })
-    const bare = detailWithoutBlocks(units)
-    if (bare) {
-      throw new WalkFormatError(
-        `${refName}'s unit table lists the detail unit ${bare.name} and no blocks unit for its tile, as a walk file written before gfa-to-tabix 4.1 does; @jbrowse/graph-walks reads an abridged piece's place on the reference from its blocks, so rebuild the walk file with gfa-to-tabix 4.1 or later`,
-      )
-    }
-    return units
   }
 
   /**

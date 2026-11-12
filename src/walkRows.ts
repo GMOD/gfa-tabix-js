@@ -44,11 +44,10 @@ export interface WalkRow {
   cuts?: number[]
 }
 
-// A piece the cut did not load: its steps in all, the bp from its first step
-// on R to its last, and the detail unit that holds it
+// A piece the cut did not load: its steps in all and the detail unit that
+// holds it
 export interface Abridged {
   steps: number
-  bp: number
   detail: { refName: string; start: number; name: string }
 }
 
@@ -82,7 +81,7 @@ export interface WalkWindow {
 }
 
 export interface WalkHeader {
-  // format:i:7; the reader refuses any other, and format 1 states none
+  // format:i:8; the reader refuses any other, and format 1 states none
   format?: number
   // the bp of reference a tile holds, tile:i:
   tile?: number
@@ -101,7 +100,7 @@ function integerTag(line: string, tag: string) {
 
 /**
  * What a walk file's header states: a `#walks` line with the format and the
- * tile size, `format:i:7\ttile:i:65536`, a `#reference\tGRCh38` line naming
+ * tile size, `format:i:8\ttile:i:65536`, a `#reference\tGRCh38` line naming
  * the reference sample, a `#haplotype\tHG002#1` line per other haplotype with
  * rows and a `#hole` line per stretch of a reference sequence no line of the
  * reference covers

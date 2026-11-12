@@ -102,14 +102,15 @@ const spanOf = (cols: string[]) =>
   (cols[9] ?? '').split(',').reduce((end, n) => end + Number(n), +cols[5]!)
 
 /**
- * A format 7 walk file in memory from `lines`, each space-separated: the
+ * A format 8 walk file in memory from `lines`, each space-separated: the
  * header's `#` lines; tile rows as `seq tile kind ...`, a tile's rows from
  * `kind` on under its nominal start; and departure lines as the file holds
  * them, `seq start end departure ...`, each filed in every block of the
  * tile size it overlaps; a detail unit's rows as `seq tile:detail start end
  * kind ...`; and a blocks unit's as `seq tile start end blocks ...`. A
  * tile's extent is its ref rows' span, and each of its lines states that
- * extent; every inline tile has ref rows. A detail or blocks unit's extent
+ * extent, but an abridged row its blocks row's span; every inline tile has
+ * ref rows. A detail or blocks unit's extent
  * is its rows' span, and its units follow the sequence's tiles and
  * departure blocks. `reversed` writes a sequence's tiles and departure
  * blocks last first, and `gap` puts that many bytes the file never reads
@@ -160,6 +161,12 @@ export function walkFileOf(
         }
       }
     }
+    // an abridged row states its piece's span, which its blocks row gives
+    const spans = new Map(
+      body
+        .filter(r => r[0] === seq && r[4] === 'blocks')
+        .map(r => [[r[5], r[6], r[7]].join(' '), [r[2]!, r[3]!]]),
+    )
     for (const [start, tileRows] of tiles) {
       const refs = tileRows.filter(r => r[2] === 'ref')
       const lo = refs.reduce((at, r) => Math.min(at, +r[5]!), Infinity)
@@ -170,7 +177,13 @@ export function walkFileOf(
         unit: () => {
           const text = [
             ['#unit', seq, lo, hi, 'tile', start],
-            ...tileRows.map(r => [seq, lo, hi, ...r.slice(2)]),
+            ...tileRows.map(r => [
+              seq,
+              ...(r[2] === 'abridged'
+                ? (spans.get([r[3], r[4], r[6]].join(' ')) ?? [lo, hi])
+                : [lo, hi]),
+              ...r.slice(2),
+            ]),
           ]
           const at = write(`${text.map(c => c.join('\t')).join('\n')}\n`)
           const unit = { refName: seq, start: lo, end: hi, kind: 'tile' }

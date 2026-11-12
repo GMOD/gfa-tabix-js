@@ -109,7 +109,7 @@ test('the header names the format, the reference, the haplotypes and the tile si
   try {
     const header = await reader('header.GRCh38').header()
     expect(header).toMatchObject({
-      format: 7,
+      format: 8,
       tile: 1000,
       references: ['GRCh38'],
       haplotypes: ['HG00097#1', 'HG002#1', 'HG002#2'],
@@ -135,7 +135,7 @@ function directoryOf(walks: string, data = new Uint8Array()) {
 
 test.each([
   { walks: '#walks', format: 1 },
-  ...[2, 3, 4, 5, 6].map(format => ({
+  ...[2, 3, 4, 5, 6, 7].map(format => ({
     walks: `#walks\tformat:i:${format}\tchunk:i:1000`,
     format,
   })),
@@ -147,18 +147,18 @@ test.each([
     await expect(
       walkFile.cut('GRCh38#0#chr1', { start: 0, end: 600 }),
     ).rejects.toThrow(
-      `This walk file is format ${format}; @jbrowse/graph-walks reads format 7, so rebuild it with gfa-to-tabix 4.0 or later`,
+      `This walk file is format ${format}; @jbrowse/graph-walks reads format 8, so rebuild it with gfa-to-tabix 5.0 or later`,
     )
   },
 )
 
-test.each([8, 9])(
+test.each([9, 10])(
   'a format %i walk file is refused, asking for a newer reader',
   async format => {
     await expect(
       directoryOf(`#walks\tformat:i:${format}\ttile:i:1000`).header(),
     ).rejects.toThrow(
-      `This walk file is format ${format}; this version of @jbrowse/graph-walks reads format 7, so update the viewer, or @jbrowse/graph-walks, to one that reads format ${format}`,
+      `This walk file is format ${format}; this version of @jbrowse/graph-walks reads format 8, so update the viewer, or @jbrowse/graph-walks, to one that reads format ${format}`,
     )
   },
 )
@@ -174,7 +174,7 @@ test('a format 6 file, which has no directory, is refused by its name', async ()
   await expect(
     WalkReader.open(path, url => new LocalFile(url)).header(),
   ).rejects.toThrow(
-    `${path} names a walk file of format 6 or earlier, which has no .idx directory; @jbrowse/graph-walks reads format 7, so rebuild it with gfa-to-tabix 4.0 or later`,
+    `${path} names a walk file of format 6 or earlier, which has no .idx directory; @jbrowse/graph-walks reads format 8, so rebuild it with gfa-to-tabix 5.0 or later`,
   )
 })
 
@@ -707,7 +707,7 @@ function inline(lines: string[], reversed = false, served: number[] = []) {
 // does on a reference that passes 2 and 6 twice, so chunk 0's route steps on
 // 6, which chunk 16's ref row places, and chunk 16's on 2.
 const tinyHeader = [
-  '#walks format:i:7 tile:i:16',
+  '#walks format:i:8 tile:i:16',
   '#reference R',
   '#haplotype H1#1',
   '#haplotype H2#1',
@@ -815,7 +815,7 @@ test("a route's own steps inside one piece are a departure computed from the ste
 //   H  >1>2>9>3>4
 test("a departure computed from steps takes its ends' pass counts from the ref rows", async () => {
   const { graph, kept, fragments, departures } = await inline([
-    '#walks format:i:7 tile:i:16 revisited:i:1',
+    '#walks format:i:8 tile:i:16 revisited:i:1',
     '#reference R',
     '#haplotype H#1',
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4 1,2,1,1',
@@ -864,7 +864,7 @@ test('a cut keeps to WALK_BUDGETS unless its caller lifts them', async () => {
 
 test('a ref row whose passes do not count its steps is refused', async () => {
   const error = await inline([
-    '#walks format:i:7 tile:i:16',
+    '#walks format:i:8 tile:i:16',
     '#reference R',
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4',
   ])
@@ -878,7 +878,7 @@ test('a ref row whose passes do not count its steps is refused', async () => {
 //   W R  0 chr >1>2>3>4>5>6>7>8>9>10>11>12
 //   W H  1 h   >5>6>7>11>6>7>8
 const copyJump = [
-  '#walks format:i:7 tile:i:16',
+  '#walks format:i:8 tile:i:16',
   '#reference R',
   '#haplotype H#1',
   'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4 .',
@@ -945,7 +945,7 @@ test('a cut reads the tiles its window overlaps, and nothing else', async () => 
 
 // Eight chunks of four 4 bp reference nodes
 const eightChunks = [
-  '#walks format:i:7 tile:i:16',
+  '#walks format:i:8 tile:i:16',
   '#reference R',
   ...Array.from(
     { length: 8 },
@@ -1002,11 +1002,11 @@ test('an unloaded walk cuts to the fragment its loaded one does, a placeholder f
     ['1@0', '2@6', '3@12', 'placeholder', '4@18', '5@24'],
   ])
   expect(
-    h[0]!.abridged!.map(a => [a.steps, a.bp, a.detail.refName, a.detail.name]),
+    h[0]!.abridged!.map(a => [a.steps, a.detail.refName, a.detail.name]),
   ).toEqual([
-    [2, 12, 'R#0#chr', '0:2'],
-    [3, 15, 'R#0#chr', '10:0'],
-    [1, 6, 'R#0#chr', '20:1'],
+    [2, 'R#0#chr', '0:2'],
+    [3, 'R#0#chr', '10:0'],
+    [1, 'R#0#chr', '20:1'],
   ])
   const whole = loaded.fragments.filter(f => f.name === 'H#1#h')
   expect(whole.map(f => [f.hapStart, f.hapEnd, f.abridged])).toEqual([
@@ -1514,7 +1514,7 @@ test("a cut's drawn stretch takes every pass over the window, not one per node",
 //   W H 1 h   >5>6>7>11>13>12>14>6>7>8   13, 14 own; pieces in tiles 16, 32, 16
 //   W G 1 g   >1>15>6>7>8                15 own; pieces in tiles 0, 16
 const farAttach = [
-  '#walks format:i:7 tile:i:16',
+  '#walks format:i:8 tile:i:16',
   '#reference R',
   '#haplotype G#1',
   '#haplotype H#1',
@@ -1627,23 +1627,26 @@ test('the byte budget counts the tiles of the context past the window', async ()
 })
 
 // Four 6 bp reference nodes in 10 bp tiles (ownzero.R.gfa); G jumps back
-// from 4 to 1 over node 9 of 0 bp, an own step of a record with no own bp,
-// filed in the leave's tile 10:
+// from 4 to 1 over node 9 of 0 bp, which the writer drops, so its record has
+// no own step:
 //   W R 0 chr 0 24 >1>2>3>4
 //   W G 1 g 0 30 >1>2>3>4>9>1
 test.each([
   { start: 0, end: 6 },
   { start: 0, end: 24 },
-])('a 0 bp own step is attached, cut $start-$end', async ({ start, end }) => {
-  const { departures } = await reader('ownzero.R').cut(
-    'R#0#chr',
-    { start, end },
-    { context: 0 },
-  )
-  expect(departures.map(departure)).toEqual([
-    ['G#1#g', 24, 0, 0, '24+', '0+', 'back', 'record', '>9'],
-  ])
-})
+])(
+  'a record over a 0 bp segment alone holds no step, cut $start-$end',
+  async ({ start, end }) => {
+    const { departures } = await reader('ownzero.R').cut(
+      'R#0#chr',
+      { start, end },
+      { context: 0 },
+    )
+    expect(departures.map(departure)).toEqual([
+      ['G#1#g', 24, 0, 0, '24+', '0+', 'back', 'record', undefined],
+    ])
+  },
+)
 
 // Two reference lines, 0-8 and 40-48, with a hole between, in 16 bp tiles
 // (hole.R.gfa); H jumps from 1 to 4 across it:
@@ -1824,19 +1827,18 @@ test("an abridged row's end takes the pass end@k names, else the one nearest its
 })
 
 // 4 bp reference nodes in 8 bp tiles, with 9 of 0 bp on the reference at 12
-// (zerostep.R.gfa). G jumps from 2 to 9 and from 9 to 6, two records that
-// start at the same base of its contig:
+// (zerostep.R.gfa), which the writer drops. G jumps from 2 to 9 and from 9
+// to 6, one departure from 2 to 6 without it:
 //   W R 0 chr >1>2>3>9>4>5>6>7
 //   W G 1 g   >1>2>9>6>7
-test('two records of one walk at the same base are both kept', async () => {
+test('a walk through a 0 bp segment of the reference departs once over it', async () => {
   const { departures } = await reader('zerostep.R').cut(
     'R#0#chr',
     { start: 0, end: 28 },
     { context: 0 },
   )
   expect(departures.map(departure)).toEqual([
-    ['G#1#g', 8, 0, 0, '8+', '12+', 'forward', 'record', undefined],
-    ['G#1#g', 8, 0, 0, '12+', '20+', 'forward', 'record', undefined],
+    ['G#1#g', 8, 0, 0, '8+', '20+', 'forward', 'record', undefined],
   ])
 })
 
@@ -1860,7 +1862,7 @@ test('steps either side of a hole in the reference depart nowhere', async () => 
 // hapOffset order whatever order the tile lists them in
 test("a tile's R joins its ref rows in hapOffset order", async () => {
   const { fragments } = await inline([
-    '#walks format:i:7 tile:i:64',
+    '#walks format:i:8 tile:i:64',
     '#reference R',
     '#haplotype J#1',
     '#hole R#0#chr 8 40',
@@ -1902,7 +1904,7 @@ const tableOf = (at: number, length: number, kind = 'tile', name = '0') =>
 // The filehandles of a walk file whose one sequence, R#0#chr, has one unit
 // over [0, 4), held in `unit`, and a table of `table`'s text listing it
 function oneUnit(unit: Uint8Array<ArrayBuffer>[], table = tableOf) {
-  const walks = '#walks\tformat:i:7\ttile:i:16'
+  const walks = '#walks\tformat:i:8\ttile:i:16'
   const header = bgzf(`${walks}\n#reference\tR\n`)
   const unitAt = lengthOf(header)
   const tableAt = unitAt + lengthOf(unit)
@@ -2043,7 +2045,7 @@ test("a reader that cannot learn the data's length skips the directory's bytes c
 test('a unit of a kind the reader does not know is skipped', async () => {
   const unitBytes = (blocks: Uint8Array[]) =>
     blocks.reduce((sum, block) => sum + block.length, 0)
-  const walks = '#walks\tformat:i:7\ttile:i:16'
+  const walks = '#walks\tformat:i:8\ttile:i:16'
   const header = bgzf(`${walks}\n#reference\tR\n`)
   const tile = bgzf(
     '#unit\tR#0#chr\t0\t4\ttile\t0\nR#0#chr\t0\t4\tref\tR#0#chr\t0\t0\t0\t1\t2\t4\t.\n',
@@ -2141,13 +2143,13 @@ test('tags a reader does not know are ignored on any row and header line', async
 
 test("a tag after an abridged row's detail column names no other detail unit", async () => {
   const { fragments } = await inline([
-    '#walks format:i:7 tile:i:20',
+    '#walks format:i:8 tile:i:20',
     '#reference R',
     '#haplotype H#1',
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
-    'R#0#chr 0 abridged H#1#h 0 0 0 3 18 6 8 0 xx:i:1',
+    'R#0#chr 0 abridged H#1#h 0 0 0 3 0 xx:i:1',
     'R#0#chr 0:0 10 20 nodes 5 8',
-    'R#0#chr 0:0 10 20 route 6 10 -4',
+    'R#0#chr 0:0 10 20 route 6 4 -2',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
     'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5 xx:i:1',
   ]).cut('R#0#chr', { start: 0, end: 20 }, { context: 0 })
@@ -2156,27 +2158,13 @@ test("a tag after an abridged row's detail column names no other detail unit", a
   ).toEqual(['0:0'])
 })
 
-test('a sequence with no detail unit reads beside one with a detail unit and no blocks unit', async () => {
-  const { fragments } = await inline([
-    '#walks format:i:7 tile:i:20',
-    '#reference R',
-    '#haplotype H#1',
-    'R#0#plain 0 ref R#0#plain 0 0 0 4 2,2,2,2 5,5,5,5 .',
-    'R#0#plain 0 walk H#1#p 0 0 0 4 2 .',
-    'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
-    'R#0#chr 0 abridged H#1#h 0 0 0 3 18 6 8 0',
-    'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 .',
-  ]).cut('R#0#plain', { start: 0, end: 20 })
-  expect(fragments.map(f => f.name)).toEqual(['R#0#plain', 'H#1#p'])
-})
-
 // R's chr0 is two nodes of 0 bp: its tile states [0, 0), so a window from 0
 // on reads it never, and the sequence's length is 0
 test('a unit of a sequence of 0 bp, stating [0, 0), is read by no window', async () => {
   const served: number[] = []
   const walks = inline(
     [
-      '#walks format:i:7 tile:i:16',
+      '#walks format:i:8 tile:i:16',
       '#reference R',
       '#haplotype H#1',
       'R#0#chr0 0 ref R#0#chr0 0 0 0 2 2,2 0,0 .',

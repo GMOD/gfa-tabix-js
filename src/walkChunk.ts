@@ -1,8 +1,6 @@
-import { WalkFormatError } from './walkFile.ts'
-
 import type { Abridged, WalkRow } from './walkRows.ts'
 
-// A tile of gfa-to-tabix's walk format 7, whose rows from `kind` on are
+// A tile of gfa-to-tabix's walk format 8, whose rows from `kind` on are
 // format 6's (that repo's docs/walks-format.md). A tile lists its `ref` rows,
 // which joined in hapOffset order are the tile's reference path R; a `nodes` row with the
 // lengths of the nodes its routes visit; `route` rows, each a way off R; a
@@ -522,62 +520,37 @@ function sliceBases(
   }
 }
 
-// An `abridged` line: where its first step on R begins on its contig, that
-// step as a record rejoins at it and its last as one leaves from it
-function abridgedPiece(cols: string[], path: RefPath, tileStart: number) {
+// An `abridged` line, `path fragStart hapOffset piece nsteps detail`: a
+// piece the writer moved to a detail record, with its span on R
+function abridgedPiece(cols: string[], tileStart: number) {
   const count = (k: number) => {
     const n = Number(cols[k])
-    if (cols[7]?.includes(',') === true) {
-      throw new WalkRowError(
-        `an abridged row of several pieces, ${EARLIER_FORMAT_6}: ${cols.join('\t')}`,
-      )
-    } else if (cols[k] === '' || !Number.isInteger(n) || n < 0) {
-      throw new WalkRowError(
-        `not an abridged row of one piece: ${cols.join('\t')}`,
-      )
+    if (
+      cols[k] === undefined ||
+      cols[k] === '' ||
+      !Number.isInteger(n) ||
+      n < 0
+    ) {
+      throw new WalkRowError(`not an abridged row: ${cols.join('\t')}`)
     }
     return n
   }
-  const [h0, k0] = parseCopy(cols[10]!)
-  const [h1, k1] = parseCopy(cols[11]!)
-  const i0 = k0 === NONE ? path.first(h0) : path.copy(h0, k0)
-  const i1 =
-    i0 === undefined
-      ? undefined
-      : k1 === NONE
-        ? path.nearest(h1, i0)
-        : path.copy(h1, k1)
-  if (i0 === undefined || i1 === undefined) {
-    throw new WalkRowError(
-      `an abridged row starts or ends off its tile's reference path: ${cols.join('\t')}`,
-    )
-  }
-  const rejoinReversed = path.handles[i0] !== h0
-  const leaveReversed = path.handles[i1] !== h1
   const abridged: Abridged = {
     steps: count(8),
-    bp: count(9),
     detail: {
       refName: cols[0]!,
       start: tileStart,
-      name: `${tileStart}:${cols[12]!}`,
+      name: `${tileStart}:${count(9)}`,
     },
   }
   return {
     chunkStart: tileStart,
     name: cols[4]!,
-    fragStart: +cols[5]!,
+    fragStart: count(5),
     hapOffset: count(6),
     piece: count(7),
+    span: { start: count(1), end: count(2) },
     abridged,
-    rejoin: {
-      pos: rejoinReversed ? path.end(i0) : path.starts[i0]!,
-      reversed: rejoinReversed,
-    },
-    leave: {
-      pos: leaveReversed ? path.starts[i1]! : path.end(i1),
-      reversed: leaveReversed,
-    },
   }
 }
 
@@ -589,27 +562,18 @@ export const SKIPPED = -(2 ** 31)
 
 const DIGIT_0 = 48
 
-const TAG = /^[A-Za-z][A-Za-z0-9]:[A-Za-z]:/
-
 // A `blocks` row's list, the piece in path order: each block as where it
 // begins on R, its bp and whether it runs against R, the bp off R before
-// each, and the bp off R before the first and after the last
+// each, the bp off R before the first and after the last, and the bp from
+// the first block to the last
 export function parseBlocks(cols: string[]) {
   const list = cols[7] ?? ''
-  if (
-    cols.length < 8 ||
-    list.includes(':') ||
-    cols.slice(8).some(col => !TAG.test(col))
-  ) {
-    throw new WalkFormatError(
-      `a blocks row of an earlier shape, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${cols.join('\t').slice(0, 120)}`,
-    )
-  }
   const begins: number[] = []
   const lengths: number[] = []
   const against: boolean[] = []
   const off: number[] = []
   let at = 0
+  let bp = 0
   let before = 0
   let run = 0
   let value = 0
@@ -634,6 +598,7 @@ export function parseBlocks(cols: string[]) {
       digits = 0
     } else if (ch === 44 && inBlock && digits > 0) {
       before = begins.length === 0 ? run : before
+      bp += value + (begins.length === 0 ? 0 : run)
       off.push(begins.length === 0 ? 0 : run)
       begins.push(begin)
       lengths.push(value)
@@ -649,17 +614,15 @@ export function parseBlocks(cols: string[]) {
       value = 0
       digits = 0
     } else {
-      throw new WalkFormatError(
-        `not a blocks row's list, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${list.slice(0, 80)}`,
-      )
+      throw new WalkRowError(`not a blocks row's list: ${list.slice(0, 80)}`)
     }
   }
   if (begins.length === 0) {
-    throw new WalkFormatError(
-      `a blocks row with no block, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${cols.join('\t').slice(0, 120)}`,
+    throw new WalkRowError(
+      `a blocks row with no block: ${cols.join('\t').slice(0, 120)}`,
     )
   }
-  return { before, after: run, begins, lengths, against, off, end: at }
+  return { before, after: run, begins, lengths, against, off, end: at, bp }
 }
 
 export type PieceBlocks = ReturnType<typeof parseBlocks>
@@ -688,6 +651,21 @@ const jumpOver = (
     Math.max(leave, rejoin) + 1 > span.start
   )
 }
+
+// A piece's first step on R as a record rejoins at it and its last as one
+// leaves from it: the breakpoint, the strand and the place on the contig
+export const pieceEnds = (piece: AbridgedPiece, blocks: PieceBlocks) => ({
+  rejoin: {
+    pos: blocks.begins[0]!,
+    reversed: blocks.against[0]!,
+    hap: piece.hapOffset + blocks.before,
+  },
+  leave: {
+    pos: blocks.end,
+    reversed: blocks.against.at(-1)!,
+    hap: piece.hapOffset + blocks.before + blocks.bp,
+  },
+})
 
 // The first and last blocks over `span`, and whether a run off R lies in a
 // departure over it
@@ -720,11 +698,12 @@ export function unloadedRow(
   core: [number, number] | undefined,
   placeholder: (start: number, end: number) => number,
 ) {
-  const { name, abridged, rejoin, leave } = piece
+  const { name, abridged } = piece
   const count = blocks.begins.length
   const from = new Int32Array(count)
   const to = new Int32Array(count)
-  let total = 0
+  let low = Infinity
+  let high = -Infinity
   for (let k = 0; k < count; k++) {
     const length = blocks.lengths[k]!
     const lo = blockLow(blocks, k)
@@ -742,18 +721,12 @@ export function unloadedRow(
     }
     from[k] = i
     to[k] = j
-    total += length + blocks.off[k]!
+    low = Math.min(low, lo)
+    high = Math.max(high, lo + length)
   }
-  if (
-    count === 0 ||
-    total !== abridged.bp ||
-    blocks.begins[0] !== rejoin.pos ||
-    blocks.against[0] !== rejoin.reversed ||
-    blocks.end !== leave.pos ||
-    blocks.against[count - 1] !== leave.reversed
-  ) {
+  if (low !== piece.span.start || high !== piece.span.end) {
     throw new WalkRowError(
-      `${name}'s blocks row, piece ${piece.piece}, is not the ${abridged.bp} bp its abridged row states from ${rejoin.pos}${rejoin.reversed ? '-' : '+'} to ${leave.pos}${leave.reversed ? '-' : '+'}`,
+      `${name}'s blocks row, piece ${piece.piece}, spans [${low}, ${high}) and its abridged row [${piece.span.start}, ${piece.span.end})`,
     )
   }
   const inCore = (k: number) =>
@@ -768,7 +741,7 @@ export function unloadedRow(
   const cuts: number[] = []
   const nodes = new Map<number, PlacedNode>()
   const links: number[] = []
-  const hapOffset = piece.hapOffset - blocks.before
+  const { hapOffset } = piece
   let hap = hapOffset
   let skipped = 0
   const push = (
@@ -1033,7 +1006,7 @@ export function decodeChunk(
     if (cols[3] === 'abridged') {
       const name = cols[4]!
       if (keep === undefined || keep(name)) {
-        out.abridged.push(abridgedPiece(cols, path, tileStart))
+        out.abridged.push(abridgedPiece(cols, tileStart))
       }
       continue
     }

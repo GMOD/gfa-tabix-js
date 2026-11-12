@@ -298,8 +298,8 @@ test('each piece of a detail unit holding several is read from its own blocks ro
   expect(
     unloaded.fragments
       .filter(f => f.name === 'MULTI#1#c')
-      .map(f => f.abridged!.map(a => [a.detail.name, a.steps, a.bp])),
-  ).toEqual([[['60:1', 2, 20]], [['60:1', 3, 23]], [['60:1', 2, 20]]])
+      .map(f => f.abridged!.map(a => [a.detail.name, a.steps])),
+  ).toEqual([[['60:1', 2]], [['60:1', 3]], [['60:1', 2]]])
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
 
@@ -431,10 +431,9 @@ test.each([
       ),
     ).toEqual(held)
     expect(bpOf(cut, record!.steps!.ids)).toBe(30)
-    expect(fetched.filter(u => u.startsWith('blocks')).sort()).toEqual([
-      'blocks 0',
-      'blocks 20',
-    ])
+    expect(fetched.filter(u => u.startsWith('blocks')).sort()).toEqual(
+      expand ? [] : ['blocks 0', 'blocks 20'],
+    )
     expect(fetched.filter(u => u.startsWith('detail'))).toHaveLength(
       expand ? 2 : 0,
     )
@@ -669,6 +668,18 @@ describe('the units a cut reads', () => {
     ])
   })
 
+  test('a cut that expands the walks it keeps over the window reads their detail units by their abridged rows, and no blocks unit', async () => {
+    const { reader: walks, fetched, watch } = counted('cover.R')
+    await watch(R)
+    const { fragments } = await walks.cut(
+      R,
+      { start: 6000, end: 6500 },
+      { keep: name => name !== 'OFF#1#c', expand: all },
+    )
+    expect(fetched.sort()).toEqual(['detail 0:0', 'detail 0:1', 'tile 0'])
+    expect(fragments.some(f => f.abridged)).toBe(false)
+  })
+
   test('a cut that expands some walks reads the blocks unit for the others', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
@@ -719,21 +730,17 @@ describe('the units a cut reads', () => {
   })
 })
 
-describe('a file without blocks units', () => {
+describe('a file whose blocks unit is not what its tile needs', () => {
   const header = [
-    '#walks format:i:7 tile:i:20',
+    '#walks format:i:8 tile:i:20',
     '#reference R',
     '#haplotype H#1',
   ]
-  const plain = [
-    'R#0#plain 0 ref R#0#plain 0 0 0 4 2,2,2,2 5,5,5,5 .',
-    'R#0#plain 0 walk H#1#p 0 0 0 4 2 .',
-  ]
   const abridged = [
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
-    'R#0#chr 0 abridged H#1#h 0 0 0 3 18 6 8 0',
+    'R#0#chr 0 abridged H#1#h 0 0 0 3 0',
     'R#0#chr 0:0 10 20 nodes 5 8',
-    'R#0#chr 0:0 10 20 route 6 10 -4',
+    'R#0#chr 0:0 10 20 route 6 4 -2',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
   ]
   const blocks = 'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5'
@@ -741,36 +748,32 @@ describe('a file without blocks units', () => {
     WalkReader.fromFilehandles(walkFileOf([...header, ...lines]))
   const window = { start: 0, end: 20 }
 
-  test('a sequence with a detail unit and no blocks unit for its tile is refused, saying which gfa-to-tabix to rebuild with', async () => {
-    const walks = open([...plain, ...abridged])
+  test('a sequence with its blocks unit is read', async () => {
+    const cut = await open([...abridged, blocks]).cut('R#0#chr', window, {
+      context: 0,
+    })
+    expect(rows(cut, 'H#1#h')).toEqual([[0, 18, '>3@10 off:8 >4@15']])
+  })
+
+  test('a tile with an abridged row and no blocks unit is refused by a cut that leaves the piece unloaded, and read by one that expands it', async () => {
+    const walks = open(abridged)
     const error: unknown = await walks
       .cut('R#0#chr', window)
       .catch((e: unknown) => e)
     expect(error).toBeInstanceOf(WalkFormatError)
     expect(error).toHaveProperty(
       'message',
-      "R#0#chr's unit table lists the detail unit 0:0 and no blocks unit for its tile, as a walk file written before gfa-to-tabix 4.1 does; @jbrowse/graph-walks reads an abridged piece's place on the reference from its blocks, so rebuild the walk file with gfa-to-tabix 4.1 or later",
+      "R#0#chr's unit table lists no blocks unit 0, which the abridged rows of that tile need",
     )
-    await expect(
-      walks.cut('R#0#chr', window, { expand: all }),
-    ).rejects.toBeInstanceOf(WalkFormatError)
-  })
-
-  test('the same sequence with its blocks unit is read', async () => {
-    const cut = await open([...plain, ...abridged, blocks]).cut(
-      'R#0#chr',
-      window,
-      { context: 0 },
-    )
+    const cut = await walks.cut('R#0#chr', window, { context: 0, expand: all })
     expect(rows(cut, 'H#1#h')).toEqual([[0, 18, '>3@10 off:8 >4@15']])
   })
 
   test.each([
-    ['holding more bp than its abridged row states', '10+5,9,0+5'],
-    ['starting on another step', '5+5,8,5+5'],
-    ['ending on another strand', '10+5,8,5-5'],
+    ['spanning other than its abridged row states', '5+5,8,5+5'],
     ['covering part of a node', '10+5,10,0+3'],
     ['that is no list', '10+5;0+5'],
+    ['with a run off R after a colon', '10+5,0+5:8'],
     ['with two runs off R side by side', '10+5,3,5,0+5'],
     ['with no block', '18'],
   ])('a blocks row %s is refused', async (_, list) => {
@@ -781,29 +784,6 @@ describe('a file without blocks units', () => {
       ),
     ).rejects.toThrow(/blocks row/)
   })
-
-  test.each([
-    ['with its bp off R after a colon', '0 0 10+5,0+5:8'],
-    ['with ownBefore and ownAfter columns', '0 0 0 0 10+5,0+5:8'],
-    ['with ownBefore and ownAfter columns and no bp off R', '0 0 0 0 10+5,0+5'],
-  ])(
-    'a blocks row of an earlier shape, %s, is refused, saying to rebuild the file',
-    async (_, columns) => {
-      const error: unknown = await open([
-        ...abridged,
-        blocks.replace('0 0 10+5,8,0+5', columns),
-      ])
-        .cut('R#0#chr', window)
-        .catch((e: unknown) => e)
-      expect(error).toBeInstanceOf(WalkFormatError)
-      expect(error).toHaveProperty(
-        'message',
-        expect.stringContaining(
-          'rebuild the walk file with gfa-to-tabix 4.1 or later',
-        ),
-      )
-    },
-  )
 
   test('a blocks unit without the row of a piece its tile abridges is refused', async () => {
     await expect(

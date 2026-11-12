@@ -227,7 +227,7 @@ test("a walk file's header states its format, tile, references, haplotypes and h
   expect(walkHeader(['#walks']).tile).toBeUndefined()
   expect(
     walkHeader([
-      '#walks\tformat:i:7\ttile:i:1000\tstay:i:311',
+      '#walks\tformat:i:8\ttile:i:1000\tstay:i:311',
       '#reference\tGRCh38',
       '#reference\tCHM13',
       '#haplotype\tHG00097#1',
@@ -235,7 +235,7 @@ test("a walk file's header states its format, tile, references, haplotypes and h
       '#hole\tGRCh38#0#chr1\t12\t20',
     ]),
   ).toEqual({
-    format: 7,
+    format: 8,
     tile: 1000,
     references: ['GRCh38', 'CHM13'],
     haplotypes: ['HG00097#1', 'HG002#1'],
@@ -935,7 +935,7 @@ describe('the stretches between and past a walk’s fragments', () => {
         3,
         1000,
         forward(7, -1, 8),
-        { abridged: { steps: 4, bp: 250, detail } },
+        { abridged: { steps: 4, detail } },
         g.nodes,
       ),
       walkRow('HG002#1#chr1', 6, 2000, forward(3), {}, g.nodes),

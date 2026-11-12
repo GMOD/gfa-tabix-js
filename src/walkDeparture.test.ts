@@ -67,7 +67,7 @@ test('a record row passing an end zero times is refused, as a ref row is', () =>
   expect(parseDepartureRow(row(1, 1)).leavePasses).toBe(1)
 })
 
-test('ref and abridged rows from a writer before pass counts are refused, saying to rebuild the file', () => {
+test('a ref row from a writer before pass counts is refused, saying to rebuild the file, and an abridged row that is none', () => {
   const ref = (more: string) =>
     `R#0#c\t0\t1\tref\tR#0#c\t0\t0\t0\t2\t2,2\t6,6${more}`.split('\t')
   expect(referenceNodes([ref('\t.')]).map(n => n.passes)).toEqual([1, 1])
@@ -76,13 +76,13 @@ test('ref and abridged rows from a writer before pass counts are refused, saying
       /ref row with no passes.*rebuild the walk file/,
     )
   }
-  const abridged = (pieces: string) =>
-    `R#0#c\t0\t1\tabridged\tX#1#c\t0\t0\t${pieces}\t5\t42\t2\t4\t1`.split('\t')
-  expect(() =>
-    decodeChunk([ref('\t.'), abridged('0,2')], 0, undefined),
-  ).toThrow(/abridged row of several pieces.*rebuild the walk file/)
+  const abridged = (nsteps: string) =>
+    `R#0#c\t0\t6\tabridged\tX#1#c\t0\t0\t0\t${nsteps}\t1`.split('\t')
+  expect(() => decodeChunk([ref('\t.'), abridged('x')], 0, undefined)).toThrow(
+    /not an abridged row/,
+  )
   expect(
-    decodeChunk([ref('\t.'), abridged('0')], 0, undefined).abridged,
+    decodeChunk([ref('\t.'), abridged('5')], 0, undefined).abridged,
   ).toHaveLength(1)
 })
 
