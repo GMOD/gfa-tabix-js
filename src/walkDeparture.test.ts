@@ -65,7 +65,7 @@ test('a record row passing an end zero times is refused, as a ref row is', () =>
   expect(parseDepartureRow(row(1, 1)).leavePasses).toBe(1)
 })
 
-test('a ref row with no pass counts is refused, and an abridged row that is none', () => {
+test('a ref row with no pass counts is refused, and an abridged row that is none, that lacks its hapBp or states one below 1', () => {
   const ref = (more: string) =>
     `R#0#c\t0\t1\tref\tR#0#c\t0\t0\t0\t2\t2,2\t6,6${more}`.split('\t')
   expect(referenceNodes([ref('\t.')]).map(n => n.passes)).toEqual([1, 1])
@@ -74,14 +74,23 @@ test('a ref row with no pass counts is refused, and an abridged row that is none
       "a ref row's passes do not count its 2 steps",
     )
   }
-  const abridged = (nsteps: string) =>
-    `R#0#c\t0\t6\tabridged\tX#1#c\t0\t0\t0\t${nsteps}\t1`.split('\t')
-  expect(() => decodeChunk([ref('\t.'), abridged('x')], 0, undefined)).toThrow(
-    /not an abridged row/,
-  )
+  const abridged = (nsteps: string, after = '\t12\t1') =>
+    `R#0#c\t0\t6\tabridged\tX#1#c\t0\t0\t0\t${nsteps}${after}`.split('\t')
+  for (const row of [
+    abridged('x'),
+    abridged('5', '\t1'),
+    abridged('5', '\t0\t1'),
+    abridged('5', '\t12.5\t1'),
+  ]) {
+    expect(() => decodeChunk([ref('\t.'), row], 0, undefined)).toThrow(
+      /not an abridged row/,
+    )
+  }
   expect(
-    decodeChunk([ref('\t.'), abridged('5')], 0, undefined).abridged,
-  ).toHaveLength(1)
+    decodeChunk([ref('\t.'), abridged('5')], 0, undefined).abridged.map(
+      piece => piece.hapBp,
+    ),
+  ).toEqual([12])
 })
 
 test('a departure is a placement choice where either end lies on a node the reference passes more than once', () => {

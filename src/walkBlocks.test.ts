@@ -688,8 +688,8 @@ test('a cut that expands a walk reads the piece a record attaches steps of, thou
       '#reference R',
       '#haplotype W#1',
       'R#0#c 0 ref R#0#c 0 0 0 6 2,2,2,2,2,2 10,10,10,10,10,10 .',
-      'R#0#c 0 abridged W#1#c 0 0 0 3 0',
-      'R#0#c 0 abridged W#1#c 100 100 0 2 1',
+      'R#0#c 0 abridged W#1#c 0 0 0 3 50 0',
+      'R#0#c 0 abridged W#1#c 100 100 0 2 20 1',
       'R#0#c 0:0 40 60 nodes 20 30',
       'R#0#c 0:0 40 60 route 12 28 .',
       'R#0#c 0:0 40 60 walk W#1#c 0 0 0 3 10 0',
@@ -865,7 +865,7 @@ describe('a file whose blocks unit is not what its tile needs', () => {
   ]
   const abridged = [
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
-    'R#0#chr 0 abridged H#1#h 0 0 0 3 0',
+    'R#0#chr 0 abridged H#1#h 0 0 0 3 18 0',
     'R#0#chr 0:0 10 20 nodes 5 8',
     'R#0#chr 0:0 10 20 route 6 4 -2',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',

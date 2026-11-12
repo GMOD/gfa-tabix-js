@@ -98,7 +98,7 @@ const FIXED_COLUMNS = new Map([
   ['nodes', 6],
   ['route', 7],
   ['walk', 11],
-  ['abridged', 10],
+  ['abridged', 11],
   ['blocks', 8],
   ['departure', 15],
 ])

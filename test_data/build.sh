@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Rebuilds the walk-file fixtures from their GFAs with gfa-to-tabix 5.0, in
-# walk format 8. Usage: test_data/build.sh <gfa-to-tabix binary>
+# walk format 8, and the fixtures of extension/ with that repo's corrupt.py.
+# Usage: test_data/build.sh <gfa-to-tabix binary> <gfa-to-tabix checkout>
 set -euo pipefail
 cd "$(dirname "$0")"
 B=${1:?the gfa-to-tabix binary}
+CORRUPT=${2:?the gfa-to-tabix checkout}/docs/departures/scripts/broken/corrupt.py
 build() {
   local name=$1 gfa=$2; shift 2
   "$B" "$gfa" --walks -o "$name.tmp" "$@" > /dev/null 2>&1
@@ -49,3 +51,16 @@ build between between.R.gfa --refs R --tile 60 --abridge-bytes 1
 build hairpin hairpin.R.gfa --refs R --tile 36 --abridge-bytes 1
 build revref revref.gfa --refs GRCh38 --abridge-bytes 1
 build cover cover.R.gfa --refs R --abridge-bytes 1
+for twin in twinmidlineA twinmidlineB twinotherseqA twinotherseqB twinown690 twinown700 pickwrong twopieces twopiecesonetile; do
+  build "$twin" "$twin.R.gfa" --refs R --tile 12 --stay 0 --abridge-bytes 1
+done
+build adv adv.R.gfa --refs R --tile 60 --abridge-bytes 1
+build edge edge.R.gfa --refs R --tile 60 --abridge-bytes 1
+build extension/plain extension/follow.R.gfa --refs R --tile 100 --sequences --abridge-bytes 1
+addition() {
+  local name=$1; shift
+  python3 -I "$CORRUPT" extension/plain.R.walks.gz "extension/$name.R.walks.gz" "$@" > /dev/null
+}
+addition tags --tag zz:i:1
+addition unit-kind $'#unit\tR#0#c\t0\t36\ttable\t.\n' $'#unit\tR#0#c\t0\t36\tfuture\tx\nR#0#c\t0\t36\tfuture\tanything\n#unit\tR#0#c\t0\t36\ttable\t.\n'
+addition header-line $'#reference\tR\n' $'#reference\tR\n#future\tx\n'

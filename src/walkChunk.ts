@@ -522,16 +522,17 @@ function sliceBases(
   }
 }
 
-// An `abridged` line, `path fragStart hapOffset piece nsteps detail`: a
-// piece the writer moved to a detail record, with its span on R
+// An `abridged` line, `path fragStart hapOffset piece nsteps hapBp detail`: a
+// piece the writer moved to a detail record, with its span on R and its bp
+// on its contig
 function abridgedPiece(cols: string[], tileStart: number) {
-  const count = (k: number) => {
+  const count = (k: number, least = 0) => {
     const n = Number(cols[k])
     if (
       cols[k] === undefined ||
       cols[k] === '' ||
-      !Number.isInteger(n) ||
-      n < 0
+      !Number.isSafeInteger(n) ||
+      n < least
     ) {
       throw new WalkRowError(`not an abridged row: ${cols.join('\t')}`)
     }
@@ -542,7 +543,7 @@ function abridgedPiece(cols: string[], tileStart: number) {
     detail: {
       refName: cols[0]!,
       start: tileStart,
-      name: `${tileStart}:${count(9)}`,
+      name: `${tileStart}:${count(10)}`,
     },
   }
   return {
@@ -551,6 +552,7 @@ function abridgedPiece(cols: string[], tileStart: number) {
     fragStart: count(5),
     hapOffset: count(6),
     piece: count(7),
+    hapBp: count(9, 1),
     span: { start: count(1), end: count(2) },
     abridged,
   }
