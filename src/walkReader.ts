@@ -667,7 +667,7 @@ export class WalkReader {
                 last = j
               }
             }
-            for (let j = first; first >= 0 && j <= last; j++) {
+            for (let j = Math.max(first, 0); j <= last; j++) {
               const read = line[j]!.read
               if (read) {
                 cores.set(read, [
@@ -683,7 +683,7 @@ export class WalkReader {
       return cores
     }
     const attachNeeds = ({ piece, blocks }: Read) =>
-      (blocks.ownAfter > 0 &&
+      (blocks.after > 0 &&
         attachLeaves.has(
           edgeKey(
             piece.name,
@@ -692,7 +692,7 @@ export class WalkReader {
             piece.hapOffset + piece.abridged.bp,
           ),
         )) ||
-      (blocks.ownBefore > 0 &&
+      (blocks.before > 0 &&
         attachRejoins.has(
           edgeKey(
             piece.name,
@@ -769,7 +769,7 @@ export class WalkReader {
           expand?.(read.piece.name) === true &&
           !detailsRead.has(name) &&
           (cores.has(read) ||
-            (!attaching && read.on.ownOver) ||
+            (!attaching && read.on.offOver) ||
             attachNeeds(read))
         ) {
           const unit = detailUnits.get(name)

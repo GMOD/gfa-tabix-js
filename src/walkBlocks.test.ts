@@ -59,7 +59,7 @@ function steps(cut: Cut, f: WalkFragment) {
       own += node.end - node.start
     } else {
       if (own > 0) {
-        out.push(`own:${own}`)
+        out.push(`off:${own}`)
       }
       own = 0
       if (i < f.ids.length) {
@@ -106,7 +106,7 @@ const bpOf = (cut: Cut, ids: Int32Array) =>
     return sum + node.end - node.start
   }, 0)
 
-// Each link by the node ends it joins, a node off the reference as `own`
+// Each link by the node ends it joins, a node off the reference as `off`
 function links(cut: Cut) {
   const { nodes, links: table } = cut.graph.tables(
     cut.kept,
@@ -117,13 +117,13 @@ function links(cut: Cut) {
   const end = (index: number, right: boolean) =>
     nodes.ranks[index] === 0
       ? `${nodes.names[index]}${right ? ']' : '['}`
-      : 'own'
+      : 'off'
   const out = new Set<string>()
   for (let k = 0; k < table.from.length; k++) {
     const strands = table.strands[k]!
     const a = end(table.from[k]!, (strands & 1) === 0)
     const b = end(table.to[k]!, (strands & 2) !== 0)
-    if (a !== 'own' || b !== 'own') {
+    if (a !== 'off' || b !== 'off') {
       out.add(a < b ? `${a} ${b}` : `${b} ${a}`)
     }
   }
@@ -182,12 +182,12 @@ async function cuts(start: number, end: number, opts: WalkCutOptions = {}) {
 // are both on 7, the first node of the tile at 60, and its abridged row
 // spans 60-70
 test.each([
-  { start: 90, end: 100, row: [30, 57, '>10@90 own:7 <10@90'] },
-  { start: 80, end: 90, row: [20, 67, '>9@80 >10@90 own:7 <10@90 <9@80'] },
+  { start: 90, end: 100, row: [30, 57, '>10@90 off:7 <10@90'] },
+  { start: 80, end: 90, row: [20, 67, '>9@80 >10@90 off:7 <10@90 <9@80'] },
   {
     start: 60,
     end: 70,
-    row: [0, 87, '>7@60 >8@70 >9@80 >10@90 own:7 <10@90 <9@80 <8@70 <7@60'],
+    row: [0, 87, '>7@60 >8@70 >9@80 >10@90 off:7 <10@90 <9@80 <8@70 <7@60'],
   },
 ])(
   'a hairpin that starts and ends on one node at its tile’s start is kept where it steps, both passes and the own bp between them, cut $start-$end',
@@ -243,7 +243,7 @@ test('a stretch a piece jumps over holds its departure and no step of it', async
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
   const whole = await cuts(60, 120)
   expect(rows(whole.unloaded, 'JUMP#1#c')).toEqual([
-    [0, 35, '>7@60 >8@70 own:5 >12@110'],
+    [0, 35, '>7@60 >8@70 off:5 >12@110'],
   ])
 })
 
@@ -292,7 +292,7 @@ test('each piece of a detail unit holding several is read from its own blocks ro
   const { unloaded, loaded } = await cuts(60, 120)
   expect(rows(unloaded, 'MULTI#1#c')).toEqual([
     [0, 20, '>7@60 >8@70'],
-    [40, 63, '>9@80 own:3 >10@90'],
+    [40, 63, '>9@80 off:3 >10@90'],
     [73, 93, '>11@100 >12@110'],
   ])
   expect(
@@ -307,7 +307,7 @@ test('each piece of a detail unit holding several is read from its own blocks ro
 // 0; its record from 6 to 7 owns them
 test('an unloaded piece joins the next piece read, the own bp between them a placeholder its record holds', async () => {
   const { unloaded, loaded } = await cuts(50, 70)
-  expect(rows(unloaded, 'TAIL#1#c')).toEqual([[10, 34, '>6@50 own:4 >7@60']])
+  expect(rows(unloaded, 'TAIL#1#c')).toEqual([[10, 34, '>6@50 off:4 >7@60']])
   const [record] = unloaded.departures.filter(d => d.name === 'TAIL#1#c')
   expect(departures(unloaded, 'TAIL#1#c')).toEqual([
     {
@@ -341,7 +341,7 @@ test('a piece that turns back, runs own bp and jumps back is its blocks in path 
   const unloaded = await walks.cut(R, window, { context: 0 })
   const loaded = await walks.cut(R, window, { context: 0, expand: all })
   expect(rows(unloaded, 'H#1#c')).toEqual([
-    [7, 59, '>1@0 >2@6 <2@6 <1@0 own:10 >5@24 >6@30 >3@12'],
+    [7, 59, '>1@0 >2@6 <2@6 <1@0 off:10 >5@24 >6@30 >3@12'],
   ])
   expect(
     unloaded.fragments
@@ -349,7 +349,7 @@ test('a piece that turns back, runs own bp and jumps back is its blocks in path 
       .map(f => [f.trimmedBefore, f.trimmedAfter]),
   ).toEqual([[7, 50]])
   expect(links(unloaded)).toEqual(
-    expect.arrayContaining(['2] 2]', '3[ 6]', '1[ own', '5[ own']),
+    expect.arrayContaining(['2] 2]', '3[ 6]', '1[ off', '5[ off']),
   )
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
@@ -459,10 +459,10 @@ test('a contained cut keeps its context’s bp of a placeholder, where the loade
     context: 10,
   })
   expect(rows(unloaded, 'PARTIAL#1#c')).toEqual([
-    [70, 110, 'own:10 >10@90 >11@100 >12@110'],
+    [70, 110, 'off:10 >10@90 >11@100 >12@110'],
   ])
   expect(rows(loaded, 'PARTIAL#1#c')).toEqual([
-    [30, 110, 'own:50 >10@90 >11@100 >12@110'],
+    [30, 110, 'off:50 >10@90 >11@100 >12@110'],
   ])
   const [f] = unloaded.fragments.filter(x => x.name === 'PARTIAL#1#c')
   expect(nameOf(unloaded, f!.ids[0]!)).toBe('PARTIAL#1#c:70-80')
@@ -508,7 +508,7 @@ test('a contained cut keeps a placeholder within its context whole, as the loade
     contained: true,
     context: 5,
   })
-  expect(rows(unloaded, 'JUMP#1#c')).toEqual([[20, 35, 'own:5 >12@110']])
+  expect(rows(unloaded, 'JUMP#1#c')).toEqual([[20, 35, 'off:5 >12@110']])
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
 
@@ -716,7 +716,7 @@ describe('a file without blocks units', () => {
     'R#0#chr 0:0 10 20 route 6 10 -4',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
   ]
-  const blocks = 'R#0#chr 0 10 20 blocks H#1#h 0 0 0 0 10+5,0+5:8'
+  const blocks = 'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5'
   const open = (lines: string[]) =>
     WalkReader.fromFilehandles(walkFileOf([...header, ...lines]))
   const window = { start: 0, end: 20 }
@@ -742,23 +742,48 @@ describe('a file without blocks units', () => {
       window,
       { context: 0 },
     )
-    expect(rows(cut, 'H#1#h')).toEqual([[0, 18, '>3@10 own:8 >4@15']])
+    expect(rows(cut, 'H#1#h')).toEqual([[0, 18, '>3@10 off:8 >4@15']])
   })
 
   test.each([
-    ['holding more bp than its abridged row states', '10+5,0+5:9'],
-    ['starting on another step', '5+5,5+5:8'],
-    ['ending on another strand', '10+5,5-5:8'],
-    ['covering part of a node', '10+5,0+3:10'],
+    ['holding more bp than its abridged row states', '10+5,9,0+5'],
+    ['starting on another step', '5+5,8,5+5'],
+    ['ending on another strand', '10+5,8,5-5'],
+    ['covering part of a node', '10+5,10,0+3'],
     ['that is no list', '10+5;0+5'],
+    ['with two runs off R side by side', '10+5,3,5,0+5'],
+    ['with no block', '18'],
   ])('a blocks row %s is refused', async (_, list) => {
     await expect(
-      open([...abridged, blocks.replace('10+5,0+5:8', list)]).cut(
+      open([...abridged, blocks.replace('10+5,8,0+5', list)]).cut(
         'R#0#chr',
         window,
       ),
     ).rejects.toThrow(/blocks row/)
   })
+
+  test.each([
+    ['with its bp off R after a colon', '0 0 10+5,0+5:8'],
+    ['with ownBefore and ownAfter columns', '0 0 0 0 10+5,0+5:8'],
+    ['with ownBefore and ownAfter columns and no bp off R', '0 0 0 0 10+5,0+5'],
+  ])(
+    'a blocks row of an earlier shape, %s, is refused, saying to rebuild the file',
+    async (_, columns) => {
+      const error: unknown = await open([
+        ...abridged,
+        blocks.replace('0 0 10+5,8,0+5', columns),
+      ])
+        .cut('R#0#chr', window)
+        .catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(WalkFormatError)
+      expect(error).toHaveProperty(
+        'message',
+        expect.stringContaining(
+          'rebuild the walk file with gfa-to-tabix 4.1 or later',
+        ),
+      )
+    },
+  )
 
   test('a blocks unit without the row of a piece its tile abridges is refused', async () => {
     await expect(

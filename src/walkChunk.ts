@@ -1,3 +1,5 @@
+import { WalkFormatError } from './walkFile.ts'
+
 import type { Abridged, WalkRow } from './walkRows.ts'
 
 // A tile of gfa-to-tabix's walk format 7, whose rows from `kind` on are
@@ -587,34 +589,34 @@ export const SKIPPED = -(2 ** 31)
 
 const DIGIT_0 = 48
 
-// A `blocks` row from `path` on: `ownBefore ownAfter list`, each block of
-// the list as where it begins on R, its bp, whether it runs against R and
-// the piece's own bp before it
-export function parseBlocks(cols: string[], from = 4) {
-  const list = cols[from + 5]
-  const ownBefore = Number(cols[from + 3])
-  const ownAfter = Number(cols[from + 4])
+const TAG = /^[A-Za-z][A-Za-z0-9]:[A-Za-z]:/
+
+// A `blocks` row's list, the piece in path order: each block as where it
+// begins on R, its bp and whether it runs against R, the bp off R before
+// each, and the bp off R before the first and after the last
+export function parseBlocks(cols: string[]) {
+  const list = cols[7] ?? ''
   if (
-    list === undefined ||
-    !Number.isInteger(ownBefore) ||
-    !Number.isInteger(ownAfter)
+    cols.length < 8 ||
+    list.includes(':') ||
+    cols.slice(8).some(col => !TAG.test(col))
   ) {
-    throw new WalkRowError(
-      `a blocks row with no ownBefore and ownAfter, from a gfa-to-tabix before 4.1's release, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${cols.join('\t').slice(0, 120)}`,
+    throw new WalkFormatError(
+      `a blocks row of an earlier shape, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${cols.join('\t').slice(0, 120)}`,
     )
   }
   const begins: number[] = []
   const lengths: number[] = []
   const against: boolean[] = []
-  const own: number[] = []
+  const off: number[] = []
   let at = 0
-  // 0 the offset, 1 the length, 2 the own bp
-  let part = 0
+  let before = 0
+  let run = 0
   let value = 0
   let digits = 0
   let negative = false
+  let inBlock = false
   let begin = 0
-  let length = 0
   let reversed = false
   for (let p = 0; p <= list.length; p++) {
     const ch = p < list.length ? list.charCodeAt(p) : 44
@@ -622,35 +624,42 @@ export function parseBlocks(cols: string[], from = 4) {
     if (digit >= 0 && digit <= 9) {
       value = value * 10 + digit
       digits++
-    } else if (ch === 45 && part === 0 && digits === 0 && !negative) {
+    } else if (ch === 45 && !inBlock && digits === 0 && !negative) {
       negative = true
-    } else if ((ch === 43 || ch === 45) && part === 0 && digits > 0) {
+    } else if ((ch === 43 || ch === 45) && !inBlock && digits > 0) {
       begin = at + (negative ? -value : value)
       reversed = ch === 45
-      part = 1
+      inBlock = true
       value = 0
       digits = 0
-    } else if (ch === 58 && part === 1 && digits > 0) {
-      length = value
-      part = 2
-      value = 0
-      digits = 0
-    } else if (ch === 44 && part > 0 && digits > 0) {
-      length = part === 1 ? value : length
+    } else if (ch === 44 && inBlock && digits > 0) {
+      before = begins.length === 0 ? run : before
+      off.push(begins.length === 0 ? 0 : run)
       begins.push(begin)
-      lengths.push(length)
+      lengths.push(value)
       against.push(reversed)
-      own.push(part === 2 ? value : 0)
-      at = reversed ? begin - length : begin + length
-      part = 0
+      at = reversed ? begin - value : begin + value
+      run = 0
+      inBlock = false
       value = 0
       digits = 0
       negative = false
+    } else if (ch === 44 && digits > 0 && !negative && run === 0 && value > 0) {
+      run = value
+      value = 0
+      digits = 0
     } else {
-      throw new WalkRowError(`not a blocks row's list: ${list.slice(0, 80)}`)
+      throw new WalkFormatError(
+        `not a blocks row's list, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${list.slice(0, 80)}`,
+      )
     }
   }
-  return { ownBefore, ownAfter, begins, lengths, against, own, end: at }
+  if (begins.length === 0) {
+    throw new WalkFormatError(
+      `a blocks row with no block, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${cols.join('\t').slice(0, 120)}`,
+    )
+  }
+  return { before, after: run, begins, lengths, against, off, end: at }
 }
 
 export type PieceBlocks = ReturnType<typeof parseBlocks>
@@ -680,35 +689,31 @@ const jumpOver = (
   )
 }
 
-// The first and last blocks over `span`, and whether a run of the piece's
-// own lies in a departure over it
+// The first and last blocks over `span`, and whether a run off R lies in a
+// departure over it
 export function blocksOver(
   blocks: PieceBlocks,
   span: { start: number; end: number },
 ) {
   let first = -1
   let last = -1
-  let ownOver = false
+  let offOver = false
   for (let k = 0; k < blocks.begins.length; k++) {
     const lo = blockLow(blocks, k)
     if (lo < span.end && lo + blocks.lengths[k]! > span.start) {
       first = first < 0 ? k : first
       last = k
     }
-    ownOver ||= k > 0 && blocks.own[k]! > 0 && jumpOver(blocks, k, span)
+    offOver ||= k > 0 && blocks.off[k]! > 0 && jumpOver(blocks, k, span)
   }
-  return { first, last, ownOver }
+  return { first, last, offOver }
 }
 
-/**
- * The walk row of an abridged piece the cut does not load, from its `blocks`
- * row and its tile's R. Blocks `core[0]` to `core[1]` are built whole, a
- * reference step each, with a placeholder step for each run of the piece's
- * own. Of the others the row holds the piece's first and last steps on R, the
- * run of its own before and after them, and both sides of each departure
- * that can lie over `over`; a SKIPPED step has the bp of what lies between,
- * and `cuts` are where the steps either side of one are not consecutive.
- */
+// The walk row of an abridged piece the cut does not load. Blocks `core[0]`
+// to `core[1]` are built whole, a placeholder for each run off R; of the
+// rest, the piece's end steps, its runs off R at its ends and both sides of
+// each departure that can lie over `over`. A SKIPPED step has the bp of what
+// lies between, and `cuts` are where a step does not follow the one before
 export function unloadedRow(
   piece: AbridgedPiece,
   blocks: PieceBlocks,
@@ -739,14 +744,11 @@ export function unloadedRow(
     }
     from[k] = i
     to[k] = j
-    total += length + blocks.own[k]!
+    total += length + blocks.off[k]!
   }
   if (
     count === 0 ||
     total !== abridged.bp ||
-    blocks.own[0] !== 0 ||
-    blocks.ownBefore < 0 ||
-    blocks.ownAfter < 0 ||
     blocks.begins[0] !== rejoin.pos ||
     blocks.against[0] !== rejoin.reversed ||
     blocks.end !== leave.pos ||
@@ -768,7 +770,7 @@ export function unloadedRow(
   const cuts: number[] = []
   const nodes = new Map<number, PlacedNode>()
   const links: number[] = []
-  const hapOffset = piece.hapOffset - blocks.ownBefore
+  const hapOffset = piece.hapOffset - blocks.before
   let hap = hapOffset
   let skipped = 0
   const push = (
@@ -794,7 +796,7 @@ export function unloadedRow(
       cuts.push(ids.length)
     }
   }
-  const own = (length: number) => {
+  const offR = (length: number) => {
     flush()
     const id = placeholder(hap, hap + length)
     nodes.set(id, {
@@ -822,16 +824,16 @@ export function unloadedRow(
   const firstOf = (k: number) => (blocks.against[k]! ? to[k]! - 1 : from[k]!)
   const lastOf = (k: number) => (blocks.against[k]! ? from[k]! : to[k]! - 1)
   const handle = (k: number, i: number) => path.handleAt(i, !blocks.against[k]!)
-  let before = blocks.ownBefore > 0 ? own(blocks.ownBefore) : undefined
+  let before = blocks.before > 0 ? offR(blocks.before) : undefined
   const first = before ?? handle(0, firstOf(0))
   for (let k = 0; k < count; k++) {
     const reversed = blocks.against[k]!
-    const run = blocks.own[k]!
+    const run = blocks.off[k]!
     const entry = handle(k, firstOf(k))
     if (k > 0 && run === 0) {
       links.push(handle(k - 1, lastOf(k - 1)), entry)
     } else if (k > 0 && joined(k)) {
-      before = own(run)
+      before = offR(run)
       links.push(handle(k - 1, lastOf(k - 1)), before)
     } else {
       skipped += run
@@ -871,7 +873,7 @@ export function unloadedRow(
   }
   flush()
   const exit = handle(count - 1, lastOf(count - 1))
-  const after = blocks.ownAfter > 0 ? own(blocks.ownAfter) : undefined
+  const after = blocks.after > 0 ? offR(blocks.after) : undefined
   if (after !== undefined) {
     links.push(exit, after)
   }

@@ -2149,7 +2149,7 @@ test("a tag after an abridged row's detail column names no other detail unit", a
     'R#0#chr 0:0 10 20 nodes 5 8',
     'R#0#chr 0:0 10 20 route 6 10 -4',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
-    'R#0#chr 0 10 20 blocks H#1#h 0 0 0 0 10+5,0+5:8 xx:i:1',
+    'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5 xx:i:1',
   ]).cut('R#0#chr', { start: 0, end: 20 }, { context: 0 })
   expect(
     fragments.flatMap(f => (f.abridged ?? []).map(a => a.detail.name)),

@@ -7,7 +7,7 @@
 // haplotype offsets, bp trimmed and steps, a step on the reference as its
 // place, strand and node and a run of steps off it as its bp; the
 // departures with the bp of the steps they hold; the gaps; the reference
-// nodes kept; the links, a node off the reference as `own`; each haplotype's
+// nodes kept; the links, a node off the reference as `off`; each haplotype's
 // cover and departures; and the structural forms.
 //
 // A contained cut keeps `context` bp of a walk past its steps on the window.
@@ -123,7 +123,7 @@ function fragmentOf(cut: Cut, f: WalkFragment): Fragment {
       own = Math.max(own, 0) + length(i)
     } else {
       if (own >= 0) {
-        steps.push(`own:${own}`)
+        steps.push(`off:${own}`)
       }
       own = -1
       if (i < f.ids.length) {
@@ -165,7 +165,7 @@ function misplaced(f: WalkFragment) {
   )
 }
 
-// Each link by the node ends it joins, a node off the reference as `own`
+// Each link by the node ends it joins, a node off the reference as `off`
 function linkRows(cut: Cut) {
   const tables = cut.graph.tables(
     cut.kept,
@@ -177,13 +177,13 @@ function linkRows(cut: Cut) {
   const end = (index: number, right: boolean) =>
     nodes.ranks[index] === 0 && nodes.placeholders?.[index] !== 1
       ? `${nodes.names[index]}${right ? ']' : '['}`
-      : 'own'
+      : 'off'
   const rows = new Set<string>()
   for (let k = 0; k < links.from.length; k++) {
     const strands = links.strands[k]!
     const a = end(links.from[k]!, (strands & 1) === 0)
     const b = end(links.to[k]!, (strands & 2) !== 0)
-    if (a !== 'own' || b !== 'own') {
+    if (a !== 'off' || b !== 'off') {
       rows.add(a < b ? `${a} ${b}` : `${b} ${a}`)
     }
   }
@@ -332,7 +332,7 @@ function differences(unloaded: Rows, loaded: Rows) {
 // The bp an own run at a fragment's edge states, or -1 where the edge is on
 // the reference
 const edgeOwn = (step: string | undefined) =>
-  step?.startsWith('own:') === true ? Number(step.slice(4)) : -1
+  step?.startsWith('off:') === true ? Number(step.slice(4)) : -1
 
 // How far a loaded fragment's edge runs past the unloaded one's, where the
 // loaded cut kept the node that straddles `context` whole: less than that
@@ -356,9 +356,9 @@ const drawnIn = (f: Fragment, head: number, tail: number): Fragment => ({
   trimmedAfter: f.trimmedAfter + tail,
   steps: f.steps.map((step, i) =>
     i === 0 && head > 0
-      ? `own:${edgeOwn(step) - head}`
+      ? `off:${edgeOwn(step) - head}`
       : i === f.steps.length - 1 && tail > 0
-        ? `own:${edgeOwn(step) - tail}`
+        ? `off:${edgeOwn(step) - tail}`
         : step,
   ),
 })
