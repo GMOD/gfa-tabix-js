@@ -1,4 +1,4 @@
-import { EARLIER_FORMAT_6, WalkRowError } from './walkChunk.ts'
+import { WalkRowError } from './walkChunk.ts'
 
 import type { Abridged } from './walkRows.ts'
 
@@ -137,30 +137,24 @@ const count = (field: string | undefined, row: string[], least = 0) => {
     !Number.isInteger(n) ||
     n < least
   ) {
-    throw new WalkRowError(`not a walk format 6 row: ${row.join('\t')}`)
+    throw new WalkRowError(`not a departure row: ${row.join('\t')}`)
   }
   return n
 }
 
 const strand = (field: string | undefined, row: string[]) => {
   if (field !== '+' && field !== '-') {
-    throw new WalkRowError(`not a walk format 6 row: ${row.join('\t')}`)
+    throw new WalkRowError(`not a departure row: ${row.join('\t')}`)
   }
   return field === '-'
 }
 
 // A record row's columns, `departure path hapStart ownBp missingBp leavePos
 // leaveStrand leavePasses rejoinPos rejoinStrand rejoinPasses`, from its kind
-// at `from`; a row that is not one throws, saying to rebuild a file whose
-// rows lack the pass counts
+// at `from`; a row that is not one throws
 export function parseDepartureRow(cols: string[], from = 3): WalkDeparture {
   const n = (k: number) => count(cols[from + k], cols)
   const passes = (k: number) => count(cols[from + k], cols, 1)
-  if (cols.length - from === 9) {
-    throw new WalkRowError(
-      `a departure record with no pass counts, ${EARLIER_FORMAT_6}: ${cols.join('\t')}`,
-    )
-  }
   return {
     name: cols[from + 1]!,
     hapStart: n(2),

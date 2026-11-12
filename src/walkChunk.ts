@@ -78,23 +78,13 @@ function numbers(field: string) {
   return field === '.' ? [] : field.split(',').map(Number)
 }
 
-// What a row from a format 6 writer before pass counts and one abridged row
-// per piece asks of the reader
-export const EARLIER_FORMAT_6 =
-  'from a gfa-to-tabix that wrote format 6 before pass counts and abridged rows per piece, so rebuild the walk file with gfa-to-tabix 3.0 or later'
-
 // A ref row's `passes`: how many times the reference's paths pass each
 // step's node, `.` when every one is 1
 function passCounts(cols: string[], n: number) {
   const field = cols[11]
   const counts =
     field === '.' ? new Array<number>(n).fill(1) : numbers(field ?? '')
-  if (field === undefined || field.startsWith('SQ:Z:')) {
-    throw new WalkRowError(`a ref row with no passes, ${EARLIER_FORMAT_6}`)
-  } else if (
-    counts.length !== n ||
-    counts.some(c => !Number.isInteger(c) || c < 1)
-  ) {
+  if (counts.length !== n || counts.some(c => !Number.isInteger(c) || c < 1)) {
     throw new WalkRowError(`a ref row's passes do not count its ${n} steps`)
   }
   return counts

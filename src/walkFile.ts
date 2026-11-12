@@ -254,8 +254,6 @@ export function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal) {
     : promise
 }
 
-const FORMAT_6_NAME = /\.walks\.bed\.gz(?=$|[?#])/
-
 /**
  * A format 8 walk file read by byte ranges: the directory and the header
  * once, each sequence's table once, and units as asked, the ranges of units
@@ -271,19 +269,9 @@ export class WalkFile {
     this.directory = directory
   }
 
-  private readonly readDirectory = once(async () => {
-    try {
-      return parseDirectory(await this.directory.readFile('utf8'))
-    } catch (error) {
-      throw !(error instanceof WalkFormatError) &&
-        FORMAT_6_NAME.test(this.data.source ?? '')
-        ? new WalkFormatError(
-            `${this.data.source} names a walk file of format 6 or earlier, which has no .idx directory; @jbrowse/graph-walks reads format ${WALK_FORMAT}, so rebuild it with gfa-to-tabix 5.0 or later`,
-            { cause: error },
-          )
-        : error
-    }
-  })
+  private readonly readDirectory = once(async () =>
+    parseDirectory(await this.directory.readFile('utf8')),
+  )
 
   // The header unit's lines, once the directory and the data agree
   readonly header = once(async () => {

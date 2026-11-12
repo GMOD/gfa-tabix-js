@@ -169,15 +169,6 @@ test('a file that is not a directory is refused', async () => {
   )
 })
 
-test('a format 6 file, which has no directory, is refused by its name', async () => {
-  const path = `${DATA}hprc.GRCh38.walks.bed.gz`
-  await expect(
-    WalkReader.open(path, url => new LocalFile(url)).header(),
-  ).rejects.toThrow(
-    `${path} names a walk file of format 6 or earlier, which has no .idx directory; @jbrowse/graph-walks reads format 8, so rebuild it with gfa-to-tabix 5.0 or later`,
-  )
-})
-
 test('open finds the directory beside the data, before any query', async () => {
   const opened: string[] = []
   const walks = WalkReader.open(

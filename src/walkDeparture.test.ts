@@ -47,14 +47,12 @@ test('a record row parses to its ends, own sequence and contig position', () => 
   )
 })
 
-test('a record row from a writer before pass counts is refused, saying to rebuild the file', () => {
+test('a record row with no pass counts is refused', () => {
   const cols =
     'GRCh38#0#chr1~departure\t19\t81\tdeparture\tHG002#1#ctg\t20\t30\t12\t20\t+\t80\t-'.split(
       '\t',
     )
-  expect(() => parseDepartureRow(cols)).toThrow(
-    /no pass counts.*rebuild the walk file with gfa-to-tabix 3.0 or later/,
-  )
+  expect(() => parseDepartureRow(cols)).toThrow(/not a departure row/)
 })
 
 test('a record row passing an end zero times is refused, as a ref row is', () => {
@@ -62,18 +60,18 @@ test('a record row passing an end zero times is refused, as a ref row is', () =>
     `GRCh38#0#chr1~departure\t19\t81\tdeparture\tHG002#1#ctg\t20\t30\t12\t20\t+\t${leavePasses}\t80\t-\t${rejoinPasses}`.split(
       '\t',
     )
-  expect(() => parseDepartureRow(row(0, 1))).toThrow(/not a walk format 6 row/)
-  expect(() => parseDepartureRow(row(1, 0))).toThrow(/not a walk format 6 row/)
+  expect(() => parseDepartureRow(row(0, 1))).toThrow(/not a departure row/)
+  expect(() => parseDepartureRow(row(1, 0))).toThrow(/not a departure row/)
   expect(parseDepartureRow(row(1, 1)).leavePasses).toBe(1)
 })
 
-test('a ref row from a writer before pass counts is refused, saying to rebuild the file, and an abridged row that is none', () => {
+test('a ref row with no pass counts is refused, and an abridged row that is none', () => {
   const ref = (more: string) =>
     `R#0#c\t0\t1\tref\tR#0#c\t0\t0\t0\t2\t2,2\t6,6${more}`.split('\t')
   expect(referenceNodes([ref('\t.')]).map(n => n.passes)).toEqual([1, 1])
-  for (const earlier of ['', '\tSQ:Z:ACGTACGTACGT']) {
-    expect(() => referenceNodes([ref(earlier)])).toThrow(
-      /ref row with no passes.*rebuild the walk file/,
+  for (const lacking of ['', '\tSQ:Z:ACGTACGTACGT']) {
+    expect(() => referenceNodes([ref(lacking)])).toThrow(
+      "a ref row's passes do not count its 2 steps",
     )
   }
   const abridged = (nsteps: string) =>
