@@ -605,19 +605,21 @@ test('placeholders do not count towards the node limit, and a cut says how many 
 test('a step built for an unloaded piece counts towards the step budget as any step does', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const { fragments, departures } = await walks.cut(R, window, { context: 0 })
-  const steps =
-    fragments.reduce((sum, f) => sum + f.ids.length, 0) +
-    departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
-  expect(fragments.reduce((sum, f) => sum + (f.unloadedSteps ?? 0), 0)).toBe(
-    fragments
+  const cut = await walks.cut(R, window, { context: 0 })
+  const held =
+    cut.fragments.reduce((sum, f) => sum + f.ids.length, 0) +
+    cut.departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
+  expect(
+    cut.fragments.reduce((sum, f) => sum + (f.unloadedSteps ?? 0), 0),
+  ).toBe(
+    cut.fragments
       .filter(f => f.name !== R)
       .reduce((sum, f) => sum + f.ids.length, 0),
   )
-  const within = await walks.cut(R, window, { context: 0, stepBudget: steps })
-  expect(within.fragments).toHaveLength(fragments.length)
+  const within = await walks.cut(R, window, { context: 0, stepBudget: held })
+  expect(within.fragments).toHaveLength(cut.fragments.length)
   await expect(
-    walks.cut(R, window, { context: 0, stepBudget: steps - 1 }),
+    walks.cut(R, window, { context: 0, stepBudget: held - 1 }),
   ).rejects.toThrow('Zoom in')
 })
 
@@ -858,28 +860,23 @@ describe('a file whose blocks unit is not what its tile needs', () => {
     ).rejects.toThrow(/blocks row/)
   })
 
-  test.each([
-    { next: 18, refused: false },
-    { next: 20, refused: true },
-  ])(
-    'a blocks row whose items end where the line’s next piece does not start is refused: next at $next',
-    async ({ next, refused }) => {
-      const cut = open([
-        ...abridged,
-        blocks,
-        'R#0#chr 20 ref R#0#chr 0 20 1 4 10,2,2,2 5,5,5,5 .',
-        `R#0#chr 20 walk H#1#h 0 ${next} 1 2 10 .`,
-      ]).cut('R#0#chr', { start: 0, end: 40 }, { context: 0 })
-      await (refused
-        ? expect(cut).rejects.toThrow(
-            'ends at 18 on its contig, and the line’s next piece starts at 20'.replace(
-              '’',
-              "'",
-            ),
-          )
-        : expect(cut).resolves.toHaveProperty('placeholders', 1))
-    },
-  )
+  const nextPiece = (hapOffset: number) =>
+    open([
+      ...abridged,
+      blocks,
+      'R#0#chr 20 ref R#0#chr 0 20 1 4 10,2,2,2 5,5,5,5 .',
+      `R#0#chr 20 walk H#1#h 0 ${hapOffset} 1 2 10 .`,
+    ]).cut('R#0#chr', { start: 0, end: 40 }, { context: 0 })
+
+  test('a blocks row whose items end where the line’s next piece starts is read', async () => {
+    expect((await nextPiece(18)).placeholders).toBe(1)
+  })
+
+  test('a blocks row whose items end elsewhere than the line’s next piece starts is refused', async () => {
+    await expect(nextPiece(20)).rejects.toThrow(
+      "ends at 18 on its contig, and the line's next piece starts at 20",
+    )
+  })
 
   test('a blocks unit without the row of a piece its tile abridges is refused', async () => {
     await expect(

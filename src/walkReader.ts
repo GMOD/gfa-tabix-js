@@ -843,10 +843,11 @@ export class WalkReader {
         const next = starts.get(
           pieceKey(piece.name, piece.fragStart, piece.piece + 1),
         )
-        const end = piece.hapOffset + blocks.before + blocks.bp + blocks.after
-        if (next !== undefined && next !== end) {
+        const pieceEnd =
+          piece.hapOffset + blocks.before + blocks.bp + blocks.after
+        if (next !== undefined && next !== pieceEnd) {
           throw new WalkFormatError(
-            `${refName}'s blocks row of ${piece.name}, piece ${piece.piece} in tile ${read.unit.name}, ends at ${end} on its contig, and the line's next piece starts at ${next}`,
+            `${refName}'s blocks row of ${piece.name}, piece ${piece.piece} in tile ${read.unit.name}, ends at ${pieceEnd} on its contig, and the line's next piece starts at ${next}`,
           )
         }
         if (!loaded(read)) {

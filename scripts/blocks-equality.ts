@@ -160,6 +160,13 @@ function misplaced(f: WalkFragment) {
 
 const END = 2 ** 25
 
+// A link as a number: the two node ends it joins, either way round
+const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
+  const x = a * 2 + (aRight ? 1 : 0)
+  const y = b * 2 + (bRight ? 1 : 0)
+  return x < y ? x * END + y : y * END + x
+}
+
 // A cut's links as rows: every link between two reference nodes, and each
 // link with an end off the reference once for each time the cut walks it,
 // as consecutive steps of a fragment or from a departure's leave node
@@ -189,11 +196,6 @@ function linkRows(cut: Cut, window: Window) {
     nodes.ranks[index] === 0 && nodes.placeholders?.[index] !== 1
   const end = (index: number, right: boolean) =>
     onR(index) ? `${nodes.names[index]}${right ? ']' : '['}` : 'off'
-  const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
-    const x = a * 2 + (aRight ? 1 : 0)
-    const y = b * 2 + (bRight ? 1 : 0)
-    return x < y ? x * END + y : y * END + x
-  }
   const held = new Set<number>()
   const rows: Rows = new Map()
   let offEnds = 0
