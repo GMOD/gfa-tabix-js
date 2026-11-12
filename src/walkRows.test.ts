@@ -1,4 +1,5 @@
 import { graphTablesGFA } from './testing.ts'
+import { SKIPPED } from './walkChunk.ts'
 import { GAP_KINDS } from './walkGaps.ts'
 import {
   WalkGraph,
@@ -956,6 +957,38 @@ describe('the stretches between and past a walk’s fragments', () => {
           ['unread', 800, 200, 400],
           ['read', 250],
           ['unread', 750, 600, 200],
+        ],
+      ],
+    ])
+  })
+
+  test('an abridged piece read as its bp alone is read and kept out, and the cut knows no breakpoint beside it', () => {
+    const g = graph()
+    const runs = joinPieces([
+      run(g, 'HG002#1#chr1', 100, [2]),
+      walkRow('HG002#1#chr1', 3, 1000, [], {
+        n: 1,
+        steps: {
+          ids: Int32Array.of(SKIPPED),
+          rev: new Uint8Array(1),
+          refStarts: Float64Array.of(Number.NaN),
+          against: new Uint8Array(1),
+          bp: Int32Array.of(250),
+        },
+      }),
+      walkRow('HG002#1#chr1', 6, 2000, forward(3), {}, g.nodes),
+    ])
+    const { gapsOf, fragments } = walkCut(runs, g.nodes, 'GRCh38#0#chr1', [])
+    expect(fragments.flatMap(f => [...f.ids])).not.toContain(SKIPPED)
+    expect(segments(gapsOf())).toEqual([
+      [
+        0,
+        200,
+        2000,
+        [
+          ['unread', 800, 200, Number.NaN],
+          ['read', 250],
+          ['unread', 750, Number.NaN, 200],
         ],
       ],
     ])
