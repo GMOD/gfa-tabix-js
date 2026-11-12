@@ -18,17 +18,23 @@
 // in its tables or anything else it returns: the reader compared has by then
 // made every cut before it. What is set aside is printed with the counts.
 //
-// Three checks are of what a cut reads and of how it attaches. The stretches
-// of its contig that a record's placeholders cover in the unloaded cut, which
-// the reader takes from the abridged row and the record, must be the runs
-// that end or start the piece's blocks row beside the record's leave or
-// rejoin, which this script reads from the blocks unit of each tile the
-// record's ownTiles names: so each placeholder has the name, `walk:start-end`,
-// that its blocks row gives it. A cut that expands every walk must read no
-// blocks unit. And the bytes the unloaded cut reads must be what the reader's
-// bytesFor says of its window, where every haplotype is cut together, and no
-// more than that where they are cut some at a time. A cut that throws is a
-// difference too.
+// The other checks are of what a cut reads and of what it attaches. A
+// departure holds own steps only where its own bp are within the attach limit
+// and it leaves or rejoins on the window and its context: the base of its
+// leave step, or of its rejoin step, beside the breakpoint lies there, which
+// this script tells from the record's columns itself. Such a departure with
+// own steps to hold must hold them, and any other must hold none. The tiles
+// the unloaded cut reads past its window's must be the ones those records'
+// ownTiles name, no more and no fewer. The stretches of its contig that such
+// a record's placeholders cover in the unloaded cut, which the reader takes
+// from the abridged row and the record, must be the runs that end or start
+// the piece's blocks row beside the record's leave or rejoin, which this
+// script reads from the blocks unit of each tile the record's ownTiles names:
+// so each placeholder has the name, `walk:start-end`, that its blocks row
+// gives it. A cut that expands every walk must read no blocks unit. And the
+// bytes the unloaded cut reads must be what the reader's bytesFor says of its
+// window, where every haplotype is cut together, and no more than that where
+// they are cut some at a time. A cut that throws is a difference too.
 //
 // A contained cut keeps `context` bp of a walk past its steps on the window.
 // A loaded cut keeps whole nodes, so it runs on to the end of the node that
@@ -528,31 +534,135 @@ function ownRunsByBlocks(file: WalkFile) {
 
 type OwnRuns = ReturnType<typeof ownRunsByBlocks>
 
-// The ownTiles of each record over the window and its context, by the
-// record's path, hapStart and ownBp
-async function ownTilesOver(
-  file: WalkFile,
-  units: WalkUnit[],
-  window: Window,
-  mode: Mode,
-) {
-  const start = Math.max(0, window.start - mode.context)
-  const end = window.end + mode.context
+interface Span {
+  start: number
+  end: number
+}
+
+const drawnOf = (window: Window, mode: Mode) => ({
+  start: Math.max(0, window.start - mode.context),
+  end: window.end + mode.context,
+})
+
+interface RecordEnds {
+  ownBp: number
+  leavePos: number
+  leaveReversed: boolean
+  rejoinPos: number
+  rejoinReversed: boolean
+}
+
+// Whether a cut over `drawn` attaches a departure's own steps, from its ends
+// as a record states them: its own bp are within the attach limit, and it
+// leaves or rejoins on `drawn`. A step along the reference leaves from the
+// base before its breakpoint and rejoins at the base there, and one against
+// it the other way round
+const attachedBy = (d: RecordEnds, drawn: Span) =>
+  d.ownBp <= ATTACH_BP &&
+  [
+    d.leavePos - (d.leaveReversed ? 0 : 1),
+    d.rejoinPos - (d.rejoinReversed ? 1 : 0),
+  ].some(base => base >= drawn.start && base < drawn.end)
+
+// The ownTiles of each record over `drawn`, by the record's path, hapStart
+// and ownBp, and the tiles named by the records within the attach limit that
+// leave or rejoin there, each with the paths whose records name it
+async function ownTilesOver(file: WalkFile, units: WalkUnit[], drawn: Span) {
   const bins = units.filter(
     u =>
-      u.kind === 'departures' && u.length > 0 && u.start < end && u.end > start,
+      u.kind === 'departures' &&
+      u.length > 0 &&
+      u.start < drawn.end &&
+      u.end > drawn.start,
   )
-  const ownTiles = new Map<string, string[]>()
+  const byRecord = new Map<string, string[]>()
+  const attached = new Map<string, Set<string>>()
   for (const line of (await file.read(bins)).flat()) {
     const cols = line.split('\t')
     if (cols[3] === 'departure') {
-      ownTiles.set(
-        `${cols[4]}\t${cols[5]}\t${cols[6]}`,
-        cols[14] === '.' ? [] : (cols[14] ?? '').split(','),
+      const tiles = cols[14] === '.' ? [] : (cols[14] ?? '').split(',')
+      byRecord.set(`${cols[4]}\t${cols[5]}\t${cols[6]}`, tiles)
+      const record = {
+        ownBp: Number(cols[6]),
+        leavePos: Number(cols[8]),
+        leaveReversed: cols[9] === '-',
+        rejoinPos: Number(cols[11]),
+        rejoinReversed: cols[12] === '-',
+      }
+      if (attachedBy(record, drawn)) {
+        for (const tile of tiles) {
+          attached.set(
+            tile,
+            (attached.get(tile) ?? new Set<string>()).add(cols[4] ?? ''),
+          )
+        }
+      }
+    }
+  }
+  return { byRecord, attached }
+}
+
+type OwnTiles = Awaited<ReturnType<typeof ownTilesOver>>
+
+// The tiles past the window's that the cut read and no record's ownTiles
+// asks of it, and those asked that it did not read: a tile is asked for
+// where a record of a walk kept, within the attach limit, that leaves or
+// rejoins on `drawn` names it
+function fetchedOff(
+  read: WalkUnit[],
+  units: WalkUnit[],
+  drawn: Span,
+  attached: OwnTiles['attached'],
+  keep: (name: string) => boolean,
+) {
+  const past = (u: WalkUnit) =>
+    u.kind === 'tile' &&
+    u.length > 0 &&
+    !(u.start < drawn.end && u.end > drawn.start)
+  const fetched = new Set(read.filter(past).map(u => u.name))
+  const asked = new Set(
+    units
+      .filter(u => past(u) && [...(attached.get(u.name) ?? [])].some(keep))
+      .map(u => u.name),
+  )
+  return [
+    ...[...fetched]
+      .filter(name => !asked.has(name))
+      .map(
+        name =>
+          `tile ${name} was read, and no record that leaves or rejoins on ${drawn.start}-${drawn.end} names it`,
+      ),
+    ...[...asked]
+      .filter(name => !fetched.has(name))
+      .map(
+        name =>
+          `tile ${name} was not read, and a record that leaves or rejoins on ${drawn.start}-${drawn.end} names it`,
+      ),
+  ]
+}
+
+// The departures of a cut that hold own steps against the attach rule, or
+// lack them under it: steps are held where the own bp are within the limit
+// and the walk leaves or rejoins on `drawn`, and nowhere else
+function ownStepsOff(cut: Cut, drawn: Span, ownTiles: OwnTiles['byRecord']) {
+  const off: string[] = []
+  for (const d of cut.departures) {
+    const attaches = attachedBy(d, drawn)
+    const toHold = d.fromSteps
+      ? d.ownBp > 0
+      : (ownTiles.get(`${d.name}\t${d.hapStart}\t${d.ownBp}`) ?? []).length > 0
+    const where = `${d.name} at ${d.hapStart}, ${d.ownBp} bp of its own from ${d.leavePos}${strand(d.leaveReversed)} to ${d.rejoinPos}${strand(d.rejoinReversed)}`
+    if (d.steps && !attaches) {
+      off.push(
+        `${where}: holds ${d.steps.ids.length} own steps, and ${d.ownBp > ATTACH_BP ? 'is over the attach limit' : `neither leaves nor rejoins on ${drawn.start}-${drawn.end}`}`,
+      )
+    } else if (!d.steps && attaches && toHold) {
+      off.push(
+        `${where}: holds no own steps, and ${d.fromSteps ? 'leaves or rejoins' : 'its record names tiles holding them and leaves or rejoins'} on ${drawn.start}-${drawn.end}`,
       )
     }
   }
-  return ownTiles
+  return off
 }
 
 // The records of the unloaded cut whose placeholders do not cover the
@@ -560,13 +670,14 @@ async function ownTilesOver(
 async function attachOff(
   cut: Cut,
   window: Window,
+  drawn: Span,
   units: WalkUnit[],
-  ownTiles: Map<string, string[]>,
+  ownTiles: OwnTiles['byRecord'],
   byBlocks: OwnRuns,
 ) {
   const off: string[] = []
   for (const d of cut.departures) {
-    if (!d.fromSteps && d.ownBp > 0 && d.ownBp <= ATTACH_BP) {
+    if (!d.fromSteps && d.ownBp > 0 && attachedBy(d, drawn)) {
       const held = stretches(
         [...(d.steps?.ids ?? [])].flatMap(id => {
           const node = cut.graph.nodes.get(id)
@@ -1075,6 +1186,9 @@ const totals = {
   threw: 0,
   attachRecords: 0,
   attachRuns: 0,
+  attachDepartures: 0,
+  otherDepartures: 0,
+  fetchedTiles: 0,
   fragments: 0,
   unloadedFragments: 0,
   placeholders: 0,
@@ -1157,10 +1271,12 @@ async function compare(
     units: WalkUnit[]
     bytesFor: number | undefined
     atMost: number
-    ownTiles: Map<string, string[]>
+    ownTiles: OwnTiles
+    keep: (name: string) => boolean
     byBlocks: OwnRuns
   },
 ) {
+  const drawn = drawnOf(window, mode)
   const summarize = async (held: Cut, runs?: Unloaded) => {
     await strands.cover(
       window.refName,
@@ -1188,15 +1304,47 @@ async function compare(
           ]
         : [],
   )
+  const unloadedUnits = unitsRead(io.units, io.reads)
+  report(
+    'fetched-tiles-not-by-the-attach-rule',
+    where,
+    fetchedOff(unloadedUnits, io.units, drawn, io.ownTiles.attached, io.keep),
+  )
+  const attaching = unloadedCut.departures.filter(d => attachedBy(d, drawn))
+  totals.attachDepartures += attaching.length
+  totals.otherDepartures += unloadedCut.departures.length - attaching.length
+  totals.fetchedTiles += unloadedUnits.filter(
+    u =>
+      u.kind === 'tile' &&
+      u.length > 0 &&
+      !(u.start < drawn.end && u.end > drawn.start),
+  ).length
+  report(
+    'own-steps-not-by-the-attach-rule',
+    where,
+    ownStepsOff(unloadedCut, drawn, io.ownTiles.byRecord),
+  )
   report(
     'attach-from-row-not-from-blocks',
     where,
-    await attachOff(unloadedCut, window, io.units, io.ownTiles, io.byBlocks),
+    await attachOff(
+      unloadedCut,
+      window,
+      drawn,
+      io.units,
+      io.ownTiles.byRecord,
+      io.byBlocks,
+    ),
   )
   const unloaded = await digested(unloadedCut)
   const again = digests(await cut(false, true))
   io.reads.length = 0
   const loadedCut = await cut(true)
+  report(
+    'own-steps-not-by-the-attach-rule',
+    `${where} loaded`,
+    ownStepsOff(loadedCut, drawn, io.ownTiles.byRecord),
+  )
   report(
     'expanded-cut-read-a-blocks-unit',
     where,
@@ -1377,7 +1525,11 @@ async function main() {
               units,
               bytesFor: batches.length > 1 ? undefined : said,
               atMost: said,
-              ownTiles: await ownTilesOver(file, units, window, mode),
+              ownTiles: await ownTilesOver(file, units, drawnOf(window, mode)),
+              keep:
+                (batches.length > 1
+                  ? walksKept(batch, window.refName)
+                  : undefined) ?? (() => true),
               byBlocks,
             },
           ).catch((error: unknown) => {
@@ -1401,7 +1553,7 @@ async function main() {
     }
   }
   print(
-    `read: ${totals.bytes} bytes by the unloaded cuts, each held to bytesFor ${batches.length > 1 ? 'as its most' : 'exactly'}; ${totals.attachRecords} records within the attach limit held to their tiles' blocks rows, ${totals.attachRuns} of them with own steps in an abridged piece; ${totals.threw} pairs of cuts threw`,
+    `read: ${totals.bytes} bytes by the unloaded cuts, each held to bytesFor ${batches.length > 1 ? 'as its most' : 'exactly'}; ${totals.fetchedTiles} tiles read past a window's, each held to a record that leaves or rejoins on the window and its context; ${totals.attachDepartures} departures that leave or rejoin there within the attach limit and ${totals.otherDepartures} that do not, each held to own steps for the first alone; ${totals.attachRecords} of those records held to their tiles' blocks rows, ${totals.attachRuns} of them with own steps in an abridged piece; ${totals.threw} pairs of cuts threw`,
   )
   print(
     `compared: ${totals.windows} windows, ${totals.cuts} pairs of cuts, ${totals.fragments} fragments (${totals.unloadedFragments} with unloaded pieces, ${totals.placeholders} placeholder steps), ${totals.departures} departures, ${totals.gaps} gaps, ${totals.covers} haplotype covers, ${totals.kept} reference nodes kept, ${totals.links} links`,

@@ -26,9 +26,10 @@ test('the equality harness walks a departure from the end of a node the referenc
 // blocks.R and between.R hold a piece on 0-20 between two of its line over a
 // window on 60-90, which a cut that expands its walk loads; every cut of
 // either keeps placeholders, and the harness's reader makes each after the
-// ones before it
+// ones before it. Each has departures that leave or rejoin on a window and
+// departures that jump over one
 test.each(['blocks.R', 'between.R', 'ownends.R'])(
-  'the equality harness finds no placeholder in a loaded cut of %s, each id on one run, and each cut the same from a fresh reader',
+  'the equality harness finds no placeholder in a loaded cut of %s, each id on one run, each cut the same from a fresh reader, and own steps on the departures that leave or rejoin on the window alone',
   fixture => {
     const run = harness(
       fixture,
@@ -41,15 +42,19 @@ test.each(['blocks.R', 'between.R', 'ownends.R'])(
     )
     expect(run.stdout).toContain('differences from the loaded cut: 0 in 0')
     expect(run.stdout).not.toContain(' 0 placeholder steps')
+    expect(run.stdout).toMatch(
+      /[1-9]\d* departures that leave or rejoin there within the attach limit and [1-9]\d* that do not/,
+    )
     expect(run.status).toBe(0)
   },
 )
 
 // The graphs of gfa-to-tabix's ADR 0013, where a record's own steps are told
-// by hapBp alone: each window is one tile, so the other tiles are fetched to
-// attach, and the harness holds each placeholder to the run its blocks row
-// gives, each expanding cut to no blocks unit, and each cut's bytes to
-// bytesFor
+// by hapBp alone: each window is one tile, so a tile is fetched to attach
+// wherever a record leaves or rejoins on the window with own steps in
+// another, and the harness holds the tiles fetched to those records, each
+// placeholder to the run its blocks row gives, each expanding cut to no
+// blocks unit, and each cut's bytes to bytesFor
 test.each([
   'adv.R',
   'edge.R',
@@ -61,7 +66,7 @@ test.each([
   'twinown690.R',
   'twopieces.R',
 ])(
-  'the equality harness finds each own run of %s where its blocks row has it, no blocks unit read by an expanding cut, and bytesFor the bytes read',
+  'the equality harness finds each tile fetched for %s named by a record that leaves or rejoins on the window, each own run where its blocks row has it, no blocks unit read by an expanding cut, and bytesFor the bytes read',
   fixture => {
     const run = harness(
       fixture,
@@ -73,6 +78,7 @@ test.each([
       '0',
     )
     expect(run.stdout).toContain('differences from the loaded cut: 0 in 0')
+    expect(run.stdout).toMatch(/[1-9]\d* tiles read past a window's/)
     expect(run.stdout).toMatch(
       /[1-9]\d* of them with own steps in an abridged piece; 0 pairs of cuts threw/,
     )
