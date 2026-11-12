@@ -319,33 +319,24 @@ function coveredOnce(spans: [number, number][]) {
   return out
 }
 
-// The most steps a forms cut keeps; a cut at the MHC with every abridged walk
-// read in full keeps 9.4 M
+// The most steps a forms cut keeps
 export const FORMS_STEP_BUDGET = 16_000_000
 
 export interface FormsCutOptions {
-  // the most steps the cut keeps, past which it throws RegionTooLargeError;
-  // FORMS_STEP_BUDGET by default
+  // the most steps the cut keeps, FORMS_STEP_BUDGET at least
   stepBudget?: number
-  // the most compressed bytes the cut fetches from the region's tiles, past
-  // which it throws RegionTooLargeError; WALK_BUDGETS' by default
+  // the most compressed bytes the cut fetches from the region's tiles and
+  // their blocks units; WALK_BUDGETS' by default
   byteBudget?: number
-  // the most compressed bytes the cut's departure read fetches, past which
-  // it throws DepartureReadError; WALK_BUDGETS' by default
+  // the most compressed bytes the cut's departure read fetches;
+  // WALK_BUDGETS' by default
   departureByteBudget?: number
   signal?: AbortSignal
 }
 
-/**
- * Every haplotype's departures over a region, for structuralForms, from a
- * cut without links: its departures hold every one over the region, those
- * leaving it and rejoining far away or jumping over it whole included. No
- * abridged walk is read in full: a piece the cut does not load gives the
- * same departures from its `blocks` row, which states its steps on R and
- * the bp of its own between them. A haplotype the header names with no walk
- * in the cut is listed with nothing covered. A region the index estimates
- * past `byteBudget` throws the reader's RegionTooLargeError before any read.
- */
+// Every haplotype's departures over a region, for structuralForms, from one
+// cut without links that expands no walk. A haplotype the header names with
+// no walk in the cut is listed with nothing covered.
 export async function formsCut(
   reader: Pick<WalkReader, 'header' | 'sequenceFor' | 'cut'>,
   region: { refName: string; start: number; end: number },
@@ -364,7 +355,7 @@ export async function formsCut(
     region.refName
   const cut = await reader.cut(refName, region, {
     links: false,
-    stepBudget,
+    stepBudget: Math.max(stepBudget, FORMS_STEP_BUDGET),
     byteBudget,
     departureByteBudget,
     signal,

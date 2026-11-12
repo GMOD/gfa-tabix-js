@@ -8,17 +8,14 @@ export const GAP_KINDS: GapKind[] = ['steps', 'read', 'own', 'unread']
 /**
  * One segment of a walk's stretch, by ADR 0001: `steps` the cut attached as
  * own sequence, with their ids; `read`, steps the cut read and kept out;
- * `own`, a record's unread middle, with its `missingBp` and whether the
- * piece it leaves or rejoins is one the cut did not load, whose own steps
- * expanding the walk reads; `unread`, pieces the cut did not read, between
- * the breakpoints on the reference it knows `before` and `after` them. A
- * step of an unloaded piece counts as any other, its placeholders included.
+ * `own`, a record's unread middle, with its `missingBp`; `unread`, pieces
+ * the cut did not read, between the breakpoints on the reference it knows
+ * `before` and `after` them
  */
 export interface GapSegment {
   kind: GapKind
   bp: number
   missingBp: number
-  abridged: boolean
   before: number
   after: number
   ids: number[]
@@ -66,8 +63,6 @@ export interface GapInputs {
   departures: WalkDeparture[]
   refName: string
   before: (run: WalkRun) => Float64Array
-  // the pieces of a run the cut did not load, each with its steps' range
-  unloaded: (run: WalkRun) => { from: number; to: number }[]
   attached: Map<WalkRun, Set<number>>
   spans: { run: WalkRun; first: number; last: number }[]
   breakpoint: (run: WalkRun, i: number, leave: boolean) => { pos: number }
@@ -134,7 +129,6 @@ export function walkGaps({
   departures,
   refName,
   before,
-  unloaded,
   attached,
   breakpoint,
   spans,
@@ -159,25 +153,6 @@ export function walkGaps({
     const walkRuns = [...(runsBy.get(name) ?? [])].sort(
       (a, b) => a.hapOffset - b.hapOffset,
     )
-    // where each unloaded piece's stretch on R starts on the contig, and
-    // where it ends
-    const unloadedStarts = new Set<number>()
-    const unloadedEnds = new Set<number>()
-    for (const run of walkRuns) {
-      const bp = before(run)
-      for (const { from, to } of unloaded(run)) {
-        let first = from
-        let last = to - 1
-        while (first < last && Number.isNaN(run.refStarts[first])) {
-          first++
-        }
-        while (last > first && Number.isNaN(run.refStarts[last])) {
-          last--
-        }
-        unloadedStarts.add(run.hapOffset + bp[first]!)
-        unloadedEnds.add(run.hapOffset + bp[last + 1]!)
-      }
-    }
     const attachSteps: Step[] = []
     for (const run of attachBy.get(name) ?? []) {
       const marks = attached.get(run)
@@ -410,7 +385,6 @@ export function walkGaps({
             kind,
             bp,
             missingBp: 0,
-            abridged: false,
             before: Number.NaN,
             after: Number.NaN,
             ids: [],
@@ -454,16 +428,7 @@ export function walkGaps({
             step.attached ? { ids: [step.id], rev: [step.rev] } : {},
           )
         } else if (own) {
-          add(
-            'own',
-            bp,
-            {
-              missingBp: own.d.missingBp,
-              abridged:
-                unloadedEnds.has(own.start) || unloadedStarts.has(own.end),
-            },
-            own.d,
-          )
+          add('own', bp, { missingBp: own.d.missingBp }, own.d)
         } else {
           add('unread', bp, breakpointsAround(a, b))
         }

@@ -213,6 +213,16 @@ export class RefPath {
   end(i: number) {
     return this.starts[i]! + this.before[i + 1]! - this.before[i]!
   }
+
+  // from the first base to the last of the positions over `span`
+  hull(span: { start: number; end: number }) {
+    const at = firstAtLeast(this.starts, span.start)
+    const first = at > 0 && this.end(at - 1) > span.start ? at - 1 : at
+    const past = firstAtLeast(this.starts, span.end)
+    return past > first
+      ? { start: this.starts[first]!, end: this.end(past - 1) }
+      : undefined
+  }
 }
 
 function firstAtLeast(sorted: number[], value: number) {
@@ -504,37 +514,9 @@ function sliceBases(
   }
 }
 
-// A step on R as a record would rejoin at it or leave from it: its breakpoint
-// and whether it runs against R
-export interface StepEnd {
-  pos: number
-  reversed: boolean
-}
-
-/**
- * An `abridged` line, one piece the writer moved to a detail record: where
- * its first step on R begins on its contig, that step as a rejoin and its
- * last step on R as a leave, each at the occurrence its `@k` names, else the
- * first and the one nearest it. Its detail record, which holds the path's
- * moved pieces in the tile, is the sequence's `detail` unit named for the
- * tile's nominal start and the row's detail number.
- */
-export interface AbridgedPiece {
-  chunkStart: number
-  name: string
-  fragStart: number
-  hapOffset: number
-  piece: number
-  abridged: Abridged
-  rejoin: StepEnd
-  leave: StepEnd
-}
-
-function abridgedPiece(
-  cols: string[],
-  path: RefPath,
-  tileStart: number,
-): AbridgedPiece {
+// An `abridged` line: where its first step on R begins on its contig, that
+// step as a record rejoins at it and its last as one leaves from it
+function abridgedPiece(cols: string[], path: RefPath, tileStart: number) {
   const count = (k: number) => {
     const n = Number(cols[k])
     if (cols[7]?.includes(',') === true) {
@@ -564,21 +546,22 @@ function abridgedPiece(
   }
   const rejoinReversed = path.handles[i0] !== h0
   const leaveReversed = path.handles[i1] !== h1
+  const abridged: Abridged = {
+    steps: count(8),
+    bp: count(9),
+    detail: {
+      refName: cols[0]!,
+      start: tileStart,
+      name: `${tileStart}:${cols[12]!}`,
+    },
+  }
   return {
     chunkStart: tileStart,
     name: cols[4]!,
     fragStart: +cols[5]!,
     hapOffset: count(6),
     piece: count(7),
-    abridged: {
-      steps: count(8),
-      bp: count(9),
-      detail: {
-        refName: cols[0]!,
-        start: tileStart,
-        name: `${tileStart}:${cols[12]!}`,
-      },
-    },
+    abridged,
     rejoin: {
       pos: rejoinReversed ? path.end(i0) : path.starts[i0]!,
       reversed: rejoinReversed,
@@ -590,62 +573,152 @@ function abridgedPiece(
   }
 }
 
-// A `blocks` row's list, `<d><+|-><len>[:<own>]` per block: where each
-// begins on the reference, its bp, whether it runs against R, and the bp of
-// the piece's own before it
-function parseBlocks(list: string) {
+export type AbridgedPiece = ReturnType<typeof abridgedPiece>
+
+// A step that stands for steps of a piece the cut did not build, on R or
+// off it: it has their bp and is in no fragment
+export const SKIPPED = -(2 ** 31)
+
+const DIGIT_0 = 48
+
+// A `blocks` row from `path` on: `ownBefore ownAfter list`, each block of
+// the list as where it begins on R, its bp, whether it runs against R and
+// the piece's own bp before it
+export function parseBlocks(cols: string[], from = 4) {
+  const list = cols[from + 5]
+  const ownBefore = Number(cols[from + 3])
+  const ownAfter = Number(cols[from + 4])
+  if (
+    list === undefined ||
+    !Number.isInteger(ownBefore) ||
+    !Number.isInteger(ownAfter)
+  ) {
+    throw new WalkRowError(
+      `a blocks row with no ownBefore and ownAfter, from a gfa-to-tabix before 4.1's release, so rebuild the walk file with gfa-to-tabix 4.1 or later: ${cols.join('\t').slice(0, 120)}`,
+    )
+  }
   const begins: number[] = []
   const lengths: number[] = []
   const against: boolean[] = []
   const own: number[] = []
   let at = 0
-  for (const token of list.split(',')) {
-    const match = /^(-?\d+)([+-])(\d+)(?::(\d+))?$/.exec(token)
-    if (!match) {
+  // 0 the offset, 1 the length, 2 the own bp
+  let part = 0
+  let value = 0
+  let digits = 0
+  let negative = false
+  let begin = 0
+  let length = 0
+  let reversed = false
+  for (let p = 0; p <= list.length; p++) {
+    const ch = p < list.length ? list.charCodeAt(p) : 44
+    const digit = ch - DIGIT_0
+    if (digit >= 0 && digit <= 9) {
+      value = value * 10 + digit
+      digits++
+    } else if (ch === 45 && part === 0 && digits === 0 && !negative) {
+      negative = true
+    } else if ((ch === 43 || ch === 45) && part === 0 && digits > 0) {
+      begin = at + (negative ? -value : value)
+      reversed = ch === 45
+      part = 1
+      value = 0
+      digits = 0
+    } else if (ch === 58 && part === 1 && digits > 0) {
+      length = value
+      part = 2
+      value = 0
+      digits = 0
+    } else if (ch === 44 && part > 0 && digits > 0) {
+      length = part === 1 ? value : length
+      begins.push(begin)
+      lengths.push(length)
+      against.push(reversed)
+      own.push(part === 2 ? value : 0)
+      at = reversed ? begin - length : begin + length
+      part = 0
+      value = 0
+      digits = 0
+      negative = false
+    } else {
       throw new WalkRowError(`not a blocks row's list: ${list.slice(0, 80)}`)
     }
-    const begin = at + Number(match[1])
-    const length = Number(match[3])
-    const reversed = match[2] === '-'
-    begins.push(begin)
-    lengths.push(length)
-    against.push(reversed)
-    own.push(Number(match[4] ?? 0))
-    at = reversed ? begin - length : begin + length
   }
-  return { begins, lengths, against, own, end: at }
+  return { ownBefore, ownAfter, begins, lengths, against, own, end: at }
+}
+
+export type PieceBlocks = ReturnType<typeof parseBlocks>
+
+const blockLow = (blocks: PieceBlocks, k: number) =>
+  blocks.against[k]!
+    ? blocks.begins[k]! - blocks.lengths[k]!
+    : blocks.begins[k]!
+
+const blockEnd = (blocks: PieceBlocks, k: number) =>
+  blocks.against[k]!
+    ? blocks.begins[k]! - blocks.lengths[k]!
+    : blocks.begins[k]! + blocks.lengths[k]!
+
+// Whether the departure before block k, from the block before it, can lie
+// over `span`
+const jumpOver = (
+  blocks: PieceBlocks,
+  k: number,
+  span: { start: number; end: number },
+) => {
+  const leave = blockEnd(blocks, k - 1)
+  const rejoin = blocks.begins[k]!
+  return (
+    Math.min(leave, rejoin) - 1 < span.end &&
+    Math.max(leave, rejoin) + 1 > span.start
+  )
+}
+
+// The first and last blocks over `span`, and whether a run of the piece's
+// own lies in a departure over it
+export function blocksOver(
+  blocks: PieceBlocks,
+  span: { start: number; end: number },
+) {
+  let first = -1
+  let last = -1
+  let ownOver = false
+  for (let k = 0; k < blocks.begins.length; k++) {
+    const lo = blockLow(blocks, k)
+    if (lo < span.end && lo + blocks.lengths[k]! > span.start) {
+      first = first < 0 ? k : first
+      last = k
+    }
+    ownOver ||= k > 0 && blocks.own[k]! > 0 && jumpOver(blocks, k, span)
+  }
+  return { first, last, ownOver }
 }
 
 /**
  * The walk row of an abridged piece the cut does not load, from its `blocks`
- * row's `list` and its tile's R: the reference steps each block covers, in
- * the block's direction, and one placeholder step for each run of the
- * piece's own, of that run's bp, with an id `placeholder` gives and its node
- * placed on the piece's contig. `tail` is the bp of its own after its last
- * step on R, which the next piece's start gives where the cut read it; a
- * line's first piece runs from the line's start. A list that is not the
- * piece its `abridged` row states throws.
+ * row and its tile's R. Blocks `core[0]` to `core[1]` are built whole, a
+ * reference step each, with a placeholder step for each run of the piece's
+ * own. Of the others the row holds the piece's first and last steps on R, the
+ * run of its own before and after them, and both sides of each departure
+ * that can lie over `over`; a SKIPPED step has the bp of what lies between,
+ * and `cuts` are where the steps either side of one are not consecutive.
  */
 export function unloadedRow(
   piece: AbridgedPiece,
-  list: string,
+  blocks: PieceBlocks,
   path: RefPath,
-  tail: number,
-  placeholder: () => number,
+  over: { start: number; end: number },
+  core: [number, number] | undefined,
+  placeholder: (start: number, end: number) => number,
 ) {
-  const { name, fragStart, abridged, rejoin, leave } = piece
-  const blocks = parseBlocks(list)
+  const { name, abridged, rejoin, leave } = piece
   const count = blocks.begins.length
-  const lead = piece.piece === 0 ? piece.hapOffset - fragStart : 0
   const from = new Int32Array(count)
   const to = new Int32Array(count)
-  let n = (lead > 0 ? 1 : 0) + (tail > 0 ? 1 : 0)
-  let bp = 0
+  let total = 0
   for (let k = 0; k < count; k++) {
     const length = blocks.lengths[k]!
-    const lo = blocks.against[k]!
-      ? blocks.begins[k]! - length
-      : blocks.begins[k]!
+    const lo = blockLow(blocks, k)
     const i = path.startingAt(lo)
     const j = i === undefined ? undefined : path.past(i, length)
     if (
@@ -660,77 +733,161 @@ export function unloadedRow(
     }
     from[k] = i
     to[k] = j
-    n += j - i + (blocks.own[k]! > 0 ? 1 : 0)
-    bp += length + blocks.own[k]!
-  }
-  if (tail < 0) {
-    throw new WalkRowError(
-      `piece ${piece.piece + 1} of ${name} starts ${-tail} bp before piece ${piece.piece}'s ${abridged.bp} bp from ${piece.hapOffset} end`,
-    )
+    total += length + blocks.own[k]!
   }
   if (
-    bp !== abridged.bp ||
+    count === 0 ||
+    total !== abridged.bp ||
     blocks.own[0] !== 0 ||
+    blocks.ownBefore < 0 ||
+    blocks.ownAfter < 0 ||
     blocks.begins[0] !== rejoin.pos ||
     blocks.against[0] !== rejoin.reversed ||
     blocks.end !== leave.pos ||
     blocks.against[count - 1] !== leave.reversed
   ) {
     throw new WalkRowError(
-      `${name}'s blocks row, piece ${piece.piece}, is not the ${abridged.bp} bp its abridged row states from ${rejoin.pos}${rejoin.reversed ? '-' : '+'} to ${leave.pos}${leave.reversed ? '-' : '+'}: ${list.slice(0, 80)}`,
+      `${name}'s blocks row, piece ${piece.piece}, is not the ${abridged.bp} bp its abridged row states from ${rejoin.pos}${rejoin.reversed ? '-' : '+'} to ${leave.pos}${leave.reversed ? '-' : '+'}`,
     )
   }
-  const ids = new Int32Array(n)
-  const rev = new Uint8Array(n)
-  const refStarts = new Float64Array(n).fill(Number.NaN)
-  const against = new Uint8Array(n)
+  const inCore = (k: number) =>
+    core !== undefined && k >= core[0] && k <= core[1]
+  const joined = (k: number) =>
+    inCore(k - 1) || inCore(k) || jumpOver(blocks, k, over)
+  const ids: number[] = []
+  const rev: number[] = []
+  const refStarts: number[] = []
+  const against: number[] = []
+  const bp: number[] = []
+  const cuts: number[] = []
   const nodes = new Map<number, PlacedNode>()
-  let at = 0
-  let hap = piece.hapOffset - lead
+  const links: number[] = []
+  const hapOffset = piece.hapOffset - blocks.ownBefore
+  let hap = hapOffset
+  let skipped = 0
+  const push = (
+    id: number,
+    reversed: number,
+    refStart: number,
+    opposed: number,
+    length: number,
+  ) => {
+    ids.push(id)
+    rev.push(reversed)
+    refStarts.push(refStart)
+    against.push(opposed)
+    bp.push(length)
+    hap += length
+  }
+  const flush = () => {
+    if (skipped > 0) {
+      const length = skipped
+      skipped = 0
+      cuts.push(ids.length)
+      push(SKIPPED, 0, Number.NaN, 0, length)
+      cuts.push(ids.length)
+    }
+  }
   const own = (length: number) => {
-    if (length > 0) {
-      const id = placeholder()
-      nodes.set(id, {
-        refName: name,
-        start: hap,
-        end: hap + length,
-        rank: 1,
-        passes: 0,
-        placeholder: true,
-      })
-      ids[at++] = id
-      hap += length
-    }
+    flush()
+    const id = placeholder(hap, hap + length)
+    nodes.set(id, {
+      refName: name,
+      start: hap,
+      end: hap + length,
+      rank: 1,
+      passes: 0,
+      placeholder: true,
+    })
+    push(id, 0, Number.NaN, 0, length)
+    return id * 2
   }
-  own(lead)
+  const step = (i: number, reversed: boolean) => {
+    flush()
+    const h = path.handleAt(i, !reversed)
+    push(
+      idOf(h),
+      h & 1,
+      path.starts[i]!,
+      reversed ? 1 : 0,
+      path.end(i) - path.starts[i]!,
+    )
+  }
+  const firstOf = (k: number) => (blocks.against[k]! ? to[k]! - 1 : from[k]!)
+  const lastOf = (k: number) => (blocks.against[k]! ? from[k]! : to[k]! - 1)
+  const handle = (k: number, i: number) => path.handleAt(i, !blocks.against[k]!)
+  let before = blocks.ownBefore > 0 ? own(blocks.ownBefore) : undefined
+  const first = before ?? handle(0, firstOf(0))
   for (let k = 0; k < count; k++) {
-    own(blocks.own[k]!)
     const reversed = blocks.against[k]!
-    for (
-      let i = reversed ? to[k]! - 1 : from[k]!;
-      reversed ? i >= from[k]! : i < to[k]!;
-      i += reversed ? -1 : 1
-    ) {
-      const h = path.handleAt(i, !reversed)
-      ids[at] = idOf(h)
-      rev[at] = h & 1
-      refStarts[at] = path.starts[i]!
-      against[at++] = reversed ? 1 : 0
+    const run = blocks.own[k]!
+    const entry = handle(k, firstOf(k))
+    if (k > 0 && run === 0) {
+      links.push(handle(k - 1, lastOf(k - 1)), entry)
+    } else if (k > 0 && joined(k)) {
+      before = own(run)
+      links.push(handle(k - 1, lastOf(k - 1)), before)
+    } else {
+      skipped += run
     }
-    hap += blocks.lengths[k]!
+    if (before !== undefined) {
+      links.push(before, entry)
+      before = undefined
+    }
+    const size = to[k]! - from[k]!
+    const needFirst = k === 0 || joined(k)
+    const needLast = k === count - 1 || joined(k + 1)
+    if (inCore(k)) {
+      for (
+        let i = firstOf(k);
+        reversed ? i >= from[k]! : i < to[k]!;
+        i += reversed ? -1 : 1
+      ) {
+        step(i, reversed)
+      }
+    } else {
+      const firstBp = path.end(firstOf(k)) - path.starts[firstOf(k)]!
+      const lastBp = path.end(lastOf(k)) - path.starts[lastOf(k)]!
+      if (needFirst || (size === 1 && needLast)) {
+        step(firstOf(k), reversed)
+      } else {
+        skipped += firstBp
+      }
+      if (size > 1) {
+        skipped += blocks.lengths[k]! - firstBp - lastBp
+        if (needLast) {
+          step(lastOf(k), reversed)
+        } else {
+          skipped += lastBp
+        }
+      }
+    }
   }
-  own(tail)
+  flush()
+  const exit = handle(count - 1, lastOf(count - 1))
+  const after = blocks.ownAfter > 0 ? own(blocks.ownAfter) : undefined
+  if (after !== undefined) {
+    links.push(exit, after)
+  }
+  const n = ids.length
   const row: WalkRow = {
     chunkStart: piece.chunkStart,
     name,
-    fragStart,
-    hapOffset: piece.hapOffset - lead,
+    fragStart: piece.fragStart,
+    hapOffset,
     piece: piece.piece,
     n,
-    steps: { ids, rev, refStarts, against },
+    steps: {
+      ids: Int32Array.from(ids),
+      rev: Uint8Array.from(rev),
+      refStarts: Float64Array.from(refStarts),
+      against: Uint8Array.from(against),
+      bp: Float64Array.from(bp),
+    },
+    cuts: cuts.filter(at => at > 0 && at < n),
     abridged,
   }
-  return { row, nodes }
+  return { row, nodes, links, first, last: after ?? exit }
 }
 
 const refRows = (rows: string[][]) =>
@@ -916,6 +1073,7 @@ export function decodeChunk(
         n,
         interior,
         steps,
+        span: [+cols[1]!, +cols[2]!],
       })
     }
   }

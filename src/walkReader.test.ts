@@ -91,9 +91,11 @@ const departure = (d: WalkDeparture) => [
   departureKind(d),
   d.fromSteps ? 'steps' : 'record',
   d.steps
-    ? [...d.steps.ids]
-        .map((id, k) => (d.steps!.rev[k]! !== 0 ? '<' : '>') + id)
-        .join('')
+    ? d.steps.ids.some(isPlaceholder)
+      ? d.steps.ids.length
+      : [...d.steps.ids]
+          .map((id, k) => (d.steps!.rev[k]! !== 0 ? '<' : '>') + id)
+          .join('')
     : undefined,
 ]
 
@@ -1027,13 +1029,12 @@ test('an unloaded walk cuts to the fragment its loaded one does, a placeholder f
       : [],
   )
   expect(placeholders).toContainEqual({
-    name: String(h[0]!.ids[3]),
+    name: 'H#1#h:118-121',
     bp: 3,
     on: 'H#1#h',
     from: 118,
   })
   expect(new Set(placeholders.map(p => p.name)).size).toBe(placeholders.length)
-  expect(placeholders.every(p => Number(p.name) < 0)).toBe(true)
   expect(loaded.tables.nodes.placeholders!.some(flag => flag === 1)).toBe(false)
   walks.names.forEach((name, i) => {
     expect(walks.abridgedSteps![i]).toBe(
@@ -1462,10 +1463,10 @@ test('a file past 4 GiB is read at its exact offsets', async () => {
 //   W R 0 c >1>2>3>4>5>6
 //   W X 1 c >1>2>11>12>13>5>6
 test.each([
-  { expand: undefined, steps: undefined },
+  { expand: undefined, steps: 1 },
   { expand: (name: string) => name === 'X#1#c', steps: '>11>12>13' },
 ])(
-  "an attach fetch reads an abridged piece's own steps where the cut expands the walk: $steps",
+  "an attach fetch reads an abridged piece's own steps where the cut expands the walk, and else holds a placeholder for them: $steps",
   async ({ expand, steps }) => {
     const { departures } = await reader('ownends.R').cut(
       'R#0#c',
@@ -2148,11 +2149,25 @@ test("a tag after an abridged row's detail column names no other detail unit", a
     'R#0#chr 0:0 10 20 nodes 5 8',
     'R#0#chr 0:0 10 20 route 6 10 -4',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
-    'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,0+5:8 xx:i:1',
+    'R#0#chr 0 10 20 blocks H#1#h 0 0 0 0 10+5,0+5:8 xx:i:1',
   ]).cut('R#0#chr', { start: 0, end: 20 }, { context: 0 })
   expect(
     fragments.flatMap(f => (f.abridged ?? []).map(a => a.detail.name)),
   ).toEqual(['0:0'])
+})
+
+test('a sequence with no detail unit reads beside one with a detail unit and no blocks unit', async () => {
+  const { fragments } = await inline([
+    '#walks format:i:7 tile:i:20',
+    '#reference R',
+    '#haplotype H#1',
+    'R#0#plain 0 ref R#0#plain 0 0 0 4 2,2,2,2 5,5,5,5 .',
+    'R#0#plain 0 walk H#1#p 0 0 0 4 2 .',
+    'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
+    'R#0#chr 0 abridged H#1#h 0 0 0 3 18 6 8 0',
+    'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 .',
+  ]).cut('R#0#plain', { start: 0, end: 20 })
+  expect(fragments.map(f => f.name)).toEqual(['R#0#plain', 'H#1#p'])
 })
 
 // R's chr0 is two nodes of 0 bp: its tile states [0, 0), so a window from 0

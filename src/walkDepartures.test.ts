@@ -388,14 +388,9 @@ describe('a forms cut', () => {
     expect(detailReads).toBe(0)
   })
 
-  test('throws RegionTooLargeError past its step budget', async () => {
-    await expect(
-      formsCut(reader('abridged.R'), region, { stepBudget: 3 }),
-    ).rejects.toBeInstanceOf(RegionTooLargeError)
+  test('keeps to FORMS_STEP_BUDGET steps at least, whatever smaller budget its caller gives', async () => {
     expect(
-      await formsCut(reader('abridged.R'), region, {
-        stepBudget: FORMS_STEP_BUDGET,
-      }),
+      await formsCut(reader('abridged.R'), region, { stepBudget: 3 }),
     ).toEqual(await formsCut(reader('abridged.R'), region))
   })
 
@@ -444,6 +439,23 @@ describe('a forms cut', () => {
       'M#1': { haplotype: 'M#1', covered: [[0, 18]], departures: [] },
     })
     expect(await unloaded('contigends.R', window)).toEqual(whole)
+    const fragments = async (expand?: () => boolean) => {
+      const cut = await reader('contigends.R').cut('R#0#c', window, { expand })
+      return cut.fragments.map(f => [
+        f.name,
+        f.hapStart,
+        f.hapEnd,
+        f.trimmedBefore,
+        f.trimmedAfter,
+        [...f.refStarts].join(','),
+      ])
+    }
+    expect(await fragments()).toEqual(await fragments(() => true))
+    expect(await fragments()).toEqual([
+      ['R#0#c', 0, 36, 0, 0, '0,6,12,18,24,30'],
+      ['M#1#c', 0, 18, 0, 30, '0,6,12'],
+      ['L#1#c', 30, 54, 30, 0, '12,18,24,30'],
+    ])
   })
 
   // R over five 2000 bp nodes in tile 0 and 1000 bp nodes from 10000

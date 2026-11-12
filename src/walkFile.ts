@@ -79,7 +79,7 @@ async function unitLines(bytes: Uint8Array, unit: string) {
   return text.split('\n').filter(line => line !== '')
 }
 
-export function unitName(unit: WalkUnit) {
+function unitName(unit: WalkUnit) {
   return `The unit at byte ${unit.offset} of the walk file, ${unit.refName}'s ${unit.kind} ${unit.name} over [${unit.start}, ${unit.end}) as its table lists it,`
 }
 
