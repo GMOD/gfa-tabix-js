@@ -6,12 +6,35 @@ import { BlobFile } from 'generic-filehandle2'
 import { isPlaceholder, runName } from './walkRows.ts'
 
 import type { GraphTables } from './util.ts'
-import type { WalkUnit } from './walkFile.ts'
+import type { WalkFilehandle, WalkUnit } from './walkFile.ts'
 import type { WalkReader } from './walkReader.ts'
 import type { FilehandleOptions } from 'generic-filehandle2'
 import type { Hash } from 'node:crypto'
 
 type Cut = Awaited<ReturnType<WalkReader['cut']>>
+
+// Every read `data` makes from here on, as its byte range
+export function readsOf(data: WalkFilehandle) {
+  const read = data.read.bind(data)
+  const reads: { position: number; length: number }[] = []
+  data.read = (length, position, opts) => {
+    reads.push({ position, length })
+    return read(length, position, opts)
+  }
+  return reads
+}
+
+// The units of a sequence's table that `reads` fetched, each as often as read
+export const unitsRead = (
+  units: WalkUnit[],
+  reads: { position: number; length: number }[],
+) =>
+  reads.flatMap(({ position, length }) =>
+    units.filter(u => u.offset >= position && u.offset < position + length),
+  )
+
+export const bytesRead = (reads: { length: number }[]) =>
+  reads.reduce((sum, read) => sum + read.length, 0)
 
 // Each placeholder of a cut as its id and its run's name: a node flagged one
 // by the stretch it states, and a placeholder step of a fragment by where the

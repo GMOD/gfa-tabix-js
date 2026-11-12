@@ -455,28 +455,60 @@ export class WalkReader {
     )
   }
 
-  // The compressed bytes a cut of `region` reads before any attach fetch or
-  // expansion: its tiles, their blocks units and its departure blocks
+  /**
+   * The compressed bytes a cut of `region` reads when it keeps every walk
+   * and expands none: its tiles, their blocks units, its departure blocks,
+   * which this reads as the cut does, and the tiles its records within
+   * `attachBp` name for their own steps. A cut that keeps fewer walks reads
+   * no more, and one that expands walks no more but for their detail units
+   */
   async bytesFor(
     refName: string,
     region: { start: number; end: number },
-    opts: { signal?: AbortSignal; context?: number } = {},
+    opts: {
+      signal?: AbortSignal
+      context?: number
+      attachBp?: number
+      departureByteBudget?: number
+    } = {},
   ) {
+    const {
+      signal,
+      context = WALK_CONTEXT,
+      attachBp = ATTACH_BP,
+      departureByteBudget = WALK_BUDGETS.departureByteBudget,
+    } = opts
     checkRange(refName, region.start, region.end)
-    const drawn = drawnSpan(region, opts.context ?? WALK_CONTEXT)
-    const units = await this.units(refName, opts)
-    const tiles = new Set(
-      units
-        .filter(u => u.kind === 'tile' && overlaps(u, drawn))
-        .map(u => u.name),
+    const drawn = drawnSpan(region, context)
+    const units = await this.units(refName, { signal })
+    const { tiles, departureBlocks } = windowUnits(units, drawn)
+    checkDepartureBytes(departureBlocks, departureByteBudget)
+    const tileNames = new Set(tiles.map(u => u.name))
+    const { records, ownTiles } = departureRecords(
+      (await this.file.read(departureBlocks, signal)).flat(),
+      drawn,
+      undefined,
     )
-    return bytesOf(
-      units.filter(u =>
-        u.kind === 'blocks'
-          ? tiles.has(u.name)
-          : (u.kind === 'tile' || u.kind === 'departures') &&
-            overlaps(u, drawn),
-      ),
+    const attachNames = new Set(
+      records
+        .filter(d => d.ownBp <= attachBp)
+        .flatMap(d => ownTiles.get(d) ?? []),
+    )
+    const blocks = units.filter(
+      u => u.kind === 'blocks' && tileNames.has(u.name),
+    )
+    const attached = units.filter(
+      u =>
+        u.kind === 'tile' &&
+        u.length > 0 &&
+        attachNames.has(Number(u.name)) &&
+        !tileNames.has(u.name),
+    )
+    return (
+      bytesOf(tiles) +
+      bytesOf(blocks) +
+      bytesOf(departureBlocks) +
+      bytesOf(attached)
     )
   }
 

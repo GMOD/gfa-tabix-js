@@ -1443,7 +1443,9 @@ test.each([
   expect(await cut(headerReader)).toEqual(whole)
 })
 
-test("a sequence's length, the bytes a cut reads and the reference nodes over a window come from its tiles", async () => {
+// header.GRCh38.gfa: HG002#1's record over 600-2400 has its own steps in the
+// tile at 0, which a cut of 2100-2600 fetches to attach them
+test("a sequence's length and the reference nodes over a window come from its tiles, and the bytes a cut reads from its table and its records' ownTiles", async () => {
   const walks = reader('header.GRCh38')
   const units = await walks.units('GRCh38#0#chr1')
   const tile = (name: string) =>
@@ -1461,7 +1463,8 @@ test("a sequence's length, the bytes a cut reads and the reference nodes over a 
   ).toBe(
     tile('1000').length +
       tile('2000').length +
-      units.find(u => u.kind === 'departures' && u.start === 2000)!.length,
+      units.find(u => u.kind === 'departures' && u.start === 2000)!.length +
+      tile('0').length,
   )
   expect(
     (
