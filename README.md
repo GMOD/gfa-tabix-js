@@ -383,10 +383,11 @@ for (const d of departures) {
 - The rule is the same for a record and for a departure the cut computes inside
   one piece, so what a cut keeps does not turn on where the writer cut a walk
   into pieces
-- **`attachBp` bounds what a cut keeps, not what it reads.** A walk that leaves
+- **`attachBp` bounds what one departure brings into a cut.** A walk that leaves
   the reference on the window for megabases of its own would bring every node of
-  them into the cut; past `attachBp` the departure states its bp and no steps.
-  What a cut reads is bounded by the rule above and by `byteBudget`
+  them into the cut; past `attachBp` the departure states its bp and no steps,
+  and the cut fetches no tile for them. It is not what keeps a window's reads
+  down: the rule above is, with `byteBudget` past it
 - The steps come from the pieces the cut read. For a record that gets its steps
   and whose leave or rejoin piece lies outside the read, the cut fetches the
   tiles its `ownTiles` column names that it has not read for that walk, and

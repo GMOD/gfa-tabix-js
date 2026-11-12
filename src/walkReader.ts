@@ -137,11 +137,11 @@ export interface WalkCutOptions {
   // default; Infinity has no limit
   departureByteBudget?: number
   // the most bp of own sequence a departure gets its steps attached for,
-  // ATTACH_BP by default: it bounds the nodes a cut keeps for one departure,
-  // not what it reads. A departure gets its steps where it leaves or rejoins
-  // on the window or its context, and the cut fetches every tile holding own
-  // steps of such a record that its read lacks, which gives those records
-  // their steps and nothing else
+  // ATTACH_BP by default, which bounds the nodes one departure brings into a
+  // cut. A departure gets its steps where it leaves or rejoins on the window
+  // or its context, and the cut fetches every tile holding own steps of such
+  // a record that its read lacks, which gives those records their steps and
+  // nothing else
   attachBp?: number
   /**
    * @deprecated Ignored: every eligible record's tiles are fetched, their
