@@ -93,6 +93,7 @@ export {
   bpString,
   panSNContig,
   panSNHaplotype,
+  panSNHaplotypeOrSample,
   panSNMatchesPrefix,
   panSNSample,
 } from './util.ts'

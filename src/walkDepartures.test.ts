@@ -1,6 +1,7 @@
 import { LocalFile } from 'generic-filehandle2'
 
-import { RegionTooLargeError } from './util.ts'
+import { walkFileOf } from './testing.ts'
+import { RegionTooLargeError, panSNHaplotypeOrSample } from './util.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
 import { DepartureReadError, WalkReader } from './walkReader.ts'
 import { walkCut } from './walkRows.ts'
@@ -302,6 +303,29 @@ test("a fragment's ends lie where their pass does, where R passes a node again",
     covered: [[100, 2200]],
     departures: [{ refStart: 100, refEnd: 700, altLength: 300, ...plain }],
   })
+})
+
+// A graph of P lines named `sample#contig`, with no haplotype field: the
+// header lists H#c and H#d under H, and R#chr2 is the reference's
+test('paths named with no haplotype field are their sample’s, so a forms cut lists the header’s haplotypes and no other', async () => {
+  const walks = WalkReader.fromFilehandles(
+    walkFileOf([
+      '#walks format:i:8 tile:i:100',
+      '#reference R',
+      '#haplotype H',
+      'R#chr1 0 ref R#chr1 0 0 0 3 2,2,2 6,6,6 .',
+      'R#chr1 0 walk H#c 0 0 0 3 2 .',
+      'R#chr1 0 walk H#d 0 0 0 1 6 .',
+      'R#chr1 0 walk R#chr2 0 0 0 2 2 .',
+    ]),
+  )
+  expect((await walks.header()).haplotypes).toEqual(['H'])
+  const forms = await formsCut(walks, { refName: 'chr1', start: 0, end: 18 })
+  expect(forms.map(h => [h.haplotype, h.covered])).toEqual([['H', [[0, 12]]]])
+  expect(panSNHaplotypeOrSample('H#c')).toBe('H')
+  expect(panSNHaplotypeOrSample('H#1#c')).toBe('H#1')
+  expect(panSNHaplotypeOrSample('H#1#c#0')).toBe('H#1')
+  expect(panSNHaplotypeOrSample('chr1')).toBe('chr1')
 })
 
 describe('a forms cut', () => {

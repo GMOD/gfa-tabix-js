@@ -98,13 +98,19 @@ test('the haplotype filter keeps the named walks and the reference', () => {
   ).toEqual(['GRCh38#0#chr1', 'HG002#1#chr1', 'HG002#2#chr1', 'HG00097#2#CM2'])
 })
 
-test("a cut keeps its reference walk by the reference's whole name when it has no haplotype", () => {
+test("a cut keeps its reference's walks by its sample when its name has no haplotype field", () => {
   const keep = walksKept(['HG002'], 'chm13#chr1')!
-  expect(['chm13#chr1', 'HG002#1#chr1', 'HG003#1#chr1'].filter(keep)).toEqual([
-    'chm13#chr1',
-    'HG002#1#chr1',
-  ])
+  expect(
+    [
+      'chm13#chr1',
+      'chm13#chr2',
+      'chm13b#chr1',
+      'HG002#1#chr1',
+      'HG003#1#chr1',
+    ].filter(keep),
+  ).toEqual(['chm13#chr1', 'chm13#chr2', 'HG002#1#chr1'])
   expect(walksKept(['HG002'], 'GRCh38#0#chr1')!('GRCh38#0#chr1')).toBe(true)
+  expect(walksKept(['HG002'], 'GRCh38#0#chr1')!('GRCh38#1#chr1')).toBe(false)
 })
 
 describe('the step budget', () => {

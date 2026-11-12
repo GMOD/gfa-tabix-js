@@ -1,7 +1,7 @@
 import {
   RegionTooLargeError,
   bpString,
-  panSNHaplotype,
+  panSNHaplotypeOrSample,
   panSNMatchesPrefix,
 } from './util.ts'
 import { SKIPPED, placeAndLink } from './walkChunk.ts'
@@ -150,12 +150,12 @@ export function walkNameFilter(
 }
 
 /**
- * The walks a cut on `refName` decodes: its own and those `wanted` names. A
- * pggb P-line names a reference with no haplotype field (`chm13#chr1`), so the
- * filter matches the reference by its whole name.
+ * The walks a cut on `refName` decodes: its reference's and those `wanted`
+ * names. A pggb P-line names a reference with no haplotype field
+ * (`chm13#chr1`), whose walks are its sample's.
  */
 export function walksKept(wanted: string[] | undefined, refName: string) {
-  return walkNameFilter(wanted, panSNHaplotype(refName) ?? refName)
+  return walkNameFilter(wanted, panSNHaplotypeOrSample(refName))
 }
 
 // One stretch of a haplotype path: rows of consecutive piece index, decoded

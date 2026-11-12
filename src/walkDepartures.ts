@@ -1,4 +1,4 @@
-import { panSNHaplotype, panSNSample } from './util.ts'
+import { panSNHaplotypeOrSample } from './util.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkReader, WalkReaderHeader } from './walkReader.ts'
@@ -21,7 +21,8 @@ export interface Departure {
 }
 
 /**
- * A `sample#haplotype`'s departures, by refStart. `covered` spans the R
+ * A `sample#haplotype`'s departures, or a sample's where its paths' names
+ * have no haplotype field, by refStart. `covered` spans the R
  * exactly one of its paths reaches, each span within one path.
  */
 export interface HaplotypeDepartures {
@@ -88,7 +89,7 @@ export function walkDepartures(
     const node = nodes.get(id)
     return node ? node.end - node.start : 0
   }
-  const reference = panSNHaplotype(refName) ?? refName
+  const reference = panSNHaplotypeOrSample(refName)
   const byPath = new Map<string, Item[]>()
   const add = (name: string, item: Item) => {
     const items = byPath.get(name)
@@ -109,7 +110,7 @@ export function walkDepartures(
   }
   const byHaplotype = new Map<string, HaplotypeDepartures>()
   for (const [name, items] of byPath) {
-    const haplotype = panSNHaplotype(name) ?? panSNSample(name)
+    const haplotype = panSNHaplotypeOrSample(name)
     if (haplotype === reference || name === refName) {
       continue
     }

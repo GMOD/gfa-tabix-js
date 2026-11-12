@@ -161,6 +161,12 @@ export function panSNHaplotype(refName: string) {
   return parts.length >= 3 ? `${parts[0]}${SEP}${parts[1]}` : undefined
 }
 
+// What a walk file's header lists a path under: `grape#1#chr1` -> `grape#1`,
+// and `grape#chr1`, which has no haplotype field, -> `grape`
+export function panSNHaplotypeOrSample(refName: string) {
+  return panSNHaplotype(refName) ?? panSNSample(refName)
+}
+
 export function panSNMatchesPrefix(
   refName: string,
   prefix: string | undefined,
