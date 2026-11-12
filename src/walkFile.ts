@@ -84,11 +84,42 @@ function unitName(unit: WalkUnit) {
 }
 
 function isTableHead(head: string, refName: string) {
-  const [tag, seq, start, , kind, name] = head.split('\t', 6)
+  const [tag, seq, start, , kind, name, ...more] = head.split('\t')
   return (
+    more.length === 0 &&
     [tag, seq, start, kind, name].join('\t') ===
-    ['#unit', refName, '0', 'table', '.'].join('\t')
+      ['#unit', refName, '0', 'table', '.'].join('\t')
   )
+}
+
+// The columns each row kind holds; any after them are tags, `NAME:T:value`
+const FIXED_COLUMNS = new Map([
+  ['ref', 12],
+  ['nodes', 6],
+  ['route', 7],
+  ['walk', 11],
+  ['abridged', 10],
+  ['blocks', 8],
+  ['departure', 15],
+])
+
+const TAG = /^[A-Za-z][A-Za-z0-9]*:[A-Za-z]:/
+
+// A column after a row's fixed ones that is no tag
+function untagged(row: string) {
+  const fixed = FIXED_COLUMNS.get(row.split('\t', 4)[3] ?? '') ?? Infinity
+  let at = -1
+  let found = 0
+  while (found < fixed) {
+    at = row.indexOf('\t', at + 1)
+    found = at < 0 ? Infinity : found + 1
+  }
+  return found === fixed
+    ? row
+        .slice(at + 1)
+        .split('\t')
+        .find(col => !TAG.test(col))
+    : undefined
 }
 
 function checkUnit(unit: WalkUnit, head: string | undefined, rows: string[]) {
@@ -107,13 +138,21 @@ function checkUnit(unit: WalkUnit, head: string | undefined, rows: string[]) {
       kinds !== undefined && (seq !== unit.refName || !kinds.includes(kind))
     )
   })
-  if (head?.split('\t', 6).join('\t') !== stated) {
+  const extra =
+    kinds === undefined
+      ? undefined
+      : rows.find(row => untagged(row) !== undefined)
+  if (head !== stated) {
     throw new WalkFormatError(
       `${unitName(unit)} starts ${JSON.stringify(head?.slice(0, 80) ?? '')}`,
     )
   } else if (stray !== undefined) {
     throw new WalkFormatError(
       `${unitName(unit)} holds a row that is not one of ${unit.refName}'s ${kinds?.join(', ')} rows: ${JSON.stringify(stray.slice(0, 80))}`,
+    )
+  } else if (extra !== undefined) {
+    throw new WalkFormatError(
+      `${unitName(unit)} holds a row with a column after its fixed ones that is no tag, ${JSON.stringify(untagged(extra)?.slice(0, 40))}: ${JSON.stringify(extra.slice(0, 80))}`,
     )
   }
 }
@@ -145,20 +184,25 @@ function parseDirectory(text: string): Directory {
   }
   let header: Directory['header'] | undefined
   const tables = new Map<string, { offset: number; length: number }>()
+  // a line whose first word starts with # and is not #header is a later
+  // addition
   for (const line of rest) {
-    const [name = '', offset, length] = line.split('\t')
+    const [name = '', offset, length, ...more] = line.split('\t')
     const range = { offset: Number(offset), length: Number(length) }
+    const known = name === '#header' || !name.startsWith('#')
     if (
-      !Number.isSafeInteger(range.offset) ||
-      !Number.isSafeInteger(range.length)
+      known &&
+      (more.length > 0 ||
+        !Number.isSafeInteger(range.offset) ||
+        !Number.isSafeInteger(range.length))
     ) {
       throw new WalkFormatError(
-        `A walk file directory line holds no byte range: ${line}`,
+        `A walk file directory line holds no byte range, or more than one: ${line}`,
       )
     }
     if (name === '#header') {
       header = range
-    } else {
+    } else if (known) {
       tables.set(name, range)
     }
   }
@@ -306,8 +350,17 @@ export class WalkFile {
       )
     }
     return entries.map(line => {
-      const [tag, seq = '', start, end, kind = '', name = '', at, size] =
-        line.split('\t')
+      const [
+        tag,
+        seq = '',
+        start,
+        end,
+        kind = '',
+        name = '',
+        at,
+        size,
+        ...more
+      ] = line.split('\t')
       const unit = {
         refName: seq,
         start: Number(start),
@@ -319,6 +372,7 @@ export class WalkFile {
       }
       if (
         tag !== '#entry' ||
+        more.length > 0 ||
         seq !== refName ||
         ![unit.start, unit.end, unit.offset, unit.length].every(
           Number.isSafeInteger,

@@ -2019,6 +2019,18 @@ test.each([
     (at: number, length: number) => tableOf(at, length).slice(0, -3),
     "R#0#chr's table ends partway through a line",
   ],
+  [
+    'an #entry line with a tag',
+    (at: number, length: number) =>
+      tableOf(at, length).replace(/\n$/, '\tzz:i:1\n'),
+    "R#0#chr's unit table holds #entry\tR#0#chr",
+  ],
+  [
+    'a #unit line with a tag',
+    (at: number, length: number) =>
+      tableOf(at, length).replace('table\t.\n', 'table\t.\tzz:i:1\n'),
+    'of the walk file, starts "#unit\\tR#0#chr\\t0\\t4\\ttable\\t.\\tzz:i:1"',
+  ],
 ])('a table with %s is refused', async (_, table, message) => {
   await expect(
     oneTile(bgzf(TILE_HEAD + REF_ROW), table).units('R#0#chr'),
@@ -2139,6 +2151,139 @@ test('tags a reader does not know are ignored on any row and header line', async
     return [fragments.map(fragment), departures.map(departure)]
   }
   expect(await attached(tagged(farAttach))).toEqual(await attached(farAttach))
+})
+
+// test_data/extension: one tile whose two walks the writer abridged, B#1#c
+// with 50 and 10 bp off R, as written (plain) and with one later addition
+// each: a tag on every row, a unit of a kind this reader does not know, and
+// a header line whose first word it does not know
+const extended = async (name: string, expand?: (name: string) => boolean) => {
+  const walks = reader(`extension/${name}.R`)
+  const cut = await walks.cut(
+    'R#0#c',
+    { start: 0, end: 36 },
+    { context: 0, expand },
+  )
+  const { graph, kept, fragments, departures, gaps, placeholders } = cut
+  return {
+    header: await walks.header(),
+    fragments,
+    departures,
+    gaps,
+    placeholders,
+    kept: [...kept],
+    tables: graph.tables(kept, fragments, departures, gaps),
+  }
+}
+
+test.each(
+  ['tags', 'unit-kind', 'header-line'].flatMap(name => [
+    { name, cut: 'unloaded', expand: undefined },
+    { name, cut: 'expanded', expand: () => true },
+  ]),
+)(
+  'a file with a later addition cuts as the file without it: $name, $cut',
+  async ({ name, expand }) => {
+    const plain = await extended('plain', expand)
+    expect(plain.fragments.map(f => f.name).sort()).toEqual([
+      'A#1#c',
+      'B#1#c',
+      'R#0#c',
+    ])
+    expect(plain.placeholders).toBe(expand ? 0 : 1)
+    expect(await extended(name, expand)).toEqual(plain)
+  },
+)
+
+// Every row kind, with a record: K takes a route of the tile, and H is
+// abridged, with its detail and blocks units
+const everyKind = [
+  '#walks format:i:8 tile:i:20',
+  '#reference R',
+  '#haplotype H#1',
+  '#haplotype K#1',
+  'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 5,5,5,5 .',
+  'R#0#chr 0 nodes 9 3',
+  'R#0#chr 0 route 2 16 -10',
+  'R#0#chr 0 walk K#1#k 0 0 0 3 2 0',
+  'R#0#chr 0 abridged H#1#h 0 0 0 3 0',
+  'R#0#chr 0:0 10 20 nodes 5 8',
+  'R#0#chr 0:0 10 20 route 6 4 -2',
+  'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
+  'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5',
+  'R#0#chr 0 20 departure K#1#k 5 3 0 5 + 1 15 + 1 0',
+]
+const everyKindCut = (lines: string[], expand?: (name: string) => boolean) =>
+  inline(lines).cut('R#0#chr', { start: 0, end: 20 }, { context: 0, expand })
+const withColumn = (kind: string, column: string, from = 0) =>
+  everyKind.map((line, k) =>
+    k === everyKind.findIndex((l, i) => i >= from && l.includes(` ${kind} `))
+      ? `${line} ${column}`
+      : line,
+  )
+
+test.each([
+  { kind: 'ref', unit: 'tile' },
+  { kind: 'nodes', unit: 'tile' },
+  { kind: 'route', unit: 'tile' },
+  { kind: 'walk', unit: 'tile' },
+  { kind: 'abridged', unit: 'tile' },
+  { kind: 'blocks', unit: 'blocks' },
+  { kind: 'departure', unit: 'departures' },
+  { kind: 'nodes', unit: 'detail', from: 9, expand: () => true },
+  { kind: 'route', unit: 'detail', from: 9, expand: () => true },
+  { kind: 'walk', unit: 'detail', from: 9, expand: () => true },
+])(
+  'a column after the fixed columns of a $kind row of a $unit unit is ignored where it is a tag, and refused where it is not',
+  async ({ kind, unit, from, expand }) => {
+    const plain = await everyKindCut(everyKind, expand)
+    const tagged = await everyKindCut(
+      withColumn(kind, 'zz:i:1 Yy9:Z:a:b z:f:', from),
+      expand,
+    )
+    expect(tagged.fragments).toEqual(plain.fragments)
+    expect(tagged.departures).toEqual(plain.departures)
+    const refused: unknown = await everyKindCut(
+      withColumn(kind, 'junk', from),
+      expand,
+    ).catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(WalkFormatError)
+    expect(refused).toHaveProperty(
+      'message',
+      expect.stringMatching(
+        new RegExp(
+          `R#0#chr's ${unit} .* holds a row with a column after its fixed ones that is no tag, "junk"`,
+        ),
+      ),
+    )
+  },
+)
+
+test.each(['zz:1', '9z:i:1', ':i:1', 'zz:ii:1', 'z_z:i:1', 'zz'])(
+  'a column after a row’s fixed columns that is no well-formed tag is refused: %s',
+  async column => {
+    await expect(everyKindCut(withColumn('ref', column))).rejects.toThrow(
+      'that is no tag',
+    )
+  },
+)
+
+test('a directory line of a later kind is ignored, and a sequence line with a column more is refused', async () => {
+  const { data, directory } = walkFileOf(everyKind)
+  const text = await directory.readFile('utf8')
+  const withLine = (edit: (text: string) => string) =>
+    WalkReader.fromFilehandles({
+      data,
+      directory: new BlobFile(new Blob([edit(text)])),
+    })
+  expect(
+    await withLine(t => `${t}#future\tx\ty\n`).referenceSequences(),
+  ).toEqual(['R#0#chr'])
+  await expect(
+    withLine(t => t.replace(/(R#0#chr\t\d+\t\d+)\n/, '$1\tzz:i:1\n')).units(
+      'R#0#chr',
+    ),
+  ).rejects.toThrow('A walk file directory line holds no byte range')
 })
 
 test("a tag after an abridged row's detail column names no other detail unit", async () => {

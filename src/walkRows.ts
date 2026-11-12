@@ -117,7 +117,7 @@ export function walkHeader(lines: string[]): WalkHeader {
       header.haplotypes.push(value)
     } else if (key === '#hole') {
       header.holes.push({ refName: value, start: +start, end: +end })
-    } else {
+    } else if (key === '#walks') {
       header.format ??= integerTag(line, 'format')
       header.tile ??= integerTag(line, 'tile')
       header.revisited ??= integerTag(line, 'revisited')

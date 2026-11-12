@@ -114,6 +114,16 @@ gone.
   attaches, and no other: those whose span lies over the drawn stretch, by their
   `abridged` rows alone, and of the rest those a record attaches steps of, which
   their `blocks` rows tell
+- **When a cut reads a `blocks` unit:** any cut that keeps a piece it does not
+  expand reads that piece's tile's unit; and an expanding cut does where an
+  expanded walk has a piece in a tile it reads that lies off the drawn stretch.
+  A cut whose expanded walks' pieces all lie over the drawn stretch reads none
+- **Later additions:** a tag, `NAME:T:value`, after a row's fixed columns is
+  ignored on every row kind and on the `#walks` line; so are a header or
+  directory line whose first word the reader does not know, and a unit of a kind
+  it does not know. A column after a row's fixed columns that is no tag is
+  refused, as is any column more on a `#unit`, `#entry` or directory sequence
+  line
 - **Budgets:** a step built for an unloaded piece counts toward `stepBudget` as
   any step does. A placeholder does not count toward `nodeLimit`, which bounds
   the nodes a layout places; a cut's `placeholders` says how many it returned,
