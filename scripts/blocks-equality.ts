@@ -18,6 +18,18 @@
 // in its tables or anything else it returns: the reader compared has by then
 // made every cut before it. What is set aside is printed with the counts.
 //
+// Three checks are of what a cut reads and of how it attaches. The stretches
+// of its contig that a record's placeholders cover in the unloaded cut, which
+// the reader takes from the abridged row and the record, must be the runs
+// that end or start the piece's blocks row beside the record's leave or
+// rejoin, which this script reads from the blocks unit of each tile the
+// record's ownTiles names: so each placeholder has the name, `walk:start-end`,
+// that its blocks row gives it. A cut that expands every walk must read no
+// blocks unit. And the bytes the unloaded cut reads must be what the reader's
+// bytesFor says of its window, where every haplotype is cut together, and no
+// more than that where they are cut some at a time. A cut that throws is a
+// difference too.
+//
 // A contained cut keeps `context` bp of a walk past its steps on the window.
 // A loaded cut keeps whole nodes, so it runs on to the end of the node that
 // straddles `context`; an unloaded one keeps `context` bp of a placeholder.
@@ -55,13 +67,21 @@ import {
 } from '../src/index.ts'
 
 import {
+  bytesRead,
   cutFacts,
   digestOf,
   idsNotOneToOne,
   placeholderRuns,
+  readsOf,
+  unitsRead,
 } from '../src/testing.ts'
 
-import type { GraphTables, WalkFragment, WalkGap } from '../src/index.ts'
+import type {
+  GraphTables,
+  WalkFragment,
+  WalkGap,
+  WalkUnit,
+} from '../src/index.ts'
 
 type Cut = Awaited<ReturnType<WalkReader['cut']>>
 type Rows = Map<string, string[]>
@@ -413,6 +433,166 @@ function referenceStrands(file: WalkFile) {
 }
 
 type Strands = ReturnType<typeof referenceStrands>
+
+const BLOCK = /^-?\d+[+-](\d+)$/
+
+const ATTACH_BP = 65_536
+
+const stretches = (spans: [number, number][]) => {
+  const merged: [number, number][] = []
+  for (const [start, end] of [...spans].sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1)
+    if (last?.[1] === start) {
+      last[1] = end
+    } else {
+      merged.push([start, end])
+    }
+  }
+  return merged.map(([start, end]) => `${start}-${end}`).join(' ')
+}
+
+// Where each record's own steps lie in the abridged pieces of the tiles its
+// ownTiles names, by those tiles' blocks units alone: the run that ends a
+// piece's list where it starts at the record's hapStart, and the run that
+// starts one where it ends at hapStart + ownBp. Each tile and its blocks unit
+// is read once
+function ownRunsByBlocks(file: WalkFile) {
+  const tiles = new Map<string, Promise<Map<string, [number, number][]>>>()
+  // each path's runs off R at the ends of its abridged pieces in a tile, the
+  // trailing ones by their start and the leading ones by their end
+  const read = async (units: WalkUnit[], refName: string, name: string) => {
+    const runs = new Map<string, [number, number][]>()
+    const tile = units.find(u => u.kind === 'tile' && u.name === name)
+    const blocks = units.find(u => u.kind === 'blocks' && u.name === name)
+    if (tile && blocks) {
+      const [tileLines = [], blockLines = []] = await file.read([tile, blocks])
+      const lists = new Map(
+        blockLines.map(line => {
+          const cols = line.split('\t')
+          return [`${cols[4]}\t${cols[5]}\t${cols[6]}`, cols[7] ?? '']
+        }),
+      )
+      for (const line of tileLines) {
+        const cols = line.split('\t')
+        const items = (
+          lists.get(`${cols[4]}\t${cols[5]}\t${cols[7]}`) ?? ''
+        ).split(',')
+        if (cols[3] === 'abridged' && items[0] !== '') {
+          const bp = items.map(item => Number(BLOCK.exec(item)?.[1] ?? item))
+          const total = bp.reduce((sum, n) => sum + n, 0)
+          const offset = Number(cols[6])
+          const addRun = (key: string, run: [number, number]) => {
+            runs.set(key, [...(runs.get(key) ?? []), run])
+          }
+          if (!BLOCK.test(items[0] ?? '')) {
+            const end = offset + bp[0]!
+            addRun(`${refName}\t${cols[4]}\trejoin\t${end}`, [offset, end])
+          }
+          if (items.length > 1 && !BLOCK.test(items.at(-1) ?? '')) {
+            const start = offset + total - bp.at(-1)!
+            addRun(`${refName}\t${cols[4]}\tleave\t${start}`, [
+              start,
+              offset + total,
+            ])
+          }
+        }
+      }
+    }
+    return runs
+  }
+  return async (
+    refName: string,
+    units: WalkUnit[],
+    record: { name: string; hapStart: number; ownBp: number },
+    ownTiles: string[],
+  ) => {
+    const spans: [number, number][] = []
+    for (const name of new Set(ownTiles)) {
+      const key = `${refName}\t${name}`
+      const held = tiles.get(key) ?? read(units, refName, name)
+      tiles.set(key, held)
+      const runs = await held
+      for (const run of [
+        ...(runs.get(`${refName}\t${record.name}\tleave\t${record.hapStart}`) ??
+          []),
+        ...(runs.get(
+          `${refName}\t${record.name}\trejoin\t${record.hapStart + record.ownBp}`,
+        ) ?? []),
+      ]) {
+        spans.push(run)
+      }
+    }
+    return stretches(spans)
+  }
+}
+
+type OwnRuns = ReturnType<typeof ownRunsByBlocks>
+
+// The ownTiles of each record over the window and its context, by the
+// record's path, hapStart and ownBp
+async function ownTilesOver(
+  file: WalkFile,
+  units: WalkUnit[],
+  window: Window,
+  mode: Mode,
+) {
+  const start = Math.max(0, window.start - mode.context)
+  const end = window.end + mode.context
+  const bins = units.filter(
+    u =>
+      u.kind === 'departures' && u.length > 0 && u.start < end && u.end > start,
+  )
+  const ownTiles = new Map<string, string[]>()
+  for (const line of (await file.read(bins)).flat()) {
+    const cols = line.split('\t')
+    if (cols[3] === 'departure') {
+      ownTiles.set(
+        `${cols[4]}\t${cols[5]}\t${cols[6]}`,
+        cols[14] === '.' ? [] : (cols[14] ?? '').split(','),
+      )
+    }
+  }
+  return ownTiles
+}
+
+// The records of the unloaded cut whose placeholders do not cover the
+// stretches their tiles' blocks rows give
+async function attachOff(
+  cut: Cut,
+  window: Window,
+  units: WalkUnit[],
+  ownTiles: Map<string, string[]>,
+  byBlocks: OwnRuns,
+) {
+  const off: string[] = []
+  for (const d of cut.departures) {
+    if (!d.fromSteps && d.ownBp > 0 && d.ownBp <= ATTACH_BP) {
+      const held = stretches(
+        [...(d.steps?.ids ?? [])].flatMap(id => {
+          const node = cut.graph.nodes.get(id)
+          const span: [number, number][] = node?.placeholder
+            ? [[node.start, node.end]]
+            : []
+          return span
+        }),
+      )
+      const listed = await byBlocks(
+        window.refName,
+        units,
+        d,
+        ownTiles.get(`${d.name}\t${d.hapStart}\t${d.ownBp}`) ?? [],
+      )
+      totals.attachRecords++
+      totals.attachRuns += listed === '' ? 0 : 1
+      if (held !== listed) {
+        off.push(
+          `${d.name} at ${d.hapStart}: the cut holds ${d.name}:${held || 'no placeholder'}, and the blocks rows give ${d.name}:${listed || 'no run'}`,
+        )
+      }
+    }
+  }
+  return off
+}
 
 const TILES_HELD = 4096
 
@@ -891,6 +1071,10 @@ function fragmentsAndGaps(unloaded: Summary, loaded: Summary, mode: Mode) {
 const totals = {
   windows: 0,
   cuts: 0,
+  bytes: 0,
+  threw: 0,
+  attachRecords: 0,
+  attachRuns: 0,
   fragments: 0,
   unloadedFragments: 0,
   placeholders: 0,
@@ -968,6 +1152,14 @@ async function compare(
   cut: (expanding: boolean, fresh?: boolean) => Promise<Cut>,
   revisited: boolean,
   strands: Strands,
+  io: {
+    reads: { position: number; length: number }[]
+    units: WalkUnit[]
+    bytesFor: number | undefined
+    atMost: number
+    ownTiles: Map<string, string[]>
+    byBlocks: OwnRuns
+  },
 ) {
   const summarize = async (held: Cut, runs?: Unloaded) => {
     await strands.cover(
@@ -980,10 +1172,41 @@ async function compare(
     digests: digests(held),
     ...(await summarize(held)),
   })
-  const unloaded = await digested(await cut(false))
+  io.reads.length = 0
+  const unloadedCut = await cut(false)
+  const unloadedBytes = bytesRead(io.reads)
+  report(
+    'bytes-read-not-bytesFor',
+    where,
+    io.bytesFor !== undefined && unloadedBytes !== io.bytesFor
+      ? [
+          `the cut read ${unloadedBytes} bytes, and bytesFor says ${io.bytesFor}`,
+        ]
+      : unloadedBytes > io.atMost
+        ? [
+            `the cut read ${unloadedBytes} bytes, more than the ${io.atMost} bytesFor says of every haplotype`,
+          ]
+        : [],
+  )
+  report(
+    'attach-from-row-not-from-blocks',
+    where,
+    await attachOff(unloadedCut, window, io.units, io.ownTiles, io.byBlocks),
+  )
+  const unloaded = await digested(unloadedCut)
   const again = digests(await cut(false, true))
+  io.reads.length = 0
+  const loadedCut = await cut(true)
+  report(
+    'expanded-cut-read-a-blocks-unit',
+    where,
+    unitsRead(io.units, io.reads)
+      .filter(u => u.kind === 'blocks')
+      .map(u => `blocks ${u.name}, ${u.length} bytes`),
+  )
+  totals.bytes += unloadedBytes
   const loaded = await summarize(
-    await cut(true),
+    loadedCut,
     revisited ? unloaded.runs : undefined,
   )
   const asideLinks = linksOnlyInside(
@@ -1080,12 +1303,12 @@ const open = (location: string) =>
   /^https?:/.test(location) ? new RemoteFile(location) : new LocalFile(location)
 
 async function main() {
-  const file = new WalkFile(
-    open(path),
-    open(path.replace(/(?=$|[?#])/, '.idx')),
-  )
+  const data = open(path)
+  const file = new WalkFile(data, open(path.replace(/(?=$|[?#])/, '.idx')))
   const reader = new WalkReader(file)
   const strands = referenceStrands(file)
+  const byBlocks = ownRunsByBlocks(file)
+  const reads = readsOf(data)
   const tiles = await abridgedTiles(reader)
   const { haplotypes, revisited = 0 } = await reader.header()
   const batches =
@@ -1121,6 +1344,11 @@ async function main() {
       for (const mode of MODES) {
         for (const [b, batch] of batches.entries()) {
           const where = `${window.refName}:${window.start}-${window.end} ${mode.name}${batches.length > 1 ? ` haplotypes ${b * perCut + 1}-${b * perCut + batch.length}` : ''}`
+          const units = await reader.units(window.refName)
+          const said = await reader.bytesFor(window.refName, window, {
+            context: mode.context,
+            departureByteBudget: Infinity,
+          })
           const names = await compare(
             window,
             where,
@@ -1144,7 +1372,21 @@ async function main() {
               ),
             revisited > 0,
             strands,
-          )
+            {
+              reads,
+              units,
+              bytesFor: batches.length > 1 ? undefined : said,
+              atMost: said,
+              ownTiles: await ownTilesOver(file, units, window, mode),
+              byBlocks,
+            },
+          ).catch((error: unknown) => {
+            totals.threw++
+            report('cut-threw', where, [
+              error instanceof Error ? error.message : String(error),
+            ])
+            return []
+          })
           report(
             'placeholder-name-as-a-node',
             where,
@@ -1158,6 +1400,9 @@ async function main() {
       )
     }
   }
+  print(
+    `read: ${totals.bytes} bytes by the unloaded cuts, each held to bytesFor ${batches.length > 1 ? 'as its most' : 'exactly'}; ${totals.attachRecords} records within the attach limit held to their tiles' blocks rows, ${totals.attachRuns} of them with own steps in an abridged piece; ${totals.threw} pairs of cuts threw`,
+  )
   print(
     `compared: ${totals.windows} windows, ${totals.cuts} pairs of cuts, ${totals.fragments} fragments (${totals.unloadedFragments} with unloaded pieces, ${totals.placeholders} placeholder steps), ${totals.departures} departures, ${totals.gaps} gaps, ${totals.covers} haplotype covers, ${totals.kept} reference nodes kept, ${totals.links} links`,
   )
