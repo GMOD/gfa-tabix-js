@@ -93,10 +93,10 @@ function hashInto(hash: Hash, value: unknown) {
   }
 }
 
-// Equal for two cuts whose facts are the same, byte for byte
-export function cutDigest(facts: ReturnType<typeof cutFacts>) {
+// The same for two values only where they are the same, byte for byte
+export function digestOf(value: unknown) {
   const hash = createHash('sha256')
-  hashInto(hash, facts)
+  hashInto(hash, value)
   return hash.digest('hex')
 }
 

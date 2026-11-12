@@ -22,3 +22,25 @@ test('the equality harness walks a departure from the end of a node the referenc
   expect(run.stdout).toContain('differences from the loaded cut: 0 in 0')
   expect(run.status).toBe(0)
 })
+
+// blocks.R and between.R hold a piece on 0-20 between two of its line over a
+// window on 60-90, which a cut that expands its walk loads; every cut of
+// either keeps placeholders, and the harness's reader makes each after the
+// ones before it
+test.each(['blocks.R', 'between.R', 'ownends.R'])(
+  'the equality harness finds no placeholder in a loaded cut of %s, each id on one run, and each cut the same from a fresh reader',
+  fixture => {
+    const run = harness(
+      fixture,
+      '--windows',
+      '30',
+      '--width',
+      '20',
+      '--context',
+      '10',
+    )
+    expect(run.stdout).toContain('differences from the loaded cut: 0 in 0')
+    expect(run.stdout).not.toContain(' 0 placeholder steps')
+    expect(run.status).toBe(0)
+  },
+)

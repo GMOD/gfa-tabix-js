@@ -12,7 +12,11 @@
 // departures; and the structural forms. A loaded cut that holds a
 // placeholder anywhere, a pair of steps a cut walks with no link, and a walk
 // with a placeholder anywhere in the unloaded cut's tables whose walks and
-// departures state none of its unloaded steps are differences too. What is set aside is printed with the counts.
+// departures state none of its unloaded steps are differences too. So are a
+// placeholder id that stands for two runs of its cut, or a run of it with two
+// ids, and an unloaded cut that a fresh reader of the file makes otherwise,
+// in its tables or anything else it returns: the reader compared has by then
+// made every cut before it. What is set aside is printed with the counts.
 //
 // A contained cut keeps `context` bp of a walk past its steps on the window.
 // A loaded cut keeps whole nodes, so it runs on to the end of the node that
@@ -49,6 +53,13 @@ import {
   walkDepartures,
   walksKept,
 } from '../src/index.ts'
+
+import {
+  cutFacts,
+  digestOf,
+  idsNotOneToOne,
+  placeholderRuns,
+} from '../src/testing.ts'
 
 import type { GraphTables, WalkFragment, WalkGap } from '../src/index.ts'
 
@@ -536,17 +547,6 @@ function unloadedStepsOff(cut: Cut) {
   })
 }
 
-// Each placeholder of a cut as its id and the run it stands for
-function placeholderRuns(cut: Cut) {
-  const runs: [number, string][] = []
-  for (const [id, node] of cut.graph.nodes) {
-    if (node.placeholder) {
-      runs.push([id, `${node.refName}:${node.start}-${node.end}`])
-    }
-  }
-  return runs
-}
-
 // What a cut states, as rows to compare; the cut itself is let go. Given
 // what the unloaded cut of the same window holds, the reference nodes only a
 // loaded cut can keep are set aside, with their links
@@ -664,7 +664,7 @@ function summary(
     aside: [...aside],
     insideNodes: links.insideNodes,
     placeholderNames: links.placeholderNames,
-    placeholderRuns: placeholderRuns(cut),
+    idsNotOneToOne: idsNotOneToOne(placeholderRuns(cut)),
     unloaded: walks.filter(
       f => f.abridged !== undefined || f.ids.some(isPlaceholder),
     ).length,
@@ -934,28 +934,10 @@ function linksOnlyInside(unloaded: Rows, loaded: Rows, inside: Set<number>) {
 }
 const found = new Map<string, number>()
 const differing = new Set<string>()
-// every placeholder met, by id and by run, as far as RUNS_HELD of them
-const runOfId = new Map<number, string>()
-const idOfRun = new Map<string, number>()
-const RUNS_HELD = 2_000_000
-
-// The placeholders whose id another run had, or whose run another id had
-function restated(runs: [number, string][]) {
-  const out: string[] = []
-  for (const [id, run] of runs) {
-    const heldRun = runOfId.get(id)
-    const heldId = idOfRun.get(run)
-    if (
-      (heldRun !== undefined && heldRun !== run) ||
-      (heldId !== undefined && heldId !== id)
-    ) {
-      out.push(`${id} ${run}, after ${heldId ?? id} ${heldRun ?? run}`)
-    } else if (heldRun === undefined && runOfId.size < RUNS_HELD) {
-      runOfId.set(id, run)
-      idOfRun.set(run, id)
-    }
-  }
-  return out
+// A cut's tables, and everything it returns with them, each as a digest
+function digests(cut: Cut) {
+  const facts = cutFacts(cut)
+  return { tables: digestOf(facts.tables), cut: digestOf(facts) }
 }
 
 const count = (counts: Map<string, number>) =>
@@ -977,12 +959,13 @@ const size = (rows: Rows) =>
 const expand = () => true
 
 // A window's cut that expands nothing against the one that expands every
-// walk, one cut held at a time
+// walk, and against itself made again by a fresh reader, one cut held at a
+// time
 async function compare(
   window: Window,
   where: string,
   mode: Mode,
-  cut: (expanding: boolean) => Promise<Cut>,
+  cut: (expanding: boolean, fresh?: boolean) => Promise<Cut>,
   revisited: boolean,
   strands: Strands,
 ) {
@@ -993,7 +976,12 @@ async function compare(
     )
     return summary(held, window, strands, runs)
   }
-  const unloaded = await summarize(await cut(false))
+  const digested = async (held: Cut) => ({
+    digests: digests(held),
+    ...(await summarize(held)),
+  })
+  const unloaded = await digested(await cut(false))
+  const again = digests(await cut(false, true))
   const loaded = await summarize(
     await cut(true),
     revisited ? unloaded.runs : undefined,
@@ -1031,10 +1019,20 @@ async function compare(
   ])
   report('placeholder-misplaced', where, unloaded.misplaced)
   report('placeholder-uncounted', where, unloaded.uncounted)
+  report('placeholder-ids-not-one-to-one', where, [
+    ...unloaded.idsNotOneToOne,
+    ...loaded.idsNotOneToOne,
+  ])
   report(
-    'placeholder-id-not-its-run',
+    'cut-differs-on-a-fresh-reader',
     where,
-    restated(unloaded.placeholderRuns),
+    again.cut === unloaded.digests.cut
+      ? []
+      : [
+          again.tables === unloaded.digests.tables
+            ? 'the tables the same, the ids or rows the cut returns not'
+            : 'the tables',
+        ],
   )
   totals.cuts++
   totals.fragments += [...unloaded.fragments.values()].reduce(
@@ -1127,19 +1125,23 @@ async function main() {
             window,
             where,
             mode,
-            expanding =>
-              reader.cut(window.refName, window, {
-                keep:
-                  batches.length > 1
-                    ? walksKept(batch, window.refName)
-                    : undefined,
-                context: mode.context,
-                contained: mode.contained,
-                stepBudget: Infinity,
-                byteBudget: Infinity,
-                departureByteBudget: Infinity,
-                ...(expanding ? { expand } : {}),
-              }),
+            (expanding, fresh = false) =>
+              (fresh ? new WalkReader(file) : reader).cut(
+                window.refName,
+                window,
+                {
+                  keep:
+                    batches.length > 1
+                      ? walksKept(batch, window.refName)
+                      : undefined,
+                  context: mode.context,
+                  contained: mode.contained,
+                  stepBudget: Infinity,
+                  byteBudget: Infinity,
+                  departureByteBudget: Infinity,
+                  ...(expanding ? { expand } : {}),
+                },
+              ),
             revisited > 0,
             strands,
           )

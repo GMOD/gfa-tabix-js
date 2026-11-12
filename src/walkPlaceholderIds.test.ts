@@ -1,8 +1,8 @@
 import { LocalFile } from 'generic-filehandle2'
 
 import {
-  cutDigest,
   cutFacts,
+  digestOf,
   idsNotOneToOne,
   placeholderRuns,
 } from './testing.ts'
@@ -93,10 +93,10 @@ describe.each(CUTS)(
       }
       const after = await facts(used)
       expect(after).toEqual(fresh)
-      expect(cutDigest(after)).toBe(cutDigest(fresh))
+      expect(digestOf(after)).toBe(digestOf(fresh))
       const again = await facts(used)
       expect(again).toEqual(fresh)
-      expect(cutDigest(again)).toBe(cutDigest(fresh))
+      expect(digestOf(again)).toBe(digestOf(fresh))
     })
 
     test('is the same, ids and tables byte for byte, made beside other cuts of its reader', async () => {
@@ -113,7 +113,7 @@ describe.each(CUTS)(
       ])
       for (const beside of [cutFacts(first), cutFacts(last)]) {
         expect(beside).toEqual(fresh)
-        expect(cutDigest(beside)).toBe(cutDigest(fresh))
+        expect(digestOf(beside)).toBe(digestOf(fresh))
       }
     })
   },
