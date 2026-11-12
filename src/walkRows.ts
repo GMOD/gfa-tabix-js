@@ -40,8 +40,6 @@ export interface WalkRow {
   span?: [number, number]
   // set on a piece built from its `blocks` row, which the cut did not load
   abridged?: Abridged
-  // where a step does not follow the one before it in the piece
-  cuts?: number[]
 }
 
 // A piece the cut did not load: its steps in all and the detail unit that
@@ -156,8 +154,8 @@ export interface WalkRun {
   fragStart: number
   hapOffset: number
   firstPiece: number
-  // where each row after the first starts in `ids`, and each of a row's
-  // `cuts`, with the chunk each is filed under
+  // where each row after the first starts in `ids`, and the chunk each row
+  // is filed under
   pieceStarts: number[]
   pieceChunks: number[]
   ids: Int32Array
@@ -218,10 +216,6 @@ function decodeRun(pieces: WalkRow[]): WalkRun {
       pieceStarts.push(at)
     }
     pieceChunks.push(p.chunkStart)
-    for (const cut of p.cuts ?? []) {
-      pieceStarts.push(at + cut)
-      pieceChunks.push(p.chunkStart)
-    }
     if (p.steps.bp) {
       bp?.set(p.steps.bp, at)
     }
@@ -469,7 +463,7 @@ export function walkCut(
     run: WalkRun,
     splits: Split[],
     mint: (name: string, start: number, end: number) => number,
-  ): WalkRun => {
+  ) => {
     const bp = before(run)
     const n = run.ids.length + splits.length
     const ids = new Int32Array(n)
@@ -488,10 +482,7 @@ export function walkCut(
       if (split?.at === i) {
         s++
         const edge = split.tail ? end - split.keep : start + split.keep
-        for (const [a, b] of [
-          [start, edge],
-          [edge, end],
-        ] as const) {
+        const part = (a: number, b: number) => {
           const id = mint(run.name, a, b)
           nodes.set(id, {
             refName: run.name,
@@ -505,6 +496,8 @@ export function walkCut(
           ids[out] = id
           stepBp[out++] = b - a
         }
+        part(start, edge)
+        part(edge, end)
       } else {
         ids[out] = run.ids[i]!
         rev[out] = run.rev[i]!
@@ -1207,12 +1200,9 @@ export const BUDGET_NAMES: BudgetNames = {
 // the read budget counts it as a quarter
 const ALONG_R_PER_STEP = 4
 
-// A piece the cut did not load counts as its two end steps
 const readSteps = (row: WalkRow) => {
   const interior = row.interior ?? 0
-  return row.abridged
-    ? 2 / ALONG_R_PER_STEP
-    : interior + (row.n - interior) / ALONG_R_PER_STEP
+  return interior + (row.n - interior) / ALONG_R_PER_STEP
 }
 
 /**
@@ -1269,14 +1259,11 @@ export function stepBudgetError(
   )
 }
 
-const loaded = (ids: Int32Array) =>
-  ids.reduce((sum, id) => sum + (isPlaceholder(id) ? 0 : 1), 0)
-
 /**
  * The zoom-in notice for a cut that keeps more steps than `budget`, the
  * fragments' and the departures' attached steps together, or undefined when
  * it fits. The span that fits is the window scaled by how far over the cut
- * is. The steps of pieces the cut did not load are not counted.
+ * is. A step built for a piece the cut did not load counts as any other.
  */
 export function keptStepsError(
   fragments: WalkFragment[],
@@ -1286,11 +1273,8 @@ export function keptStepsError(
   filtered: boolean,
 ) {
   const total =
-    fragments.reduce(
-      (sum, f) => sum + f.ids.length - (f.unloadedSteps ?? 0),
-      0,
-    ) +
-    departures.reduce((sum, d) => sum + (d.steps ? loaded(d.steps.ids) : 0), 0)
+    fragments.reduce((sum, f) => sum + f.ids.length, 0) +
+    departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
   return keptOverError(total, budget, window, filtered)
 }
 

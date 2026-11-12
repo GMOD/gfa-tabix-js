@@ -61,6 +61,11 @@ const WALK_CONTEXT = 1000
 // detail records an expanding cut reads at once
 const DETAIL_READS = 16
 
+// the runs off R a reader keeps the placeholder ids of, and the most ids it
+// gives before it starts again, which stay above walkChunk's SKIPPED
+const RUN_IDS = 1 << 20
+const MAX_RUN_COUNT = 2 ** 30
+
 // The budgets a cut keeps to unless its caller passes others: what a browser
 // window can hold. Infinity lifts one
 export const WALK_BUDGETS = {
@@ -220,6 +225,15 @@ interface Read extends Met {
   on: ReturnType<typeof blocksOver>
 }
 
+// Where each piece of `rows` starts on its contig
+const pieceStarts = (rows: WalkRow[]) => {
+  const starts = new Map<string, number>()
+  for (const row of rows) {
+    starts.set(pieceKey(row.name, row.fragStart, row.piece), row.hapOffset)
+  }
+  return starts
+}
+
 const keptNodes = (kept: Set<number>) => {
   let count = 0
   for (const id of kept) {
@@ -318,16 +332,29 @@ export class WalkReader {
 
   // the id of each run of steps off R a cut left unloaded, by its walk and
   // its stretch of the contig: the same run has the same id in every cut
-  private readonly runIds = new Map<string, Map<string, number>>()
+  private runIds = new Map<string, Map<string, number>>()
+  private runsHeld = 0
   private runCount = 0
 
   private runId(name: string, start: number, end: number) {
     const ids = this.runIds.get(name) ?? new Map<string, number>()
     this.runIds.set(name, ids)
     const key = `${start}-${end}`
-    const id = ids.get(key) ?? -++this.runCount
+    const held = ids.get(key)
+    const id = held ?? -++this.runCount
     ids.set(key, id)
+    this.runsHeld += held === undefined ? 1 : 0
     return id
+  }
+
+  // Past RUN_IDS runs the ids are let go, between cuts: a run met again takes
+  // a new id, and none is given twice
+  private forgetRuns() {
+    if (this.runsHeld > RUN_IDS || this.runCount > MAX_RUN_COUNT) {
+      this.runIds = new Map()
+      this.runsHeld = 0
+      this.runCount = this.runCount > MAX_RUN_COUNT ? 0 : this.runCount
+    }
   }
 
   private readonly readLookup = once(async () =>
@@ -440,6 +467,7 @@ export class WalkReader {
       expand,
     } = opts
     checkRange(refName, region.start, region.end)
+    this.forgetRuns()
     const [header, units] = await Promise.all([
       this.header({ signal }),
       this.units(refName, { signal }),
@@ -803,8 +831,24 @@ export class WalkReader {
         readDetail,
         decodeDetail,
       )
+      const starts = attaching ? pieceStarts(attachRows) : pieceStarts(rows)
+      for (const { piece } of batch) {
+        starts.set(
+          pieceKey(piece.name, piece.fragStart, piece.piece),
+          piece.hapOffset,
+        )
+      }
       for (const read of pieces) {
-        const { piece } = read
+        const { piece, blocks } = read
+        const next = starts.get(
+          pieceKey(piece.name, piece.fragStart, piece.piece + 1),
+        )
+        const end = piece.hapOffset + blocks.before + blocks.bp + blocks.after
+        if (next !== undefined && next !== end) {
+          throw new WalkFormatError(
+            `${refName}'s blocks row of ${piece.name}, piece ${piece.piece} in tile ${read.unit.name}, ends at ${end} on its contig, and the line's next piece starts at ${next}`,
+          )
+        }
         if (!loaded(read)) {
           const built = unloadedRow(
             piece,
@@ -944,7 +988,14 @@ export class WalkReader {
     }
     addLinks(cut.links)
     const { kept, fragments, departures } = cut
-    return { graph, kept, fragments, departures, gaps: cut.gapsOf() }
+    return {
+      graph,
+      kept,
+      fragments,
+      departures,
+      gaps: cut.gapsOf(),
+      placeholders: kept.size - keptNodes(kept),
+    }
   }
 
   /**

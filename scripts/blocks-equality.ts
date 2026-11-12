@@ -7,8 +7,11 @@
 // haplotype offsets, bp trimmed and steps, a step on the reference as its
 // place, strand and node and a run of steps off it as its bp; the
 // departures with the bp of the steps they hold; the gaps; the reference
-// nodes kept; the links, a node off the reference as `off`; each haplotype's
-// cover and departures; and the structural forms.
+// nodes kept; the links between reference nodes, and each link with an end
+// off the reference as often as the cut walks it; each haplotype's cover and
+// departures; and the structural forms. A loaded cut that holds a
+// placeholder anywhere, and a pair of steps a cut walks with no link, are
+// differences too. What is set aside is printed with the counts.
 //
 // A contained cut keeps `context` bp of a walk past its steps on the window.
 // A loaded cut keeps whole nodes, so it runs on to the end of the node that
@@ -51,20 +54,6 @@ interface Mode {
   name: string
   contained: boolean
   context: number
-}
-
-// A fragment as compared: its steps collapsed, and the bp of its first and
-// last steps as cut
-interface Fragment {
-  name: string
-  fragStart: number
-  hapStart: number
-  hapEnd: number
-  trimmedBefore: number
-  trimmedAfter: number
-  steps: string[]
-  firstBp: number
-  lastBp: number
 }
 
 const flag = (name: string) => {
@@ -111,7 +100,9 @@ const add = (rows: Rows, key: string, row: string) => {
   }
 }
 
-function fragmentOf(cut: Cut, f: WalkFragment): Fragment {
+// A fragment as compared: its steps collapsed, and the bp of its first and
+// last steps as cut
+function fragmentOf(cut: Cut, f: WalkFragment) {
   const length = (i: number) => {
     const node = cut.graph.nodes.get(f.ids[i]!)
     return node ? node.end - node.start : 0
@@ -146,6 +137,8 @@ function fragmentOf(cut: Cut, f: WalkFragment): Fragment {
   }
 }
 
+type Fragment = ReturnType<typeof fragmentOf>
+
 const fragmentRow = (f: Fragment) =>
   `${f.hapStart}-${f.hapEnd} trimmed ${f.trimmedBefore} and ${f.trimmedAfter}: ${f.steps.join(' ')}`
 
@@ -165,34 +158,200 @@ function misplaced(f: WalkFragment) {
   )
 }
 
-// Each link by the node ends it joins, a node off the reference as `off`
-function linkRows(cut: Cut) {
-  const tables = cut.graph.tables(
+const END = 2 ** 25
+
+// A cut's links as rows: every link between two reference nodes, and each
+// link with an end off the reference once for each time the cut walks it,
+// as consecutive steps of a fragment or from a departure's leave node
+// through its steps to its rejoin node. A link with an end off the reference
+// that the cut walks nowhere joins nodes kept through other walks, and is
+// set aside; a pair of steps a fragment or a computed departure walks with
+// no link is `missing`
+function linkRows(cut: Cut, window: Window) {
+  const { nodes, links } = cut.graph.tables(
     cut.kept,
     cut.fragments,
     cut.departures,
     cut.gaps,
   )
-  const { nodes, links } = tables
-  const end = (index: number, right: boolean) =>
+  const indexOfName = new Map(nodes.names.map((name, i) => [name, i]))
+  const indexOf = (id: number | undefined) => {
+    const node = id === undefined ? undefined : cut.graph.nodes.get(id)
+    return id === undefined
+      ? undefined
+      : indexOfName.get(
+          node?.placeholder
+            ? `${node.refName}:${node.start}-${node.end}`
+            : String(id),
+        )
+  }
+  const onR = (index: number) =>
     nodes.ranks[index] === 0 && nodes.placeholders?.[index] !== 1
-      ? `${nodes.names[index]}${right ? ']' : '['}`
-      : 'off'
-  const rows = new Set<string>()
+  const end = (index: number, right: boolean) =>
+    onR(index) ? `${nodes.names[index]}${right ? ']' : '['}` : 'off'
+  const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
+    const x = a * 2 + (aRight ? 1 : 0)
+    const y = b * 2 + (bRight ? 1 : 0)
+    return x < y ? x * END + y : y * END + x
+  }
+  const held = new Set<number>()
+  const rows: Rows = new Map()
+  let offEnds = 0
   for (let k = 0; k < links.from.length; k++) {
     const strands = links.strands[k]!
-    const a = end(links.from[k]!, (strands & 1) === 0)
-    const b = end(links.to[k]!, (strands & 2) !== 0)
-    if (a !== 'off' || b !== 'off') {
-      rows.add(a < b ? `${a} ${b}` : `${b} ${a}`)
+    const from = links.from[k]!
+    const to = links.to[k]!
+    const fromRight = (strands & 1) === 0
+    const toRight = (strands & 2) !== 0
+    held.add(pair(from, fromRight, to, toRight))
+    if (onR(from) && onR(to)) {
+      const a = end(from, fromRight)
+      const b = end(to, toRight)
+      add(rows, 'between reference nodes', a < b ? `${a} ${b}` : `${b} ${a}`)
+    } else {
+      offEnds++
+    }
+  }
+  const walkedOff = new Set<number>()
+  const missing: string[] = []
+  const walk = (
+    a: number | undefined,
+    aRight: boolean,
+    b: number | undefined,
+    bRight: boolean,
+    where: string | undefined,
+  ) => {
+    if (a !== undefined && b !== undefined) {
+      const key = pair(a, aRight, b, bRight)
+      if (!held.has(key)) {
+        if (where !== undefined) {
+          missing.push(where)
+        }
+      } else if (onR(a) !== onR(b)) {
+        walkedOff.add(key)
+        add(
+          rows,
+          'walked, with an end off the reference',
+          onR(a) ? end(a, aRight) : end(b, bRight),
+        )
+      } else if (!onR(a)) {
+        walkedOff.add(key)
+      }
+    }
+  }
+  for (const f of cut.fragments) {
+    let last = indexOf(f.ids[0])
+    for (let i = 1; i < f.ids.length; i++) {
+      const next = indexOf(f.ids[i])
+      walk(
+        last,
+        f.rev[i - 1] === 0,
+        next,
+        f.rev[i] !== 0,
+        `${f.name} ${f.ids[i - 1]} to ${f.ids[i]}`,
+      )
+      last = next
+    }
+  }
+  const startingAt = new Map<number, number>()
+  const endingAt = new Map<number, number>()
+  for (const id of cut.kept) {
+    const node = cut.graph.nodes.get(id)
+    if (
+      node?.rank === 0 &&
+      !node.placeholder &&
+      node.refName === window.refName
+    ) {
+      startingAt.set(node.start, id)
+      endingAt.set(node.end, id)
+    }
+  }
+  for (const d of cut.departures) {
+    if (d.steps && d.steps.ids.length > 0) {
+      const { ids, rev } = d.steps
+      const where = d.fromSteps
+        ? `${d.name} departure at ${d.hapStart}`
+        : undefined
+      walk(
+        indexOf((d.leaveReversed ? startingAt : endingAt).get(d.leavePos)),
+        !d.leaveReversed,
+        indexOf(ids[0]),
+        rev[0] !== 0,
+        where,
+      )
+      for (let i = 1; i < ids.length; i++) {
+        walk(
+          indexOf(ids[i - 1]),
+          rev[i - 1] === 0,
+          indexOf(ids[i]),
+          rev[i] !== 0,
+          where,
+        )
+      }
+      walk(
+        indexOf(ids.at(-1)),
+        rev.at(-1) === 0,
+        indexOf((d.rejoinReversed ? endingAt : startingAt).get(d.rejoinPos)),
+        d.rejoinReversed,
+        where,
+      )
     }
   }
   return {
     rows,
+    missing,
+    setAside: offEnds - walkedOff.size,
     placeholderNames: nodes.names.filter(
       (_, i) => nodes.placeholders?.[i] === 1,
     ),
   }
+}
+
+// Where a loaded cut holds a placeholder: in a fragment, a departure's
+// steps, a gap's steps or the nodes it keeps
+function placeholdersIn(cut: Cut) {
+  const out: string[] = []
+  for (const f of cut.fragments) {
+    if (f.abridged !== undefined || f.ids.some(isPlaceholder)) {
+      out.push(`fragment of ${f.name} from ${f.hapStart}`)
+    }
+  }
+  for (const d of cut.departures) {
+    if (d.steps?.ids.some(isPlaceholder) === true) {
+      out.push(`departure of ${d.name} at ${d.hapStart}`)
+    }
+  }
+  for (const g of cut.gaps) {
+    if (g.segments.some(x => x.ids.some(isPlaceholder))) {
+      out.push(`gap of ${g.name} from ${g.start}`)
+    }
+  }
+  let kept = 0
+  for (const id of cut.kept) {
+    kept += isPlaceholder(id) ? 1 : 0
+  }
+  if (kept > 0 || cut.placeholders > 0) {
+    out.push(`${kept} kept, ${cut.placeholders} counted`)
+  }
+  return out
+}
+
+// A fragment whose unloadedSteps is not a count of its steps: one with no
+// unloaded piece that states it, or one whose count is under its
+// placeholders or over its steps
+function unloadedStepsOff(cut: Cut) {
+  return cut.fragments.flatMap(f => {
+    const placeholders = f.ids.filter(isPlaceholder).length
+    const fits =
+      f.abridged === undefined
+        ? f.unloadedSteps === undefined && placeholders === 0
+        : f.unloadedSteps !== undefined &&
+          f.unloadedSteps >= placeholders &&
+          f.unloadedSteps <= f.ids.length
+    return fits
+      ? []
+      : [`${f.name} from ${f.hapStart}: ${f.unloadedSteps} of ${f.ids.length}`]
+  })
 }
 
 // Each placeholder of a cut as its id and the run it stands for
@@ -262,7 +421,11 @@ function summary(cut: Cut, window: Window) {
       add(kept, 'on the reference', String(id))
     }
   }
-  const links = linkRows(cut)
+  const links = linkRows(cut, window)
+  let offReference = 0
+  for (const id of cut.kept) {
+    offReference += cut.graph.nodes.get(id)?.rank === 0 ? 0 : 1
+  }
   return {
     fragments,
     departures,
@@ -284,7 +447,12 @@ function summary(cut: Cut, window: Window) {
       ],
     ]),
     kept,
-    links: new Map([['links', [...links.rows]]]),
+    links: links.rows,
+    linksMissing: links.missing,
+    linksSetAside: links.setAside,
+    offReference,
+    placeholdersHeld: placeholdersIn(cut),
+    unloadedStepsOff: unloadedStepsOff(cut),
     placeholderNames: links.placeholderNames,
     placeholderRuns: placeholderRuns(cut),
     unloaded: walks.filter(
@@ -348,7 +516,7 @@ function overrun(unloaded: number, loaded: number, nodeBp: number, bp: number) {
 }
 
 // The loaded fragment with its ends drawn in by `head` and `tail` bp
-const drawnIn = (f: Fragment, head: number, tail: number): Fragment => ({
+const drawnIn = (f: Fragment, head: number, tail: number) => ({
   ...f,
   hapStart: f.hapStart + head,
   hapEnd: f.hapEnd - tail,
@@ -423,7 +591,9 @@ type Summary = ReturnType<typeof summary>
 // are compared with the loaded one's end drawn in and the gaps outside that
 // stretch
 function fragmentsAndGaps(unloaded: Summary, loaded: Summary, mode: Mode) {
-  const out = { fragment: [] as string[], gap: [] as string[], overruns: 0 }
+  const fragment: string[] = []
+  const gap: string[] = []
+  let overruns = 0
   const keys = new Set(unloaded.fragments.keys())
   for (const key of loaded.fragments.keys()) {
     keys.add(key)
@@ -462,11 +632,11 @@ function fragmentsAndGaps(unloaded: Summary, loaded: Summary, mode: Mode) {
     const rowsA = a.map(fragmentRow)
     const rowsB = adjusted.map(x => fragmentRow(drawnIn(x.f, x.head, x.tail)))
     if (rowsA.length !== rowsB.length || rowsA.some((r, i) => r !== rowsB[i])) {
-      out.fragment.push(`${key}: ${firstDifference(rowsA, rowsB)}`)
+      fragment.push(`${key}: ${firstDifference(rowsA, rowsB)}`)
     }
     const name = a[0]?.name ?? b[0]?.name ?? ''
     for (const x of adjusted) {
-      out.overruns += (x.head > 0 ? 1 : 0) + (x.tail > 0 ? 1 : 0)
+      overruns += (x.head > 0 ? 1 : 0) + (x.tail > 0 ? 1 : 0)
       if (x.head > 0) {
         drawn.set(name, [
           ...(drawn.get(name) ?? []),
@@ -502,10 +672,10 @@ function fragmentsAndGaps(unloaded: Summary, loaded: Summary, mode: Mode) {
       ? tape(b, drawnFragments.get(name) ?? [], left)
       : b.map(gapRow).sort()
     if (rowsA.length !== rowsB.length || rowsA.some((r, i) => r !== rowsB[i])) {
-      out.gap.push(`${name}: ${firstDifference(rowsA, rowsB)}`)
+      gap.push(`${name}: ${firstDifference(rowsA, rowsB)}`)
     }
   }
-  return out
+  return { fragment, gap, overruns }
 }
 
 const totals = {
@@ -520,6 +690,13 @@ const totals = {
   links: 0,
   kept: 0,
   overruns: 0,
+}
+// what the two cuts hold that is not compared row for row
+const setAside = {
+  unloadedLinks: 0,
+  loadedLinks: 0,
+  unloadedOffReference: 0,
+  loadedOffReference: 0,
 }
 const found = new Map<string, number>()
 const differing = new Set<string>()
@@ -578,20 +755,22 @@ async function compare(
   const both = fragmentsAndGaps(unloaded, loaded, mode)
   report('fragment', where, both.fragment)
   report('gap', where, both.gap)
-  for (const kind of [
-    'departures',
-    'covers',
-    'forms',
-    'kept',
-    'links',
-  ] as const) {
-    report(kind, where, differences(unloaded[kind], loaded[kind]))
-  }
   report(
-    'unloaded-piece-in-loaded-cut',
+    'departures',
     where,
-    loaded.unloaded > 0 ? [`${loaded.unloaded} fragments`] : [],
+    differences(unloaded.departures, loaded.departures),
   )
+  report('covers', where, differences(unloaded.covers, loaded.covers))
+  report('forms', where, differences(unloaded.forms, loaded.forms))
+  report('kept', where, differences(unloaded.kept, loaded.kept))
+  report('links', where, differences(unloaded.links, loaded.links))
+  report('link-missing-unloaded', where, unloaded.linksMissing)
+  report('link-missing-loaded', where, loaded.linksMissing)
+  report('placeholder-in-loaded-cut', where, loaded.placeholdersHeld)
+  report('unloaded-steps', where, [
+    ...unloaded.unloadedStepsOff,
+    ...loaded.unloadedStepsOff,
+  ])
   report('placeholder-misplaced', where, unloaded.misplaced)
   report(
     'placeholder-id-not-its-run',
@@ -612,6 +791,10 @@ async function compare(
   )
   totals.covers += size(unloaded.covers)
   totals.links += size(unloaded.links)
+  setAside.unloadedLinks += unloaded.linksSetAside
+  setAside.loadedLinks += loaded.linksSetAside
+  setAside.unloadedOffReference += unloaded.offReference
+  setAside.loadedOffReference += loaded.offReference
   totals.kept += size(unloaded.kept)
   totals.overruns += both.overruns
   return unloaded.placeholderNames
@@ -696,6 +879,9 @@ async function main() {
   )
   print(
     `fragment ends where the loaded cut ran on to the end of the node straddling the context: ${totals.overruns}`,
+  )
+  print(
+    `set aside, not compared: ${setAside.unloadedLinks} links of the unloaded cuts and ${setAside.loadedLinks} of the loaded with an end off the reference that the cut walks nowhere; the identity of the ${setAside.unloadedOffReference} nodes and placeholders off the reference the unloaded cuts keep and the ${setAside.loadedOffReference} nodes the loaded keep, whose bp are compared run by run; links between two nodes off the reference; each fragment's list of unloaded pieces and its unloadedSteps, which only an unloaded cut has`,
   )
   print(
     `differences from the loaded cut: ${count(found)} in ${differing.size} pairs of cuts${[...found].map(([kind, n]) => `, ${kind} ${n}`).join('')}`,

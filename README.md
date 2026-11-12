@@ -93,10 +93,10 @@ gone.
 - **Placeholders:** a step with `isPlaceholder(id)`, an id below 0, is a run of
   steps off the tile's reference path that the cut did not load. Its `WalkNode`
   has `placeholder: true`, the run's bp as its length, and its place on its
-  walk's contig. One run keeps one id in every cut of a reader, and no two runs
-  share one. They are in `kept`, in a departure's `steps`, in a gap's `steps`
-  segment and in the links, and count toward neither `nodeLimit` nor
-  `stepBudget`
+  walk's contig. One run keeps one id from cut to cut of a reader, while the
+  reader holds it among the last million or so, and no two runs share one. They
+  are in `kept`, in a departure's `steps`, in a gap's `steps` segment and in the
+  links
 - **`GraphTables`:** `nodes.placeholders` flags placeholder nodes, each named
   for its walk and its stretch of the contig, `HG002#1#chr1:118-121`, which is
   no node's name. `walks.abridgedSteps` is the steps of a walk's unloaded
@@ -114,9 +114,16 @@ gone.
   attaches, and no other: those whose span lies over the drawn stretch, by their
   `abridged` rows alone, and of the rest those a record attaches steps of, which
   their `blocks` rows tell
-- **`byteBudget`** and `bytesFor` count the `blocks` units a cut reads
-- New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder` and
-  `WalkFragment.unloadedSteps`
+- **Budgets:** a step built for an unloaded piece counts toward `stepBudget` as
+  any step does. A placeholder does not count toward `nodeLimit`, which bounds
+  the nodes a layout places; a cut's `placeholders` says how many it returned,
+  for a consumer that lays them out. `byteBudget` and `bytesFor` count the
+  `blocks` units a cut reads
+- **Contained cuts:** a fragment can end on a placeholder of exactly `context`
+  bp, the part of a longer run within the cut's context, with the rest of the
+  run as another placeholder outside it
+- New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder`,
+  `WalkFragment.unloadedSteps` and `placeholders` on a cut
 
 ## Changes in 6
 

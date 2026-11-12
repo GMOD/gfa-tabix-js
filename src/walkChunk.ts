@@ -667,29 +667,28 @@ export const pieceEnds = (piece: AbridgedPiece, blocks: PieceBlocks) => ({
   },
 })
 
-// The first and last blocks over `span`, and whether a run off R lies in a
-// departure over it
+// The first and last blocks over `span`
 export function blocksOver(
   blocks: PieceBlocks,
   span: { start: number; end: number },
 ) {
   let first = -1
   let last = -1
-  let offOver = false
   for (let k = 0; k < blocks.begins.length; k++) {
     const lo = blockLow(blocks, k)
     if (lo < span.end && lo + blocks.lengths[k]! > span.start) {
       first = first < 0 ? k : first
       last = k
     }
-    offOver ||= k > 0 && blocks.off[k]! > 0 && jumpOver(blocks, k, span)
   }
-  return { first, last, offOver }
+  return { first, last }
 }
 
 // The walk row of an abridged piece the cut does not load: blocks `core[0]`
 // to `core[1]` whole, and of the rest its end steps and each departure that
-// can lie over `over`, a SKIPPED step for what lies between
+// can lie over `over`, a SKIPPED step for what lies between. No departure
+// across a SKIPPED step lies over `over`, so none a cut computes there is one
+// it returns
 export function unloadedRow(
   piece: AbridgedPiece,
   blocks: PieceBlocks,
@@ -738,7 +737,6 @@ export function unloadedRow(
   const refStarts: number[] = []
   const against: number[] = []
   const bp: number[] = []
-  const cuts: number[] = []
   const nodes = new Map<number, PlacedNode>()
   const links: number[] = []
   const { hapOffset } = piece
@@ -762,9 +760,7 @@ export function unloadedRow(
     if (skipped > 0) {
       const length = skipped
       skipped = 0
-      cuts.push(ids.length)
       push(SKIPPED, 0, Number.NaN, 0, length)
-      cuts.push(ids.length)
     }
   }
   const offR = (length: number) => {
@@ -863,7 +859,6 @@ export function unloadedRow(
       against: Uint8Array.from(against),
       bp: Int32Array.from(bp),
     },
-    cuts: cuts.filter(at => at > 0 && at < n),
     abridged,
   }
   return { row, nodes, links, first, last: after ?? exit }

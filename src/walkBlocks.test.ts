@@ -1,6 +1,7 @@
 import { LocalFile } from 'generic-filehandle2'
 
 import { walkFileOf } from './testing.ts'
+import { RegionTooLargeError } from './util.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
 import { WalkFormatError } from './walkFile.ts'
 import { WalkReader } from './walkReader.ts'
@@ -583,40 +584,112 @@ test('a placeholder is no node: it is flagged, as long as its run, placed on its
 })
 
 // Every walk of blocks.R over 60-120 keeps placeholders for its runs off R
-test('placeholders do not count towards the node limit', async () => {
+test('placeholders do not count towards the node limit, and a cut says how many it returns', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const { kept, graph } = await walks.cut(R, window, { context: 0 })
-  const placeholders = [...kept].filter(isPlaceholder).length
-  const nodes = kept.size - placeholders
+  const cut = await walks.cut(R, window, { context: 0 })
+  const placeholders = [...cut.kept].filter(isPlaceholder).length
+  const nodes = cut.kept.size - placeholders
   expect(placeholders).toBeGreaterThan(4)
-  expect([...kept].every(id => graph.nodes.has(id))).toBe(true)
+  expect(cut.placeholders).toBe(placeholders)
+  expect([...cut.kept].every(id => cut.graph.nodes.has(id))).toBe(true)
   const within = await walks.cut(R, window, { context: 0, nodeLimit: nodes })
-  expect(within.kept.size).toBe(kept.size)
+  expect(within.kept.size).toBe(cut.kept.size)
   await expect(
     walks.cut(R, window, { context: 0, nodeLimit: nodes - 1 }),
   ).rejects.toThrow('Zoom in')
+  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  expect(loaded.placeholders).toBe(0)
 })
 
-test('every fragment holding an unloaded piece says so, with the steps loading it reads', async () => {
-  const { unloaded } = await cuts(90, 100)
-  const tables = unloaded.graph.tables(
-    unloaded.kept,
-    unloaded.fragments,
-    unloaded.departures,
+test('a step built for an unloaded piece counts towards the step budget as any step does', async () => {
+  const walks = reader('blocks.R')
+  const window = { start: 60, end: 120 }
+  const { fragments, departures } = await walks.cut(R, window, { context: 0 })
+  const steps =
+    fragments.reduce((sum, f) => sum + f.ids.length, 0) +
+    departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
+  expect(fragments.reduce((sum, f) => sum + (f.unloadedSteps ?? 0), 0)).toBe(
+    fragments
+      .filter(f => f.name !== R)
+      .reduce((sum, f) => sum + f.ids.length, 0),
   )
-  const walks = Object.fromEntries(
-    tables.walks.names.map((name, i) => [name, tables.walks.abridgedSteps![i]]),
+  const within = await walks.cut(R, window, { context: 0, stepBudget: steps })
+  expect(within.fragments).toHaveLength(fragments.length)
+  await expect(
+    walks.cut(R, window, { context: 0, stepBudget: steps - 1 }),
+  ).rejects.toThrow('Zoom in')
+})
+
+// ownends.R.gfa, X#1 and R alone over 24-30: the cut reads the tile at 20
+// and its blocks unit, then the tile at 0 for X's record and its blocks unit
+test('the bytes of a tile fetched for own steps are checked with the blocks units read before it, before it is fetched', async () => {
+  const { reader: walks, fetched, watch } = counted('ownends.R')
+  await watch(R)
+  const units = await walks.units(R)
+  const bytes = (kind: string, name: string) =>
+    units.find(u => u.kind === kind && u.name === name)!.length
+  const cut = (byteBudget: number) =>
+    walks.cut(
+      R,
+      { start: 24, end: 30 },
+      {
+        context: 0,
+        keep: name => name === 'X#1#c' || name === R,
+        byteBudget,
+      },
+    )
+  const read = () => fetched.filter(u => !u.startsWith('departures')).sort()
+  const window = bytes('tile', '20') + bytes('blocks', '20')
+  const whole = window + bytes('tile', '0') + bytes('blocks', '0')
+  expect((await cut(whole)).departures).toHaveLength(1)
+  expect(read()).toEqual(['blocks 0', 'blocks 20', 'tile 0', 'tile 20'])
+  fetched.length = 0
+  await expect(cut(window + bytes('tile', '0') - 1)).rejects.toBeInstanceOf(
+    RegionTooLargeError,
   )
-  expect(walks).toEqual({
-    'R#0#c': NaN,
-    'HAIRPIN#1#c': 9,
-    'LOWFIRST#1#c': 6,
-    'MIXED#1#c': 5,
-    'MULTI#1#c': 3,
-    'PARTIAL#1#c': 7,
-    'TWICE#1#c': 7,
-  })
+  expect(read()).toEqual(['blocks 20', 'tile 20'])
+  fetched.length = 0
+  await expect(cut(whole - 1)).rejects.toBeInstanceOf(RegionTooLargeError)
+  expect(read()).toEqual(['blocks 20', 'tile 0', 'tile 20'])
+})
+
+// One contig in two W lines of one tile, both abridged: >5>6 then 30 bp off
+// R in node 20 to its line's end, 50 bp no line covers, and >1>2. Its record
+// from 6 to 1 owns the 30 bp, which trail a piece with no step on a window
+// over 1
+test('a cut that expands a walk reads the piece a record attaches steps of, though it has no step on the window', async () => {
+  const walks = WalkReader.fromFilehandles(
+    walkFileOf([
+      '#walks format:i:8 tile:i:60',
+      '#reference R',
+      '#haplotype W#1',
+      'R#0#c 0 ref R#0#c 0 0 0 6 2,2,2,2,2,2 10,10,10,10,10,10 .',
+      'R#0#c 0 abridged W#1#c 0 0 0 3 0',
+      'R#0#c 0 abridged W#1#c 100 100 0 2 1',
+      'R#0#c 0:0 40 60 nodes 20 30',
+      'R#0#c 0:0 40 60 route 12 28 .',
+      'R#0#c 0:0 40 60 walk W#1#c 0 0 0 3 10 0',
+      'R#0#c 0:1 0 20 walk W#1#c 100 100 0 2 2 .',
+      'R#0#c 0 40 60 blocks W#1#c 0 0 40+20,30',
+      'R#0#c 0 0 20 blocks W#1#c 100 0 0+20',
+      'R#0#c 0 60 departure W#1#c 20 80 50 60 + 1 0 + 1 0',
+    ]),
+  )
+  const window = { start: 0, end: 10 }
+  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  const unloaded = await walks.cut(R, window, { context: 0 })
+  const held = (cut: Cut) =>
+    cut.departures.map(d => [
+      d.hapStart,
+      d.ownBp,
+      d.missingBp,
+      [...(d.steps?.ids ?? [])].map(id => nameOf(cut, id)),
+    ])
+  expect(held(loaded)).toEqual([[20, 80, 50, ['20']]])
+  expect(held(unloaded)).toEqual([[20, 80, 50, ['W#1#c:20-50']]])
+  expect(loaded.placeholders).toBe(0)
+  expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
 
 test('a piece in two fragments of a contained cut counts its steps on the first', async () => {
@@ -784,6 +857,29 @@ describe('a file whose blocks unit is not what its tile needs', () => {
       ),
     ).rejects.toThrow(/blocks row/)
   })
+
+  test.each([
+    { next: 18, refused: false },
+    { next: 20, refused: true },
+  ])(
+    'a blocks row whose items end where the line’s next piece does not start is refused: next at $next',
+    async ({ next, refused }) => {
+      const cut = open([
+        ...abridged,
+        blocks,
+        'R#0#chr 20 ref R#0#chr 0 20 1 4 10,2,2,2 5,5,5,5 .',
+        `R#0#chr 20 walk H#1#h 0 ${next} 1 2 10 .`,
+      ]).cut('R#0#chr', { start: 0, end: 40 }, { context: 0 })
+      await (refused
+        ? expect(cut).rejects.toThrow(
+            'ends at 18 on its contig, and the line’s next piece starts at 20'.replace(
+              '’',
+              "'",
+            ),
+          )
+        : expect(cut).resolves.toHaveProperty('placeholders', 1))
+    },
+  )
 
   test('a blocks unit without the row of a piece its tile abridges is refused', async () => {
     await expect(
