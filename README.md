@@ -85,7 +85,9 @@ gone.
 - **Refused:** any format but 8, at open, with a `WalkFormatError` that says to
   rebuild the walk file with gfa-to-tabix 5.0 or later; `WALK_FORMAT` is 8. A
   cut that decodes a node id at or above 2^31, or below 0, which the format does
-  not allow, throws an error naming the limit rather than read it as another id
+  not allow, throws a `WalkRowError` naming the limit rather than read it as
+  another id. `WalkRowError`, which a cut throws for a row it cannot decode, is
+  exported beside `WalkFormatError`
 - **`WalkFragment.abridged`** is a list, one `{ steps, detail }` per piece of
   the fragment the cut did not load, in the walk's order, and `unloadedSteps`
   counts the fragment's steps that are theirs. The fragment is an ordinary one:

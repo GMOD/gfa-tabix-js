@@ -38,7 +38,7 @@ export type { WalkFilehandle, WalkUnit } from './walkFile.ts'
 export { checkRange } from './tabixSource.ts'
 export type { TabixSource } from './tabixSource.ts'
 export { refNameLookup, resolveRefName } from './refNames.ts'
-export { referenceNodes } from './walkChunk.ts'
+export { WalkRowError, referenceNodes } from './walkChunk.ts'
 export {
   FLOOR_PRESETS,
   LOPSIDED_RATIO,

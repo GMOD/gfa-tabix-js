@@ -919,6 +919,20 @@ describe('a node id at or past 2^31, the format’s limit, or below 0', () => {
     expect(String(error)).toContain(`node id ${id}`)
     expect(String(error)).toContain('2^31')
   })
+
+  test('is a WalkRowError a consumer of the package can catch by type', async () => {
+    const { WalkReader: Exported, WalkRowError: Refusal } =
+      await import('./index.ts')
+    const { data, directory } = walkFileOf([
+      '#walks format:i:8 tile:i:16',
+      '#reference R',
+      `R#0#chr 0 ref R#0#chr 0 0 0 2 2,${2 ** 32} 4,4 .`,
+    ])
+    const error = await Exported.fromFilehandles({ data, directory })
+      .cut('R#0#chr', window, { context: 0 })
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(Refusal)
+  })
 })
 
 // Twelve 4 bp reference nodes in 16 bp chunks; H#1 goes from 7 to 11, in
