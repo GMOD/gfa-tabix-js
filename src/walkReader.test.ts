@@ -1663,6 +1663,49 @@ test.each([
   },
 )
 
+// drawnedge.R.gfa, one 10 kb tile over 10-20 kb that abridges G: G walks 11,
+// to 16,000, then 300 bp of its own in place of 12, and rejoins at 13, at
+// 17,000, all in one piece, so the cut computes the departure
+//   W R 0 chr >1>...>25
+//   W G 1 g   >5>6>7>8>9>10>11>200>13>14>15
+test.each([
+  { expand: undefined, own: 1 },
+  { expand: () => true, own: '>200' },
+])(
+  'a departure inside one piece gets its own steps where it leaves on the window, and none where it jumps over it, expanded or not: $own',
+  async ({ expand, own }) => {
+    const g = async (start: number) => {
+      const cut = await reader('drawnedge.R').cut(
+        'R#0#chr',
+        { start, end: start + 100 },
+        { context: 100, expand },
+      )
+      return {
+        departures: cut.departures
+          .filter(d => d.name === 'G#1#g')
+          .map(departure),
+        gaps: cut.gaps
+          .filter(gap => gap.name === 'G#1#g' && gap.start === 8000)
+          .map(gap => gap.segments.map(x => `${x.kind} ${x.bp}`)),
+        kept: cut.kept.size,
+      }
+    }
+    const record = (steps: unknown) => [
+      ['G#1#g', 8000, 300, 0, '16000+', '17000+', 'forward', 'steps', steps],
+    ]
+    expect(await g(16_400)).toEqual({
+      departures: record(undefined),
+      gaps: [['read 300']],
+      kept: 1,
+    })
+    expect(await g(15_900)).toEqual({
+      departures: record(own),
+      gaps: [['steps 300', 'read 3000']],
+      kept: 3,
+    })
+  },
+)
+
 // Twelve 4 bp reference nodes in 16 bp tiles. H's second piece goes to tile
 // 32 and its record back to 20 names that tile; G's record names tile 0 and
 // comes first in the block:
