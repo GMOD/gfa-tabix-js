@@ -12,7 +12,12 @@
 // departures; and the structural forms. A loaded cut that holds a
 // placeholder anywhere, a pair of steps a cut walks with no link, and a walk
 // with a placeholder anywhere in the unloaded cut's tables whose walks and
-// departures state none of its unloaded steps are differences too. So are a
+// departures state none of its unloaded steps are differences too. A link
+// between reference nodes that only the loaded cut holds and no step it
+// returns walks is a difference of a kind of its own,
+// links-only-loaded-no-returned-step-walks: the loaded cut decoded the steps
+// that walk it, in a detail unit, and returns them in no fragment and no
+// departure. So are a
 // placeholder id that stands for two runs of its cut, or a run of it with two
 // ids, and an unloaded cut that a fresh reader of the file makes otherwise,
 // in its tables or anything else it returns: the reader compared has by then
@@ -278,6 +283,8 @@ function linkRows(
     }
   }
   const walkedOff = new Set<number>()
+  // the links between reference nodes that a step the cut returns walks
+  const walkedOn = new Set<string>()
   const missing: string[] = []
   const insideNodes = new Set<number>()
   // a step as its node's index and whether it counts as on the reference
@@ -315,6 +322,10 @@ function linkRows(
         )
       } else if (!a.on) {
         walkedOff.add(key)
+      } else {
+        const from = end(a.index, aRight)
+        const to = end(b.index, bRight)
+        walkedOn.add(from < to ? `${from} ${to}` : `${to} ${from}`)
       }
     }
   }
@@ -389,6 +400,7 @@ function linkRows(
     rows,
     missing,
     setAside: offEnds - walkedOff.size,
+    walkedOn,
     insideNodes,
     placeholderNames: nodes.names.filter(
       (_, i) => nodes.placeholders?.[i] === 1,
@@ -947,6 +959,7 @@ function summary(
     links: links.rows,
     linksMissing: links.missing,
     linksSetAside: links.setAside,
+    linksWalked: links.walkedOn,
     offReference,
     placeholdersHeld: placeholdersIn(cut),
     unloadedStepsOff: unloadedStepsOff(cut),
@@ -1230,6 +1243,28 @@ function linksOnlyInside(unloaded: Rows, loaded: Rows, inside: Set<number>) {
   }
   return taken
 }
+// The links between reference nodes the loaded cut's tables hold, the unloaded
+// cut's do not, and no step the loaded cut returns walks, taken out of
+// `loaded`: a fragment's steps and a departure's own steps are all a cut
+// returns of a walk, and a cut that expands a walk decodes every step of each
+// piece it builds
+function linksNoStepWalks(unloaded: Rows, loaded: Rows, walked: Set<string>) {
+  const key = 'between reference nodes'
+  const theirs = new Set(unloaded.get(key) ?? [])
+  const taken: string[] = []
+  const kept: string[] = []
+  for (const row of loaded.get(key) ?? []) {
+    if (!theirs.has(row) && !walked.has(row)) {
+      taken.push(row)
+    } else {
+      kept.push(row)
+    }
+  }
+  if (loaded.has(key)) {
+    loaded.set(key, kept)
+  }
+  return taken
+}
 const found = new Map<string, number>()
 const differing = new Set<string>()
 // A cut's tables, and everything it returns with them, each as a digest
@@ -1380,6 +1415,13 @@ async function compare(
   report('covers', where, differences(unloaded.covers, loaded.covers))
   report('forms', where, differences(unloaded.forms, loaded.forms))
   report('kept', where, differences(unloaded.kept, loaded.kept))
+  report(
+    'links-only-loaded-no-returned-step-walks',
+    where,
+    linksNoStepWalks(unloaded.links, loaded.links, loaded.linksWalked).map(
+      link => `between reference nodes: ${link}`,
+    ),
+  )
   report('links', where, differences(unloaded.links, loaded.links))
   report('link-missing-unloaded', where, unloaded.linksMissing)
   report('link-missing-loaded', where, loaded.linksMissing)
