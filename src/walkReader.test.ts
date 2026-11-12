@@ -873,6 +873,54 @@ test('a ref row whose passes do not count its steps is refused', async () => {
   expect(error).toBeInstanceOf(WalkRowError)
 })
 
+// A handle token is 2 × the id's difference from the one before, so the
+// tokens 2 and 2 × (id − 1) are the ids 1 and `id`
+describe('a node id at or past 2^31, the format’s limit, or below 0', () => {
+  const tileOf = (...rows: string[]) =>
+    inline([
+      '#walks format:i:8 tile:i:16',
+      '#reference R',
+      'R#0#chr 0 ref R#0#chr 0 0 0 2 2,2 4,4 .',
+      ...rows,
+    ])
+  const refOf = (id: number) =>
+    inline([
+      '#walks format:i:8 tile:i:16',
+      '#reference R',
+      `R#0#chr 0 ref R#0#chr 0 0 0 2 2,${2 * (id - 1)} 4,4 .`,
+    ])
+  const window = { start: 0, end: 16 }
+
+  test('2^31 − 1 is read as itself, which is no placeholder', async () => {
+    const cut = await refOf(2 ** 31 - 1).cut('R#0#chr', window, { context: 0 })
+    expect([...cut.kept].sort((a, b) => a - b)).toEqual([1, 2 ** 31 - 1])
+    expect([...cut.kept].some(isPlaceholder)).toBe(false)
+  })
+
+  test.each([
+    { where: 'a ref row', file: refOf(2 ** 31), id: 2 ** 31 },
+    { where: 'a ref row', file: refOf(2 ** 32), id: 2 ** 32 },
+    { where: 'a ref row', file: refOf(-1), id: -1 },
+    {
+      where: 'a nodes row',
+      file: tileOf(`R#0#chr 0 nodes 3,${2 ** 31 - 3} 4,4`),
+      id: 2 ** 31,
+    },
+    {
+      where: 'a route row',
+      file: tileOf(`R#0#chr 0 route 4 ${2 ** 32 - 4} .`),
+      id: 2 ** 31,
+    },
+  ])('is refused in $where: $id', async ({ file, id }) => {
+    const error = await file
+      .cut('R#0#chr', window, { context: 0 })
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(WalkRowError)
+    expect(String(error)).toContain(`node id ${id}`)
+    expect(String(error)).toContain('2^31')
+  })
+})
+
 // Twelve 4 bp reference nodes in 16 bp chunks; H#1 goes from 7 to 11, in
 // chunk 32, and back to 6:
 //   W R  0 chr >1>2>3>4>5>6>7>8>9>10>11>12

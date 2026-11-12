@@ -33,6 +33,18 @@ export interface PlacedNode {
 
 const idOf = (handle: number) => (handle - (handle & 1)) / 2
 
+// so an id fits an Int32Array, clear of the negative ids placeholders take
+const ID_LIMIT = 2 ** 31
+
+function checkedId(id: number) {
+  if (id < 0 || id >= ID_LIMIT) {
+    throw new WalkRowError(
+      `a row holds node id ${id}, where walk format 8 allows ids from 0 to below 2^31`,
+    )
+  }
+  return id
+}
+
 // the other strand's handle; arithmetic, which holds past 2^31
 const otherStrand = (handle: number) => (handle & 1 ? handle - 1 : handle + 1)
 
@@ -49,7 +61,7 @@ function tokens(field: string, previous: { id: number }, out: number[]) {
     if (ch === 44) {
       const d = neg ? -v : v
       const r = d & 1
-      previous.id += (d - r) / 2
+      previous.id = checkedId(previous.id + (d - r) / 2)
       out.push(previous.id * 2 + r)
       v = 0
       neg = false
@@ -976,7 +988,7 @@ export function decodeChunk(
       const nodeLengths = numbers(cols[5]!)
       let id = 0
       for (let k = 0; k < ids.length; k++) {
-        id += ids[k]!
+        id = checkedId(id + ids[k]!)
         ids[k] = id
         lengths.set(id, nodeLengths[k]!)
       }
