@@ -2237,12 +2237,12 @@ test.each([
   'a column after the fixed columns of a $kind row of a $unit unit is ignored where it is a tag, and refused where it is not',
   async ({ kind, unit, from, expand }) => {
     const plain = await everyKindCut(everyKind, expand)
-    const tagged = await everyKindCut(
+    const withTag = await everyKindCut(
       withColumn(kind, 'zz:i:1 Yy9:Z:a:b z:f:', from),
       expand,
     )
-    expect(tagged.fragments).toEqual(plain.fragments)
-    expect(tagged.departures).toEqual(plain.departures)
+    expect(withTag.fragments).toEqual(plain.fragments)
+    expect(withTag.departures).toEqual(plain.departures)
     const refused: unknown = await everyKindCut(
       withColumn(kind, 'junk', from),
       expand,
