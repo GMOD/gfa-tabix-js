@@ -79,8 +79,12 @@ export interface GapTable {
 // `leaveReversed` and `rejoinReversed` 1 where the step runs against the
 // reference's orientation, and `leavePasses` and `rejoinPasses` how many
 // times the reference passes each end's node; `fromSteps` 1 where the cut computed it from a
-// piece's steps rather than a record; and its own steps the cut holds, as
-// node indices at `offsets[k]` to `offsets[k + 1]`
+// piece's steps rather than a record; its own steps the cut holds, as
+// node indices at `offsets[k]` to `offsets[k + 1]`; and `abridgedSteps`, as
+// the walks', the steps of the unloaded pieces among them that no walk holds,
+// each piece counted on the first departure holding it, NaN for a departure
+// with none. A gap's steps are its walk's departures' steps, so a walk's
+// unloaded steps are its walks' `abridgedSteps` and its departures' together
 export interface DepartureTable {
   names: string[]
   hapStarts: Float64Array
@@ -96,6 +100,8 @@ export interface DepartureTable {
   offsets: Int32Array
   steps: Int32Array
   reversed: Uint8Array
+  // absent from tables another source builds
+  abridgedSteps?: Float64Array
 }
 
 /**

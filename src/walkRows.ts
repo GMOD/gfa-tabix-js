@@ -630,6 +630,10 @@ export function walkCut(
       kept.add(run.ids[k]!)
     }
   }
+  const unloadedIn = (run: WalkRun, from: number, to: number) =>
+    (run.unloaded ?? [])
+      .filter(u => u.from < to && u.to > from)
+      .map(u => u.piece)
   for (const run of runs) {
     if (run.name === refName) {
       continue
@@ -679,6 +683,10 @@ export function walkCut(
                 d.steps = {
                   ids: ids.subarray(last + 1, i),
                   rev: rev.subarray(last + 1, i),
+                }
+                const held = unloadedIn(run, last + 1, i)
+                if (held.length > 0) {
+                  d.abridged = held
                 }
                 markAttached(run, last + 1, i)
               }
@@ -743,6 +751,7 @@ export function walkCut(
     if (d.ownBp <= attachBp) {
       const ids: number[] = []
       const rev: number[] = []
+      const held: Abridged[] = []
       const leave = leaves.get(
         edgeKey(d.name, d.leavePos, d.leaveReversed, d.hapStart),
       )
@@ -753,6 +762,9 @@ export function walkCut(
           rev.push(run.rev[k]!)
         }
         markAttached(run, i + 1, end)
+        for (const piece of unloadedIn(run, i + 1, end)) {
+          held.push(piece)
+        }
       }
       const rejoin = rejoins.get(
         edgeKey(d.name, d.rejoinPos, d.rejoinReversed, d.hapStart + d.ownBp),
@@ -764,9 +776,15 @@ export function walkCut(
           rev.push(run.rev[k]!)
         }
         markAttached(run, start, i)
+        for (const piece of unloadedIn(run, start, i)) {
+          held.push(piece)
+        }
       }
       if (ids.length > 0) {
         d.steps = { ids: Int32Array.from(ids), rev: Uint8Array.from(rev) }
+        if (held.length > 0) {
+          d.abridged = held
+        }
       }
       if (!leave || !rejoin) {
         unattached.push({ departure: d })
@@ -1034,18 +1052,20 @@ export class WalkGraph {
     })
 
     const walks = this.referenceFirst(fragments)
-    // a piece in two fragments counts on the first
+    // a piece counts on the first walk holding it, else on the first
+    // departure
     const counted = new Set<Abridged>()
-    const abridgedSteps = Float64Array.from(walks, f => {
-      let steps = f.abridged ? 0 : Number.NaN
-      for (const piece of f.abridged ?? []) {
+    const stepsOf = (pieces: Abridged[] | undefined) => {
+      let steps = pieces ? 0 : Number.NaN
+      for (const piece of pieces ?? []) {
         if (!counted.has(piece)) {
           counted.add(piece)
           steps += piece.steps
         }
       }
       return steps
-    })
+    }
+    const abridgedSteps = Float64Array.from(walks, f => stepsOf(f.abridged))
     const offsets = new Int32Array(walks.length + 1)
     walks.forEach(({ ids }, p) => {
       offsets[p + 1] = offsets[p]! + ids.length
@@ -1082,7 +1102,7 @@ export class WalkGraph {
         trimmedAfter: Float64Array.from(walks, f => f.trimmedAfter),
         abridgedSteps,
       },
-      departures: departureTable(departures, nodeIndex),
+      departures: departureTable(departures, nodeIndex, stepsOf),
       gaps: gapTable(gaps, new Map(walks.map((f, p) => [f, p])), nodeIndex),
     }
   }
@@ -1148,6 +1168,7 @@ function gapTable(
 function departureTable(
   departures: WalkDeparture[],
   nodeIndex: (id: number) => number,
+  stepsOf: (pieces: Abridged[] | undefined) => number,
 ): DepartureTable {
   const n = departures.length
   const offsets = new Int32Array(n + 1)
@@ -1182,6 +1203,7 @@ function departureTable(
     offsets,
     steps,
     reversed,
+    abridgedSteps: Float64Array.from(departures, d => stepsOf(d.abridged)),
   }
 }
 

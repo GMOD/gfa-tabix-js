@@ -333,6 +333,36 @@ test('an unloaded piece joins the next piece read, the bp off R between them a p
   expect(gaps(unloaded)).toEqual(gaps(loaded))
 })
 
+// TAIL's piece in the tile at 0, >5>6>26, is not over 60-70: its record from
+// 6 to 7 holds 26 as a placeholder, and no fragment holds any of it
+test('a piece that reaches the cut only as placeholders among a record’s own steps is counted on the record, in the cut and in the tables', async () => {
+  const { unloaded } = await cuts(60, 70)
+  const [record] = unloaded.departures.filter(d => d.name === 'TAIL#1#c')
+  expect([...record!.steps!.ids].map(isPlaceholder)).toEqual([true])
+  expect(record!.abridged?.map(a => [a.detail.name, a.steps])).toEqual([
+    ['0:0', 3],
+  ])
+  const counts = (cut: Cut) => {
+    const tables = cut.graph.tables(
+      cut.kept,
+      cut.fragments,
+      cut.departures,
+      cut.gaps,
+    )
+    const of = (names: string[], count: Float64Array | undefined) =>
+      names.flatMap((name, i) => (name === 'TAIL#1#c' ? [count?.[i]] : []))
+    return {
+      walks: of(tables.walks.names, tables.walks.abridgedSteps),
+      departures: of(tables.departures.names, tables.departures.abridgedSteps),
+    }
+  }
+  expect(counts(unloaded)).toEqual({ walks: [2], departures: [3] })
+  expect(counts((await cuts(50, 70)).unloaded)).toEqual({
+    walks: [5],
+    departures: [0],
+  })
+})
+
 // hairpin.R.gfa, the piece of gfa-to-tabix's walks-format.md: R over six
 // 6 bp nodes, and W H 1 c >12>1>2<2<1>11>5>6>3>13>14 with 7 bp of its own
 // before its first step on R, 10 bp between and 50 bp after its last
@@ -887,3 +917,84 @@ describe('a file whose blocks unit is not what its tile needs', () => {
     ).rejects.toThrow('holds no row for piece 0 of H#1#h')
   })
 })
+
+// The walks holding a placeholder among their steps, a departure's or a
+// gap's, whose walks' and departures' abridgedSteps state none of its steps
+function uncounted(cut: Cut) {
+  const tables = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+    cut.gaps,
+  )
+  const holding = new Set<string>()
+  const scan = (name: string, ids: Int32Array, from: number, to: number) => {
+    for (let j = from; j < to; j++) {
+      if (tables.nodes.placeholders![ids[j]!] === 1) {
+        holding.add(name)
+      }
+    }
+  }
+  const { walks } = tables
+  walks.names.forEach((name, i) => {
+    scan(name, walks.steps, walks.offsets[i]!, walks.offsets[i + 1]!)
+  })
+  const records = tables.departures
+  records.names.forEach((name, k) => {
+    scan(name, records.steps, records.offsets[k]!, records.offsets[k + 1]!)
+  })
+  const { gaps } = tables
+  gaps?.names.forEach((name, g) => {
+    const { stepOffsets } = gaps.segments
+    scan(
+      name,
+      gaps.segments.steps,
+      stepOffsets[gaps.segmentOffsets[g]!]!,
+      stepOffsets[gaps.segmentOffsets[g + 1]!]!,
+    )
+  })
+  const said = new Map<string, number>()
+  const sum = (names: string[], count: Float64Array | undefined) => {
+    names.forEach((name, i) => {
+      const n = count?.[i] ?? Number.NaN
+      if (!Number.isNaN(n)) {
+        said.set(name, (said.get(name) ?? 0) + n)
+      }
+    })
+  }
+  sum(walks.names, walks.abridgedSteps)
+  sum(records.names, records.abridgedSteps)
+  return [...holding].filter(name => !((said.get(name) ?? 0) > 0))
+}
+
+test.each([
+  'abredge.R',
+  'abridged.R',
+  'blocks.R',
+  'contigends.R',
+  'hairpin.R',
+  'interleaved.R',
+  'ownends.R',
+])(
+  'every walk holding a placeholder in a cut of %s, in its steps, a departure’s or a gap’s, states its unloaded steps',
+  async name => {
+    const walks = reader(name)
+    const missing: string[] = []
+    for (const refName of await walks.referenceSequences()) {
+      const length = await walks.sequenceLength(refName)
+      for (let start = 0; start < length; start += 5) {
+        for (const contained of [false, true]) {
+          const cut = await walks.cut(
+            refName,
+            { start, end: start + 5 },
+            { context: 0, contained },
+          )
+          for (const walk of uncounted(cut)) {
+            missing.push(`${refName}:${start} ${walk}`)
+          }
+        }
+      }
+    }
+    expect(missing).toEqual([])
+  },
+)

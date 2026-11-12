@@ -10,8 +10,9 @@
 // nodes kept; the links between reference nodes, and each link with an end
 // off the reference as often as the cut walks it; each haplotype's cover and
 // departures; and the structural forms. A loaded cut that holds a
-// placeholder anywhere, and a pair of steps a cut walks with no link, are
-// differences too. What is set aside is printed with the counts.
+// placeholder anywhere, a pair of steps a cut walks with no link, and a walk
+// with a placeholder anywhere in the unloaded cut's tables whose walks and
+// departures state none of its unloaded steps are differences too. What is set aside is printed with the counts.
 //
 // A contained cut keeps `context` bp of a walk past its steps on the window.
 // A loaded cut keeps whole nodes, so it runs on to the end of the node that
@@ -39,7 +40,7 @@ import {
   walksKept,
 } from '../src/index.ts'
 
-import type { WalkFragment, WalkGap } from '../src/index.ts'
+import type { GraphTables, WalkFragment, WalkGap } from '../src/index.ts'
 
 type Cut = Awaited<ReturnType<WalkReader['cut']>>
 type Rows = Map<string, string[]>
@@ -174,13 +175,7 @@ const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
 // that the cut walks nowhere joins nodes kept through other walks, and is
 // set aside; a pair of steps a fragment or a computed departure walks with
 // no link is `missing`
-function linkRows(cut: Cut, window: Window) {
-  const { nodes, links } = cut.graph.tables(
-    cut.kept,
-    cut.fragments,
-    cut.departures,
-    cut.gaps,
-  )
+function linkRows(cut: Cut, window: Window, { nodes, links }: GraphTables) {
   const indexOfName = new Map(nodes.names.map((name, i) => [name, i]))
   const indexOf = (id: number | undefined) => {
     const node = id === undefined ? undefined : cut.graph.nodes.get(id)
@@ -309,6 +304,51 @@ function linkRows(cut: Cut, window: Window) {
   }
 }
 
+// The walks holding a placeholder among their steps, a departure's or a
+// gap's, whose walks' and departures' abridgedSteps state no step
+function uncounted({ nodes, walks, departures, gaps }: GraphTables) {
+  const holding = new Set<string>()
+  const scan = (name: string, steps: Int32Array, from: number, to: number) => {
+    for (let j = from; j < to; j++) {
+      if (nodes.placeholders?.[steps[j]!] === 1) {
+        holding.add(name)
+      }
+    }
+  }
+  walks.names.forEach((name, i) => {
+    scan(name, walks.steps, walks.offsets[i]!, walks.offsets[i + 1]!)
+  })
+  departures.names.forEach((name, k) => {
+    scan(
+      name,
+      departures.steps,
+      departures.offsets[k]!,
+      departures.offsets[k + 1]!,
+    )
+  })
+  gaps?.names.forEach((name, g) => {
+    const { stepOffsets, steps } = gaps.segments
+    scan(
+      name,
+      steps,
+      stepOffsets[gaps.segmentOffsets[g]!]!,
+      stepOffsets[gaps.segmentOffsets[g + 1]!]!,
+    )
+  })
+  const counted = new Map<string, number>()
+  const sum = (names: string[], steps: Float64Array | undefined) => {
+    names.forEach((name, i) => {
+      const n = steps?.[i] ?? Number.NaN
+      if (!Number.isNaN(n)) {
+        counted.set(name, (counted.get(name) ?? 0) + n)
+      }
+    })
+  }
+  sum(walks.names, walks.abridgedSteps)
+  sum(departures.names, departures.abridgedSteps)
+  return [...holding].filter(name => !((counted.get(name) ?? 0) > 0))
+}
+
 // Where a loaded cut holds a placeholder: in a fragment, a departure's
 // steps, a gap's steps or the nodes it keeps
 function placeholdersIn(cut: Cut) {
@@ -319,7 +359,7 @@ function placeholdersIn(cut: Cut) {
     }
   }
   for (const d of cut.departures) {
-    if (d.steps?.ids.some(isPlaceholder) === true) {
+    if (d.abridged !== undefined || d.steps?.ids.some(isPlaceholder) === true) {
       out.push(`departure of ${d.name} at ${d.hapStart}`)
     }
   }
@@ -423,7 +463,13 @@ function summary(cut: Cut, window: Window) {
       add(kept, 'on the reference', String(id))
     }
   }
-  const links = linkRows(cut, window)
+  const tables = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+    cut.gaps,
+  )
+  const links = linkRows(cut, window, tables)
   let offReference = 0
   for (const id of cut.kept) {
     offReference += cut.graph.nodes.get(id)?.rank === 0 ? 0 : 1
@@ -455,6 +501,7 @@ function summary(cut: Cut, window: Window) {
     offReference,
     placeholdersHeld: placeholdersIn(cut),
     unloadedStepsOff: unloadedStepsOff(cut),
+    uncounted: uncounted(tables),
     placeholderNames: links.placeholderNames,
     placeholderRuns: placeholderRuns(cut),
     unloaded: walks.filter(
@@ -774,6 +821,7 @@ async function compare(
     ...loaded.unloadedStepsOff,
   ])
   report('placeholder-misplaced', where, unloaded.misplaced)
+  report('placeholder-uncounted', where, unloaded.uncounted)
   report(
     'placeholder-id-not-its-run',
     where,

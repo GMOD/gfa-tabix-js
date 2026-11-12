@@ -1,5 +1,7 @@
 import { EARLIER_FORMAT_6, WalkRowError } from './walkChunk.ts'
 
+import type { Abridged } from './walkRows.ts'
+
 // A departure: where a path's consecutive steps on the reference sequence S
 // are not adjacent there, from a walk file's `departure` records or computed
 // from a piece's steps (gfa-to-tabix's docs/walks-format.md, ADR 0009). Each
@@ -29,6 +31,9 @@ export interface WalkDeparture {
   // less missingBp where some lie on other reference sequences, or in
   // pieces the cut did not read
   steps?: { ids: Int32Array; rev: Uint8Array }
+  // the pieces the cut did not load with a step among `steps`, in the path's
+  // order
+  abridged?: Abridged[]
 }
 
 // A stretch of a reference sequence no line of the reference covers, from a

@@ -90,6 +90,10 @@ gone.
   `ids`, `refStarts`, `against`, `hapStart`, `hapEnd`, `trimmedBefore` and
   `trimmedAfter` mean what they mean on any fragment, and an unloaded piece
   joins the pieces beside it
+- **`WalkDeparture.abridged`** lists, the same way, the pieces the cut did not
+  load with a step among the departure's `steps`. A piece can reach a cut there
+  alone: in a departure over the window with neither end on it, or in a record's
+  own steps in a tile fetched to attach them
 - **Placeholders:** a step with `isPlaceholder(id)`, an id below 0, is a run of
   steps off the tile's reference path that the cut did not load. Its `WalkNode`
   has `placeholder: true`, the run's bp as its length, and its place on its
@@ -101,8 +105,10 @@ gone.
   for its walk and its stretch of the contig, `HG002#1#chr1:118-121`, which is
   no node's name. `walks.abridgedSteps` is the steps of a walk's unloaded
   pieces, each piece counted on the first walk holding it, NaN for a walk with
-  none. `walks.abridgedBp` is gone: the placeholders' lengths are the bp not
-  loaded
+  none; `departures.abridgedSteps` counts, the same way, the pieces no walk
+  holds. A gap's steps are its walk's departures' steps, so a walk's unloaded
+  steps are its walks' `abridgedSteps` and its departures' together.
+  `walks.abridgedBp` is gone: the placeholders' lengths are the bp not loaded
 - **Gaps:** `GapKind` and `GAP_KINDS` lose `abridged`, so `own` is kind 2 and
   `unread` kind 3 in a gap table, and a segment has no `abridged` flag. An
   unloaded piece's steps outside a fragment are `read`, as a loaded piece's are
@@ -133,7 +139,8 @@ gone.
   bp, the part of a longer run within the cut's context, with the rest of the
   run as another placeholder outside it
 - New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder`,
-  `WalkFragment.unloadedSteps` and `placeholders` on a cut
+  `WalkFragment.unloadedSteps`, `WalkDeparture.abridged`,
+  `departures.abridgedSteps` and `placeholders` on a cut
 
 ## Changes in 6
 
@@ -418,8 +425,15 @@ for (const d of departures) {
   keeps a loaded node whole, so it can run less than that node past `context`;
   of a placeholder it keeps exactly `context` bp, as a placeholder of its own,
   and the rest of the run as another
+- A departure's `abridged` lists the pieces the cut did not load with a step
+  among its `steps`. They can be the only steps of a piece a cut holds: a
+  departure's whose ends both lie off the window, or a record's in a tile
+  fetched to attach them
 - `graph.tables(kept, fragments, departures)` keeps the steps of a walk's
-  unloaded pieces as `abridgedSteps`, NaN for a walk with none
+  unloaded pieces as `walks.abridgedSteps`, each piece on the first walk holding
+  it, and of those no walk holds as `departures.abridgedSteps`, each on the
+  first departure holding it, NaN for a walk or departure with none. A walk's
+  unloaded steps are the two together
 - With `expand` naming a walk, the cut reads the detail records of its pieces
   whose span lies over the drawn stretch, from their `abridged` rows alone, and
   of its pieces in a tile fetched for a record's own steps, and cuts those
