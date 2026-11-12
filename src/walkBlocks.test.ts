@@ -51,17 +51,17 @@ const all = () => true
 // and each run off it as its bp
 function steps(cut: Cut, f: WalkFragment) {
   const out: string[] = []
-  let own = 0
+  let off = 0
   for (let i = 0; i <= f.ids.length; i++) {
     const offR = i < f.ids.length && Number.isNaN(f.refStarts[i])
     if (offR) {
       const node = cut.graph.nodes.get(f.ids[i]!)!
-      own += node.end - node.start
+      off += node.end - node.start
     } else {
-      if (own > 0) {
-        out.push(`off:${own}`)
+      if (off > 0) {
+        out.push(`off:${off}`)
       }
-      own = 0
+      off = 0
       if (i < f.ids.length) {
         out.push(
           `${f.against[i] === 1 ? '<' : '>'}${f.ids[i]}@${f.refStarts[i]}`,
@@ -190,7 +190,7 @@ test.each([
     row: [0, 87, '>7@60 >8@70 >9@80 >10@90 off:7 <10@90 <9@80 <8@70 <7@60'],
   },
 ])(
-  'a hairpin that starts and ends on one node at its tile’s start is kept where it steps, both passes and the own bp between them, cut $start-$end',
+  'a hairpin that starts and ends on one node at its tile’s start is kept where it steps, both passes and the bp off R between them, cut $start-$end',
   async ({ start, end, row }) => {
     const { unloaded, loaded } = await cuts(start, end)
     expect(rows(unloaded, 'HAIRPIN#1#c')).toEqual([row])
@@ -305,7 +305,7 @@ test('each piece of a detail unit holding several is read from its own blocks ro
 
 // W TAIL 1 c >5>6>26>7>8, 4 bp in 26, which trail its piece in the tile at
 // 0; its record from 6 to 7 owns them
-test('an unloaded piece joins the next piece read, the own bp between them a placeholder its record holds', async () => {
+test('an unloaded piece joins the next piece read, the bp off R between them a placeholder its record holds', async () => {
   const { unloaded, loaded } = await cuts(50, 70)
   expect(rows(unloaded, 'TAIL#1#c')).toEqual([[10, 34, '>6@50 off:4 >7@60']])
   const [record] = unloaded.departures.filter(d => d.name === 'TAIL#1#c')
@@ -335,7 +335,7 @@ test('an unloaded piece joins the next piece read, the own bp between them a pla
 // hairpin.R.gfa, the piece of gfa-to-tabix's walks-format.md: R over six
 // 6 bp nodes, and W H 1 c >12>1>2<2<1>11>5>6>3>13>14 with 7 bp of its own
 // before its first step on R, 10 bp between and 50 bp after its last
-test('a piece that turns back, runs own bp and jumps back is its blocks in path order, with its own bp at either end', async () => {
+test('a piece that turns back, runs off R and jumps back is its list in path order, with its bp off R at either end', async () => {
   const walks = reader('hairpin.R')
   const window = { start: 0, end: 36 }
   const unloaded = await walks.cut(R, window, { context: 0 })
@@ -356,7 +356,7 @@ test('a piece that turns back, runs own bp and jumps back is its blocks in path 
 
 // W TAIL 1 c >5>6>26>7>8: its piece in the tile at 0 ends with 4 bp of its
 // own, and a window on 5 reads neither its next piece nor its record
-test('a piece’s own bp after its last step on R are read, the next piece unread', async () => {
+test('a piece’s bp off R after its last step on R are read, the next piece unread', async () => {
   const { unloaded, loaded } = await cuts(40, 50)
   const [f] = unloaded.fragments.filter(x => x.name === 'TAIL#1#c')
   expect(rows(unloaded, 'TAIL#1#c')).toEqual([[0, 10, '>5@40']])
@@ -371,7 +371,7 @@ test('a piece’s own bp after its last step on R are read, the next piece unrea
 
 // contigends.R.gfa: W L 1 c >11>12>13>3>4>5>6 starts with 30 bp of its own,
 // and W M 1 c >1>2>3>11>12>13 ends with them, at their contigs' ends
-test('a piece’s own bp before its first step on R and after its last are read at a contig’s ends', async () => {
+test('a piece’s bp off R before its first step on R and after its last are read at a contig’s ends', async () => {
   const walks = reader('contigends.R')
   const window = { start: 12, end: 18 }
   const unloaded = await walks.cut(R, window, { context: 0 })
@@ -441,7 +441,7 @@ test.each([
   },
 )
 
-test('a cut that expands a walk attaches the own steps its unexpanded cut holds as placeholders, tile by tile', async () => {
+test('a cut that expands a walk attaches the steps its unexpanded cut holds as placeholders, tile by tile', async () => {
   const walks = reader('ownends.R')
   for (const start of [0, 6, 12, 18, 24, 30]) {
     const window = { start, end: start + 6 }
@@ -583,7 +583,7 @@ test('a placeholder is no node: it is flagged, as long as its run, placed on its
   expect(Object.keys(idsByRun(narrower)).length).toBeGreaterThan(3)
 })
 
-// Every walk of blocks.R over 60-120 keeps placeholders for its own runs
+// Every walk of blocks.R over 60-120 keeps placeholders for its runs off R
 test('placeholders do not count towards the node limit', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
@@ -618,6 +618,23 @@ test('every fragment holding an unloaded piece says so, with the steps loading i
     'PARTIAL#1#c': 7,
     'TWICE#1#c': 7,
   })
+})
+
+test('a piece in two fragments of a contained cut counts its steps on the first', async () => {
+  const { unloaded } = await cuts(80, 90, { contained: true })
+  const { walks } = unloaded.graph.tables(
+    unloaded.kept,
+    unloaded.fragments,
+    unloaded.departures,
+  )
+  expect(
+    walks.names.flatMap((name, i) =>
+      name === 'TWICE#1#c' ? [[walks.starts[i], walks.abridgedSteps![i]]] : [],
+    ),
+  ).toEqual([
+    [10, 7],
+    [46, 0],
+  ])
 })
 
 describe('the units a cut reads', () => {
@@ -683,12 +700,15 @@ describe('the units a cut reads', () => {
     },
   )
 
-  test('the blocks unit counts against the byte budget', async () => {
+  test('the blocks unit counts against the byte budget, and in the bytes a cut is said to read', async () => {
     const walks = reader('cover.R')
     const units = await walks.units(R)
     const bytes = (kind: string) =>
       units.filter(u => u.kind === kind).reduce((sum, u) => sum + u.length, 0)
     const window = { start: 6000, end: 6500 }
+    expect(await walks.bytesFor(R, window)).toBe(
+      bytes('tile') + bytes('blocks'),
+    )
     await expect(
       walks.cut(R, window, { byteBudget: bytes('tile') }),
     ).rejects.toThrow('fetch')

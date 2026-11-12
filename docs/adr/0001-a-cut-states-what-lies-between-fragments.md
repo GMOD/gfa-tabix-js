@@ -7,7 +7,8 @@ Proposed, 2026-11-08
 Amended, 2026-11-11: the `abridged` segment kind is gone. A cut builds an
 abridged piece it does not load from its `blocks` row (gfa-to-tabix's ADR 0012),
 so the piece is a run of steps like any other, and its steps outside a fragment
-are `read`
+are `read`. An `own` segment carries no `abridged` flag: a piece's runs off the
+reference are in its `blocks` row, so no own sequence waits on loading
 
 ## Context
 
@@ -70,12 +71,11 @@ Each base of a stretch falls in one segment, by the first rule that applies:
 - **`own`**: the base lies in a record's own stretch,
   `[hapStart, hapStart + ownBp)`. The segment is the record's whole unread
   middle. It carries the record's `missingBp`, the part of its own sequence
-  between the contig's W lines that the graph lacks. It also carries whether the
-  record's leave or rejoin piece was one the cut did not load among the runs
-  over the window's tiles. The file does not state where within that middle the
-  missing bp lie, or the order of its steps on other reference sequences or on W
-  lines with no step on the reference (walk format C80, C87, ADR 0009 of
-  gfa-to-tabix), so the segment states the amounts and no order.
+  between the contig's W lines that the graph lacks. The file does not state
+  where within that middle the missing bp lie, or the order of its steps on
+  other reference sequences or on W lines with no step on the reference (walk
+  format C80, C87, ADR 0009 of gfa-to-tabix), so the segment states the amounts
+  and no order.
 - **`unread`**: any other base. The walk lies in pieces the cut did not read.
   Those pieces may hold departures the cut did not return, because it returns
   only those over the drawn stretch (C135), so the segment states no more than
@@ -113,7 +113,7 @@ And a segment table:
 
 - `kinds`: 0 `steps`, 1 `read`, 2 `own`, 3 `unread`
 - `bp`
-- `missingBp`, `abridged`: for `own`, 0 otherwise
+- `missingBp`: for `own`, 0 otherwise
 - `before`, `after`: for `unread`, NaN otherwise or where the cut knows no
   breakpoint on that side
 - `stepOffsets`, `steps`, `reversed`: for `steps`, its node indices and

@@ -80,43 +80,44 @@ const tables = graph.tables(kept, fragments, departures)
 
 graph-walks 7 reads an abridged piece it does not load from its tile's `blocks`
 unit (gfa-to-tabix's ADR 0012): its steps on the reference, exactly, and one
-placeholder step for each run of its own. The two-step fragment that stood for
-such a piece, and everything that netted it, is gone.
+placeholder step for each run of steps off it. The two-step fragment that stood
+for such a piece, and everything that netted it, is gone.
 
 - **Refused:** a sequence whose unit table lists a detail unit and no `blocks`
-  unit for its tile, with a `WalkFormatError` that says to rebuild the walk file
-  with gfa-to-tabix 4.1 or later. A sequence with no detail unit reads as before
+  unit for its tile, and a `blocks` row of an earlier shape, each with a
+  `WalkFormatError` that says to rebuild the walk file with gfa-to-tabix 4.1 or
+  later. A sequence with no detail unit reads as before
 - **`WalkFragment.abridged`** is a list, one `{ steps, bp, detail }` per piece
-  of the fragment the cut did not load, in the walk's order. The fragment is an
-  ordinary one: `ids`, `refStarts`, `against`, `hapStart`, `hapEnd`,
-  `trimmedBefore` and `trimmedAfter` mean what they mean on any fragment, and an
-  unloaded piece joins the pieces beside it
+  of the fragment the cut did not load, in the walk's order, and `unloadedSteps`
+  counts the fragment's steps that are theirs. The fragment is an ordinary one:
+  `ids`, `refStarts`, `against`, `hapStart`, `hapEnd`, `trimmedBefore` and
+  `trimmedAfter` mean what they mean on any fragment, and an unloaded piece
+  joins the pieces beside it
 - **Placeholders:** a step with `isPlaceholder(id)`, an id below 0, is a run of
-  own steps the cut did not load. Its `WalkNode` has `placeholder: true`, the
-  run's bp as its length, and its place on its walk's contig. No two steps share
-  one, it has no links, and two of equal bp may hold different sequence. They
-  are in `kept`, and in a departure's `steps` and a gap's `steps` segment where
-  the run is that departure's own
-- **`GraphTables`:** `nodes.placeholders` flags placeholder nodes, whose names
-  are their ids, `-1` and below. `walks.abridgedSteps` is the steps of a walk's
-  unloaded pieces summed, NaN for a walk with none. `walks.abridgedBp` is gone:
-  the placeholders' lengths are the bp not loaded
+  steps off the tile's reference path that the cut did not load. Its `WalkNode`
+  has `placeholder: true`, the run's bp as its length, and its place on its
+  walk's contig. One run keeps one id in every cut of a reader, and no two runs
+  share one. They are in `kept`, in a departure's `steps`, in a gap's `steps`
+  segment and in the links, and count toward neither `nodeLimit` nor
+  `stepBudget`
+- **`GraphTables`:** `nodes.placeholders` flags placeholder nodes, each named
+  for its walk and its stretch of the contig, `HG002#1#chr1:118-121`, which is
+  no node's name. `walks.abridgedSteps` is the steps of a walk's unloaded
+  pieces, each piece counted on the first walk holding it, NaN for a walk with
+  none. `walks.abridgedBp` is gone: the placeholders' lengths are the bp not
+  loaded
 - **Gaps:** `GapKind` and `GAP_KINDS` lose `abridged`, so `own` is kind 2 and
-  `unread` kind 3 in a gap table. An unloaded piece's steps outside a fragment
-  are `read`, as a loaded piece's are. An `own` segment's `abridged` flag is set
-  where the record leaves from or rejoins at a piece the cut did not load
+  `unread` kind 3 in a gap table, and a segment has no `abridged` flag. An
+  unloaded piece's steps outside a fragment are `read`, as a loaded piece's are
 - **Forms:** `Departure.abridged`, the `net` mark kind and
   `StructuralForms.abridged` are gone, since an unloaded piece gives the
   departures its loaded one gives. `formsCut` makes one cut and reads no detail
-  unit: its `expand` and `partial` options and `ExpansionTooLargeError` are
-  gone, and `stepBudget` bounds that cut, throwing `RegionTooLargeError`
-- **`expand`** reads a walk's detail unit only where its extent overlaps the
-  window and its context, or in a tile fetched for a record's own steps. An
-  abridged piece outside that is left out of the cut, whether or not its walk is
-  expanded
-- **`byteBudget`** counts the `blocks` units a cut reads
-- New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder`, and
-  `expandStated` on a cut, for checks
+  unit: its `expand` and `partial` options and `ExpansionTooLargeError` are gone
+- **`expand`** reads the detail units of the pieces whose steps the cut keeps or
+  attaches, which their `blocks` rows tell, and no other
+- **`byteBudget`** and `bytesFor` count the `blocks` units a cut reads
+- New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder` and
+  `WalkFragment.unloadedSteps`
 
 ## Changes in 6
 
@@ -210,7 +211,6 @@ const { tables, refName, sample } = await reader.cutRegion(
 | `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                  |
 | `signal`              | An `AbortSignal` that stops the reads                                                   |
 | `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default     |
-| `expandStated`        | For checks: with `expand`, read each piece only as far as its `blocks` row states it    |
 | `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets            |
 
 - A cut over a budget or its node limit throws a `RegionTooLargeError`. The
@@ -233,10 +233,10 @@ const { tables, refName, sample } = await reader.cutRegion(
   fetched for records' own steps count against `byteBudget` with the window's,
   and a cut they would take past it throws the same `RegionTooLargeError` before
   fetching any of them, so a window attaches every eligible record's own steps
-  or none. The `blocks` units a cut reads for the pieces it leaves unloaded
-  count against `byteBudget` too. The detail records `expand` names count only
-  against `stepBudget`, once read; the writer moves paths out of any tile whose
-  rows would compress past its header's `abridgebytes`
+  or none. The `blocks` units a cut reads count against `byteBudget` too. The
+  detail records `expand` names count only against `stepBudget`, once read; the
+  writer moves paths out of any tile whose rows would compress past its header's
+  `abridgebytes`
 - A narrow window reads whole tiles, so a cut reads several times the steps it
   keeps. The rows a cut decodes from the window's tiles, and from the detail
   records `expand` names once they are decoded, may hold up to 8 times
@@ -283,8 +283,7 @@ follows (or precedes, for a row's start), and `segments` in contig order whose
   out, such as reference steps off the drawn stretch or own steps of a departure
   over `attachBp`
 - `own`: a record's own sequence the cut did not read, with its `missingBp`, in
-  no stated order, and `abridged` set where the record's leave or rejoin piece
-  is one the cut did not load, so expanding the walk reads those steps
+  no stated order
 - `unread`: pieces the cut did not read, with the reference breakpoints the cut
   knows `before` and `after` them
 
@@ -363,9 +362,8 @@ for (const d of departures) {
   `RegionTooLargeError` where they would take the cut past `byteBudget`, so
   whether a record gets its steps does not depend on the other walks the cut
   keeps, as gfa-to-tabix ADR 0009 asks
-- Own steps after an unloaded piece's last step on the reference come only for a
-  walk `expand` names, which reads its detail unit; where the cut read the next
-  piece, a placeholder of their bp stands for them
+- Own steps in a piece the cut did not load are a placeholder of their bp;
+  `expand` naming the walk reads them from its detail unit
 - `fromSteps` is true for a departure computed from a piece's steps
 - Those steps' nodes are kept, so the cut draws a short insertion or replacement
   at the window's edge whole, and counts them against `stepBudget`
@@ -379,15 +377,16 @@ for (const d of departures) {
 
 - In a tile over its budget, gfa-to-tabix moves the costliest paths' rows to
   detail records and leaves one `abridged` row per moved piece, and a `blocks`
-  unit for the tile with a row per piece: its runs on the reference and the bp
-  of its own between them. A satellite array in a pggb graph is the usual case
-- A cut that does not expand a walk builds each of its abridged pieces from its
-  `blocks` row and the tile's reference path: the reference steps each block
-  covers, in the block's direction, and one placeholder step for each run of the
-  piece's own, with that run's bp and no node. The piece is then cut as a loaded
-  one is: kept where a step of it lies on the drawn stretch, trimmed to its
-  first and last steps there, joined to the pieces beside it, split by a
-  contained cut, and read for departures, gaps and forms
+  unit for the tile with a row per piece: the piece in path order as its runs on
+  the reference and the bp of its runs off it. A satellite array in a pggb graph
+  is the usual case
+- A cut reads the `blocks` unit of each tile it reads that abridges a walk it
+  keeps, a tile fetched for a record's own steps included. A piece it does not
+  load is then cut as a loaded one is: kept where a step of it lies on the drawn
+  stretch, trimmed to its first and last steps there, joined to the pieces
+  beside it, split by a contained cut, linked, and read for departures, gaps and
+  forms. Its steps on the reference are the reference's own, and each run off it
+  is one placeholder step with that run's bp and no node
 - A fragment's `abridged` lists the pieces in it the cut did not load, each with
   its `steps`, the `bp` of its stretch from its first step on the reference to
   its last, and the `detail` unit that holds it: its sequence `refName`, the
@@ -395,27 +394,27 @@ for (const d of departures) {
   piece's steps, which reading the unit decodes
 - `isPlaceholder(id)` tells a placeholder step, whose id is below every node's.
   Its node, in `graph.nodes` and in the tables' `nodes` with `placeholders` set,
-  has the run's bp as its length and lies on the walk's contig. Each run has its
-  own, so no two walks share one, and two of equal bp may hold different
-  sequence: only expanding tells
+  has the run's bp as its length, lies on the walk's contig and is named for
+  both. A run off the reference path can hold nodes of the reference, where the
+  reference passes a node more than once, and two runs of equal bp may hold
+  different sequence: only expanding tells
+- A contained cut keeps `context` bp of a walk past its steps on the window. It
+  keeps a loaded node whole, so it can run less than that node past `context`;
+  of a placeholder it keeps exactly `context` bp, as a placeholder of its own,
+  and the rest of the run as another
 - `graph.tables(kept, fragments, departures)` keeps the steps of a walk's
-  unloaded pieces, summed, as `abridgedSteps`, NaN for a walk with none
-- With `expand` naming a walk, the cut reads its detail records whose extent
-  overlaps the window and its context, and cuts those pieces in full, as a file
-  without abridging would. A cut that expands every piece it keeps reads no
-  `blocks` unit
-- A `blocks` row states a piece from its first step on the reference to its
-  last. Own steps before a line's first piece are the bp from the line's start,
-  and own steps after a piece's last step on the reference are the bp to the
-  next piece where the cut read it; where it did not, the cut knows them only as
-  the following record's `ownBp`, an `own` gap segment with `abridged` set
-- An abridged piece whose detail unit lies off the window and its context is
-  left out of the cut: it has no step there, and its stretch of the contig is
-  `unread` in the gaps
+  unloaded pieces as `abridgedSteps`, NaN for a walk with none
+- With `expand` naming a walk, the cut reads the detail records of its pieces
+  with a block over the drawn stretch, a run off the reference in a departure
+  over it, or a run a record within `attachBp` attaches, and cuts those pieces
+  in full, as a file without abridging would
+- The cut builds whole only what it draws of an unloaded piece: from the first
+  block over the drawn stretch to the last, the piece's end steps, and each
+  departure that can lie over the stretch. What lies between counts in bp
 - `pnpm blocks-equality <walks.gz or URL>` holds the two readings equal on a
   walk file: over random windows on its abridged tiles, the cut that expands
-  nothing against the cuts that expand every walk, plain and contained
-  (`scripts/blocks-equality.ts`)
+  nothing against the cut that expands every walk, plain, contained and
+  contained with context (`scripts/blocks-equality.ts`)
 
 ## Moved components
 
@@ -448,8 +447,8 @@ result.forms.map(f => formTag(f, result))
   inverted bp, and bp walked again by a step back along the reference. It
   expands no walk: an abridged piece's `blocks` row gives the departures its
   detail record gives
-- `formsCut` keeps to `FORMS_STEP_BUDGET` steps, or its `stepBudget`, and throws
-  `RegionTooLargeError` past it
+- `formsCut` keeps to `FORMS_STEP_BUDGET` steps, or a larger `stepBudget`, and
+  throws `RegionTooLargeError` past it
 - `formsCut` takes `byteBudget`, and a region whose tiles the table puts past it
   throws `RegionTooLargeError` before any read
 - `formsCut` reads each haplotype's departures off the cut's `departures`, every
@@ -599,8 +598,9 @@ const gfa = await rgfaCut(
   either piece, the cut fetches the tiles the record's `ownTiles` names, every
   one wanted in one more read counted against `byteBudget`, and takes from them
   the records' own steps alone; a tile fetched again decodes only the walks it
-  was not decoded for. An abridged piece over the window is read from its tile's
-  `blocks` unit, or from its `detail` unit where the cut expands its walk
+  was not decoded for. An abridged piece is read from its tile's `blocks` unit,
+  or from its `detail` unit where the cut expands its walk and keeps or attaches
+  the piece's steps
 
 ## License
 

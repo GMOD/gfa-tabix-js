@@ -263,10 +263,9 @@ function departureRecords(
  * a window, the tiles and departure blocks overlapping the window and its
  * context, in one read wherever their bytes touch, each tile decoded once;
  * then every tile holding the own steps of records within `attachBp` the
- * read lacks, which give those steps alone, the detail records of the
- * walks `expand` names, and the `blocks` unit of each tile with an abridged
- * piece over the window that the cut does not expand, which gives the
- * piece's steps on the reference and the bp of its own between them. The
+ * read lacks, which give those steps alone, the `blocks` unit of
+ * each tile that abridges a walk kept, and the detail records of the walks
+ * `expand` names. The
  * table gives each read's bytes before it is made;
  * a window whose tiles are past the byte budget reads no row, and one whose
  * attach tiles take it past reads none of them. Only the walks `keep`
@@ -316,7 +315,7 @@ export class WalkReader {
     return { ...header, tile }
   })
 
-  // the id of each run of own steps a cut left unloaded, by its walk and
+  // the id of each run of steps off R a cut left unloaded, by its walk and
   // its stretch of the contig: the same run has the same id in every cut
   private readonly runIds = new Map<string, Map<string, number>>()
   private runCount = 0
@@ -702,9 +701,8 @@ export class WalkReader {
           ),
         ))
     // every abridged row met is read: from its detail record where the cut
-    // expands its walk and the piece has a block over the drawn stretch, own
-    // steps in a departure over it or own steps a record attaches, and else
-    // from its blocks row
+    // expands its walk and keeps or attaches the piece's steps, and else from
+    // its blocks row
     const resolve = async (attaching: boolean) => {
       const batch = met
       met = []

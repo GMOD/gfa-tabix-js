@@ -52,8 +52,8 @@ export interface Abridged {
   detail: { refName: string; start: number; name: string }
 }
 
-// Whether a step's id is a placeholder's: a run of an unloaded piece's own
-// steps, of known bp and no node identity
+// Whether a step's id is a placeholder's: a run of an unloaded piece's
+// steps off R, of known bp and no node identity
 export const isPlaceholder = (id: number) => id < 0
 
 export interface WalkNode {
@@ -67,7 +67,7 @@ export interface WalkNode {
   passes: number
   // on the reference inside the window plus the cut's context
   onWindow: boolean
-  // no node of the graph: a run of an unloaded piece's own steps, on
+  // no node of the graph: a run of an unloaded piece's steps off R, on
   // `refName`, its contig, from `start` to `end`
   placeholder?: true
 }
@@ -298,8 +298,8 @@ export interface WalkCutOptions {
   // runs of tiles read only for records' own steps, which give those steps
   // and nothing else
   attach?: WalkRun[]
-  // the id of the placeholder for a walk's own run over a stretch of its
-  // contig; given it, a contained cut keeps `context` bp of a placeholder
+  // the id of the placeholder for a walk's unloaded run over a stretch of
+  // its contig; given it, a contained cut keeps `context` bp of a placeholder
   placeholder?: (name: string, start: number, end: number) => number
 }
 
@@ -422,9 +422,8 @@ export function walkCut(
   const spans: { run: WalkRun; first: number; last: number }[] = []
   // A contained run's spans: each stretch between steps onto the reference
   // off the window that has steps on it, from its first such step to its
-  // last, and `context` bp of the walk past either. A loaded step is kept
-  // whole, so a span can run less than its last node past `context`; a
-  // placeholder longer than what is left of `context` is one to split there
+  // last, and `context` bp of the walk past either: whole steps, but of a
+  // placeholder only the bp left, which is where to split it
   const containedSpans = (run: WalkRun) => {
     const { ids } = run
     const bp = before(run)

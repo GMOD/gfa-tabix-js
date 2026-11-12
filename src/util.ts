@@ -15,7 +15,7 @@ export interface GraphTables {
     // 0 for a node placed off R, which may lie on the reference outside the
     // rows read; absent from tables another source builds
     passes?: Int32Array
-    // 1 for a placeholder, as WalkNode's `placeholder`: a run of own steps
+    // 1 for a placeholder, as WalkNode's `placeholder`: a run of steps off R
     // the cut did not load, named for its walk and its stretch of the contig;
     // absent from tables another source builds
     placeholders?: Uint8Array

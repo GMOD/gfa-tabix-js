@@ -29,7 +29,7 @@ export interface PlacedNode {
   // rows; 0 for a node off its R, whether off the reference or on it only
   // where these rows do not hold it
   passes: number
-  // a run of a piece's own steps the cut did not load, placed on its contig
+  // a run of a piece's steps off R the cut did not load, placed on its contig
   placeholder?: true
 }
 
@@ -709,11 +709,9 @@ export function blocksOver(
   return { first, last, offOver }
 }
 
-// The walk row of an abridged piece the cut does not load. Blocks `core[0]`
-// to `core[1]` are built whole, a placeholder for each run off R; of the
-// rest, the piece's end steps, its runs off R at its ends and both sides of
-// each departure that can lie over `over`. A SKIPPED step has the bp of what
-// lies between, and `cuts` are where a step does not follow the one before
+// The walk row of an abridged piece the cut does not load: blocks `core[0]`
+// to `core[1]` whole, and of the rest its end steps and each departure that
+// can lie over `over`, a SKIPPED step for what lies between
 export function unloadedRow(
   piece: AbridgedPiece,
   blocks: PieceBlocks,
