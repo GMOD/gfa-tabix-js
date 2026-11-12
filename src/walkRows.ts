@@ -1271,6 +1271,9 @@ export function stepBudgetError(
   )
 }
 
+const loaded = (ids: Int32Array) =>
+  ids.reduce((sum, id) => sum + (isPlaceholder(id) ? 0 : 1), 0)
+
 /**
  * The zoom-in notice for a cut that keeps more steps than `budget`, the
  * fragments' and the departures' attached steps together, or undefined when
@@ -1284,8 +1287,6 @@ export function keptStepsError(
   window: { start: number; end: number },
   filtered: boolean,
 ) {
-  const loaded = (ids: Int32Array) =>
-    ids.reduce((sum, id) => sum + (isPlaceholder(id) ? 0 : 1), 0)
   const total =
     fragments.reduce(
       (sum, f) => sum + f.ids.length - (f.unloadedSteps ?? 0),

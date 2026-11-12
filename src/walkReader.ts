@@ -547,6 +547,15 @@ export class WalkReader {
         }
       }
     }
+    // links as pairs of handles, each written the one way round
+    const addLinks = (pairs: number[]) => {
+      if (links) {
+        for (let k = 0; k < pairs.length; k += 2) {
+          const [a, b] = canonicalLink(pairs[k]!, pairs[k + 1]!)
+          graph.addLinkEnds(a, b)
+        }
+      }
+    }
     const placeNodes = (nodes: Map<number, PlacedNode>) => {
       for (const [id, node] of nodes) {
         graph.placeNode(id, node)
@@ -795,10 +804,7 @@ export class WalkReader {
           )
           read.into.push(built.row)
           placeNodes(built.nodes)
-          for (let k = 0; links && k < built.links.length; k += 2) {
-            const [a, b] = canonicalLink(built.links[k]!, built.links[k + 1]!)
-            graph.addLinkEnds(a, b)
-          }
+          addLinks(built.links)
           ends.push({
             name: piece.name,
             fragStart: piece.fragStart,
@@ -924,10 +930,7 @@ export class WalkReader {
     if (tooMany) {
       throw tooMany
     }
-    for (let k = 0; links && k < cut.links.length; k += 2) {
-      const [a, b] = canonicalLink(cut.links[k]!, cut.links[k + 1]!)
-      graph.addLinkEnds(a, b)
-    }
+    addLinks(cut.links)
     const { kept, fragments, departures } = cut
     return { graph, kept, fragments, departures, gaps: cut.gapsOf() }
   }
