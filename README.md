@@ -115,8 +115,8 @@ record's own steps in a tile fetched to attach them.
   joins the pieces beside it
 - **`WalkDeparture.abridged`** lists, the same way, the pieces the cut did not
   load with a step among the departure's `steps`. A piece can reach a cut there
-  alone: in a departure over the window with neither end on it, or in a record's
-  own steps in a tile fetched to attach them
+  alone: a record's leave piece or rejoin piece with no step on the drawn
+  stretch, in a tile of the window or in one fetched to attach its own steps
 - **Placeholders:** a step with `isPlaceholder(id)`, an id below 0, is a run of
   steps off the tile's reference path that the cut did not load. Its `WalkNode`
   has `placeholder: true`, the run's bp as its length, and its place on its
@@ -152,6 +152,14 @@ record's own steps in a tile fetched to attach them.
 - **Attach from the row:** a tile fetched to attach a record's own steps gives
   them, for a piece the cut does not expand, as a placeholder from the piece's
   `abridged` row and the record, with no `blocks` unit read
+- **Own steps where a walk leaves or rejoins:** a departure gets its own steps
+  only where it leaves or rejoins the reference on the window or its context
+  ([Departures](#departures)). One that jumps over them comes back with its ends
+  and its own bp and no `steps`, keeps no node in the cut, and costs no read
+  past its line in the departure blocks. graph-walks 6 gave every departure
+  within `attachBp` over the window its steps, and fetched a tile for each
+  record it lacked a piece of, however far off its ends lay.
+  `leavesOrRejoinsOn(d, span)` tells the two apart
 - **`bytesFor`** counts the tiles a cut fetches to attach, which it reads the
   window's departure blocks to learn, and takes `attachBp` and
   `departureByteBudget` as a cut does. It is the bytes a cut that keeps every
@@ -191,22 +199,22 @@ const { tables, refName, sample } = await reader.cutRegion(
 
 ## Cut options
 
-| Option                | Effect                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------- |
-| `keep`                | Which walks to decode, by `sample#haplotype#contig`; every one by default               |
-| `context`             | bp of reference kept past each end of the region; default 1000                          |
-| `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default        |
-| `byteBudget`          | The most compressed bytes the walk and attach reads fetch; 8 MB by default              |
-| `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default                   |
-| `attachBp`            | The most bp of own sequence a departure gets its steps attached for; default 65,536     |
-| `attachFetches`       | Deprecated and ignored: every eligible record's tiles are fetched, against `byteBudget` |
-| `nodeLimit`           | The most nodes a cut keeps; no limit by default                                         |
-| `contained`           | `true` keeps each walk within the window; see below                                     |
-| `links`               | `false` lists no links, for a caller that draws no edges                                |
-| `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                  |
-| `signal`              | An `AbortSignal` that stops the reads                                                   |
-| `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default     |
-| `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets            |
+| Option                | Effect                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `keep`                | Which walks to decode, by `sample#haplotype#contig`; every one by default           |
+| `context`             | bp of reference kept past each end of the region; default 1000                      |
+| `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default    |
+| `byteBudget`          | The most compressed bytes the walk and attach reads fetch; 8 MB by default          |
+| `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default               |
+| `attachBp`            | The most bp of own sequence a departure gets its steps attached for; default 65,536 |
+| `attachFetches`       | Deprecated and ignored: the tiles of every record that gets its steps are fetched   |
+| `nodeLimit`           | The most nodes a cut keeps; no limit by default                                     |
+| `contained`           | `true` keeps each walk within the window; see below                                 |
+| `links`               | `false` lists no links, for a caller that draws no edges                            |
+| `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file              |
+| `signal`              | An `AbortSignal` that stops the reads                                               |
+| `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default |
+| `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets        |
 
 - A cut over a budget or its node limit throws a `RegionTooLargeError`. The
   error's `fitsBp` holds about how wide a window would fit, and JBrowse shows it
@@ -227,11 +235,11 @@ const { tables, refName, sample } = await reader.cutRegion(
   either is fetched, and the cut refuses either past its budget. The tiles
   fetched for records' own steps count against `byteBudget` with the window's,
   and a cut they would take past it throws the same `RegionTooLargeError` before
-  fetching any of them, so a window attaches every eligible record's own steps
-  or none. The `blocks` units a cut reads count against `byteBudget` too. The
-  detail records `expand` names count only against `stepBudget`, once read; the
-  writer moves paths out of any tile whose rows would compress past its header's
-  `abridgebytes`
+  fetching any of them, so a window attaches the own steps of every record that
+  [gets them](#departures) or of none. The `blocks` units a cut reads count
+  against `byteBudget` too. The detail records `expand` names count only against
+  `stepBudget`, once read; the writer moves paths out of any tile whose rows
+  would compress past its header's `abridgebytes`
 - A narrow window reads whole tiles, so a cut reads several times the steps it
   keeps. The rows a cut decodes from the window's tiles, and from the detail
   records `expand` names once they are decoded, may hold up to 8 times
@@ -276,8 +284,9 @@ follows (or precedes, for a row's start), and `segments` in contig order whose
 - `steps`: own steps the cut attached to a departure, with their `ids` and
   `rev`; these nodes are in the cut
 - `read`: steps of the walk's runs over the window's tiles that the cut kept
-  out, such as reference steps off the drawn stretch or own steps of a departure
-  over `attachBp`
+  out, such as reference steps off the drawn stretch, or own steps of a
+  departure over `attachBp` or of one that neither leaves nor rejoins on the
+  window or its context
 - `own`: a record's own sequence the cut did not read, with its `missingBp`, in
   no stated order
 - `unread`: pieces the cut did not read, with the reference breakpoints the cut
@@ -286,8 +295,9 @@ follows (or precedes, for a row's start), and `segments` in contig order whose
 
 A row end runs over the bp of the run past the fragment, and over the whole of
 any record that reaches it. Tiles fetched for a record's own steps give `steps`
-alone, and the cut fetches them for every record within `attachBp` or refuses
-the window, so which records get `steps` follows from each record alone.
+alone, and the cut fetches them for every record that
+[gets its own steps](#departures) or refuses the window, so which records get
+`steps` follows from each record and the window alone.
 `graph.tables(kept, fragments, departures, gaps)` writes them as a `gaps` table,
 each stretch's walk by its fragment's index in `walks`, and each step as a node
 index.
@@ -347,18 +357,46 @@ for (const d of departures) {
   it may lie on the reference outside those rows; the header's `revisited`
   counts the nodes passed more than once, 0 where every departure in the file is
   a fact of the graph
-- A departure of at most `attachBp` of own sequence carries its own steps in
-  `steps`: the walk's steps between its leave and its rejoin, from the end of
+- **A departure carries its own steps in `steps` where it leaves or rejoins on
+  the window or its context,** and has at most `attachBp` of own sequence. It
+  leaves there when the base of its leave step beside the breakpoint lies in
+  `[start − context, end + context)`, and rejoins there when that base of its
+  rejoin step does: for a step along the reference, the base before `leavePos`
+  and the base at `rejoinPos`; for one against it, the base at `leavePos` and
+  the base before `rejoinPos`. `leavesOrRejoinsOn(d, span)` says so of any
+  departure and stretch
+- `steps` are the walk's steps between its leave and its rejoin, from the end of
   the leave piece and the start of the rejoin piece. A step of 0 bp is an own
   step, so a record with `ownBp` 0, or no more than its `missingBp`, can carry
   one; own sequence between the contig's W lines has no steps
-- They come from the pieces the cut read. For a record whose leave or rejoin
-  piece lies outside the read, the cut fetches the tiles its `ownTiles` column
-  names that it has not read for that walk, and takes from them that record's
-  own steps alone. It fetches them for every such record, or throws a
-  `RegionTooLargeError` where they would take the cut past `byteBudget`, so
-  whether a record gets its steps does not depend on the other walks the cut
-  keeps, as gfa-to-tabix ADR 0009 asks
+- **A departure that jumps over the window and its context** comes back with
+  everything its row states and no `steps`: its walk, `hapStart`, `ownBp`,
+  `missingBp`, both breakpoints with their strands and passes, and so its
+  `departureKind`. What a consumer does not get is the nodes of its own
+  sequence, which join the graph at its two ends, off the window and its
+  context: a cut that kept them drew them joined to nothing there
+- The rule reads bases, not nodes. A cut draws whole the node that straddles an
+  end of the window and its context, and a walk that leaves that node at its far
+  end, past the stretch, gets no steps: a record states its breakpoints and not
+  how far its end nodes run, and `bytesFor` has to tell the rule from the record
+  alone. A wider `context` reaches it
+- The rule is the same for a record and for a departure the cut computes inside
+  one piece, so what a cut keeps does not turn on where the writer cut a walk
+  into pieces
+- **`attachBp` bounds what a cut keeps, not what it reads.** A walk that leaves
+  the reference on the window for megabases of its own would bring every node of
+  them into the cut; past `attachBp` the departure states its bp and no steps.
+  What a cut reads is bounded by the rule above and by `byteBudget`
+- The steps come from the pieces the cut read. For a record that gets its steps
+  and whose leave or rejoin piece lies outside the read, the cut fetches the
+  tiles its `ownTiles` column names that it has not read for that walk, and
+  takes from them that record's own steps alone. It fetches them for every such
+  record, or throws a `RegionTooLargeError` where they would take the cut past
+  `byteBudget`, so whether a record gets its steps does not depend on the other
+  walks the cut keeps, as gfa-to-tabix ADR 0009 asks
+- A record that leaves on the window has its leave piece in the window's tiles,
+  and one that rejoins there its rejoin piece, so a record costs a fetch only
+  for the piece at its far end, and only where that piece holds own steps
 - Own steps in a piece the cut did not load are a placeholder of their bp;
   `expand` naming the walk reads them from its detail unit. The piece holding
   them is the one whose stretch of the contig, `[hapOffset, hapOffset + hapBp)`
@@ -385,7 +423,7 @@ for (const d of departures) {
   alone:
   - those whose span lies over the drawn stretch
   - those between two such pieces of a line, by piece number
-  - those holding the own steps of a record within `attachBp`
+  - those holding the own steps of a record that [gets them](#departures)
   - in a contained cut with context, the piece whose last steps the context
     reaches before a piece over the drawn stretch
 - With `expand` naming the walk, the cut reads those pieces from their detail
@@ -418,8 +456,8 @@ for (const d of departures) {
   and the rest of the run as another
 - A departure's `abridged` lists the pieces the cut did not load with a step
   among its `steps`. They can be the only steps of a piece a cut holds: a
-  departure's whose ends both lie off the window, or a record's in a tile
-  fetched to attach them
+  record's own steps in a piece with no step on the drawn stretch, in a tile of
+  the window or in one fetched to attach them
 - `graph.tables(kept, fragments, departures)` keeps the steps of a walk's
   unloaded pieces as `walks.abridgedSteps`, each piece on the first walk holding
   it, and of those no walk holds as `departures.abridgedSteps`, each on the
@@ -432,9 +470,11 @@ for (const d of departures) {
   walk file: over random windows on its abridged tiles, the cut that expands
   nothing against the cut that expands every walk, plain, contained and
   contained with context, and against the same cut from a fresh reader. It also
-  holds each record's placeholders to the runs the tiles' `blocks` rows give,
-  the expanding cut to no `blocks` unit, and the bytes read to `bytesFor`
-  (`scripts/blocks-equality.ts`)
+  holds own steps to the departures that leave or rejoin on the window and its
+  context, which it tells from the records' columns itself, the tiles read past
+  a window's to the ones those records name, each record's placeholders to the
+  runs the tiles' `blocks` rows give, the expanding cut to no `blocks` unit, and
+  the bytes read to `bytesFor` (`scripts/blocks-equality.ts`)
 
 ## What a cut reads
 
@@ -448,22 +488,35 @@ A cut reads these units, each once:
   `abridged` row's `hapBp`
 - **Detail units:** with `expand`, those of the pieces it builds of the walks
   named, among the window's tiles and then among the tiles fetched to attach
-- **Tiles fetched to attach:** for each record within `attachBp` whose leave
-  piece or rejoin piece the window's tiles lack, the tiles its `ownTiles` names.
-  No `blocks` unit is read for them: an unexpanded piece's own run comes from
-  its `abridged` row and the record
+- **Tiles fetched to attach:** for each record within `attachBp` that leaves or
+  rejoins on the window or its context ([Departures](#departures)) and whose
+  leave piece or rejoin piece the window's tiles lack, the tiles its `ownTiles`
+  names. No `blocks` unit is read for them: an unexpanded piece's own run comes
+  from its `abridged` row and the record
 
 So a `blocks` unit is read for a tile under the window and its context that
 abridges a walk kept and not expanded, and never otherwise: not to attach, not
 to choose what to expand, and not for a walk the cut expands.
 
+And a tile past the window's is read for a record that leaves or rejoins there,
+and never for one that only lies over it:
+
+- A record lies over every window between its ends, so on a collapsed repeat,
+  where the placement hops between copies far apart, most of the records over a
+  window end nowhere near it. Each costs its line in the departure blocks, which
+  `departureByteBudget` bounds, and nothing more
+- What a window reads past its own tiles, `blocks` units and departure blocks
+  therefore follows what happens on the window, not how many walks pass over it
+
 `reader.bytesFor(refName, region, { context, attachBp })` adds these up before a
 cut is made:
 
 - It counts the window's tiles, each one's `blocks` unit, the window's departure
-  blocks, and the tiles that records within `attachBp` name in `ownTiles` beyond
-  the window's. It reads the departure blocks to learn those, as the cut does,
-  and throws the cut's `DepartureReadError` past `departureByteBudget`
+  blocks, and the tiles named in `ownTiles`, beyond the window's, by the records
+  within `attachBp` that leave or rejoin on the window or its context. It reads
+  the departure blocks to learn those, as the cut does, and tells which records
+  they are from each record's columns alone; it throws the cut's
+  `DepartureReadError` past `departureByteBudget`
 - **Exact** for a cut that keeps every walk and expands none, within its
   budgets, whatever its `context`, `attachBp` and `contained`
 - **An upper bound with `keep` or `haplotypes`:** fewer walks leave out the
@@ -654,14 +707,15 @@ const gfa = await rgfaCut(
   and its context, each line once
 - A departure inside one piece comes from the piece's steps, and one between
   pieces from its record, so each comes back once. A departure's own steps are
-  attached where its own bp are under `attachBp`, from its leave piece's steps
-  after the leave and its rejoin piece's before the rejoin. Where the read lacks
-  either piece, the cut fetches the tiles the record's `ownTiles` names, every
-  one wanted in one more read counted against `byteBudget`, and takes from them
-  the records' own steps alone; a tile fetched again decodes only the walks it
-  was not decoded for. An abridged piece the cut builds is read from its tile's
-  `blocks` unit, from its `detail` unit where the cut expands its walk, or, in a
-  tile fetched to attach, from its `abridged` row and the record
+  attached where its own bp are within `attachBp` and it leaves or rejoins on
+  the window or its context, from its leave piece's steps after the leave and
+  its rejoin piece's before the rejoin. Where the read lacks either piece, the
+  cut fetches the tiles the record's `ownTiles` names, every one wanted in one
+  more read counted against `byteBudget`, and takes from them the records' own
+  steps alone; a tile fetched again decodes only the walks it was not decoded
+  for. An abridged piece the cut builds is read from its tile's `blocks` unit,
+  from its `detail` unit where the cut expands its walk, or, in a tile fetched
+  to attach, from its `abridged` row and the record
 
 ## License
 

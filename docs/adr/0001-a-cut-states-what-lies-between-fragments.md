@@ -10,6 +10,13 @@ so the piece is a run of steps like any other, and its steps outside a fragment
 are `read`. An `own` segment carries no `abridged` flag: a piece's runs off the
 reference are in its `blocks` row, so no own sequence waits on loading
 
+Amended, 2026-11-12: a departure gets its own steps only where it leaves or
+rejoins on the window or its context, as well as being within `attachBp`. So
+`steps` below are those departures' steps, the own steps the cut read of any
+other departure are `read`, and the far pieces fetched are those records'. A
+departure that jumps over the window has no `steps` and, where the cut read none
+of its own sequence, one `own` segment
+
 ## Context
 
 A walk row in @jbrowse/bandage-core draws a walk's fragments end to end along
