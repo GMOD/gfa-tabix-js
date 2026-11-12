@@ -21,18 +21,28 @@
 // fragments must agree once the loaded one's end is drawn in by that much,
 // and the gaps must agree outside it.
 //
+// A run of steps off a tile's reference can hold a node the file's reference
+// passes elsewhere, where the file's `revisited` is above 0. A loaded cut keeps
+// such a node and its links, and an unloaded one cannot: its run is one
+// placeholder. Where the unloaded cut keeps no such node and the loaded one
+// keeps it by a step inside a run the unloaded one holds as a placeholder, the
+// node is set aside from the reference nodes kept, and its links are compared
+// as a node's off the reference; each one set aside is printed as ASIDE.
+//
 //   node scripts/blocks-equality.ts <walks.gz or URL> [--windows 300]
 //     [--seed 1] [--width 1000] [--context 1000] [--sequence <name>]
-//     [--from 0] [--haplotypes 64]
+//     [--from 0] [--haplotypes 64] [--at <sequence>:<start>-<end>,...]
 //
 // Prints every difference, then the counts, and exits 1 on any. `--from k`
-// skips the first k windows of the seed's. Memory is bounded by one cut of
+// skips the first k windows of the seed's; `--at` cuts the windows it lists
+// in place of random ones. Memory is bounded by one cut of
 // `--haplotypes` haplotypes at a time: each window is cut once per that many
 // of the file's haplotypes, as a walk's rows do not depend on the other
 // walks cut; 0 cuts them all together. Progress goes to stderr.
 import { LocalFile, RemoteFile } from 'generic-filehandle2'
 
 import {
+  WalkFile,
   WalkReader,
   isPlaceholder,
   structuralForms,
@@ -69,6 +79,14 @@ const context = Number(flag('context') ?? 1000)
 const onlySequence = flag('sequence')
 const firstWindow = Number(flag('from') ?? 0)
 const perCut = Number(flag('haplotypes') ?? 64)
+const stated = (flag('at') ?? '')
+  .split(',')
+  .filter(Boolean)
+  .map(at => {
+    const [, refName = '', start = '', end = ''] =
+      /^(.*):(\d+)-(\d+)$/.exec(at) ?? []
+    return { refName, start: Number(start), end: Number(end) }
+  })
 
 const MODES: Mode[] = [
   { name: 'plain', contained: false, context },
@@ -171,11 +189,20 @@ const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
 // A cut's links as rows: every link between two reference nodes, and each
 // link with an end off the reference once for each time the cut walks it,
 // as consecutive steps of a fragment or from a departure's leave node
-// through its steps to its rejoin node. A link with an end off the reference
+// through its steps to its rejoin node, which ends it leaves and enters by
+// the reference's strand at that pass. A link with an end off the reference
 // that the cut walks nowhere joins nodes kept through other walks, and is
 // set aside; a pair of steps a fragment or a computed departure walks with
-// no link is `missing`
-function linkRows(cut: Cut, window: Window, { nodes, links }: GraphTables) {
+// no link is `missing`. A step `inside` says lies in a run the unloaded cut
+// holds as a placeholder is walked as a node off the reference, and its node
+// is listed in `inside`
+function linkRows(
+  cut: Cut,
+  window: Window,
+  { nodes, links }: GraphTables,
+  reversedOnR: (id: number, start: number) => boolean | undefined,
+  inside: (name: string, id: number, start: number) => boolean,
+) {
   const indexOfName = new Map(nodes.names.map((name, i) => [name, i]))
   const indexOf = (id: number | undefined) => {
     const node = id === undefined ? undefined : cut.graph.nodes.get(id)
@@ -187,10 +214,14 @@ function linkRows(cut: Cut, window: Window, { nodes, links }: GraphTables) {
             : String(id),
         )
   }
+  const length = (id: number) => {
+    const node = cut.graph.nodes.get(id)
+    return node ? node.end - node.start : 0
+  }
   const onR = (index: number) =>
     nodes.ranks[index] === 0 && nodes.placeholders?.[index] !== 1
   const end = (index: number, right: boolean) =>
-    onR(index) ? `${nodes.names[index]}${right ? ']' : '['}` : 'off'
+    `${nodes.names[index]}${right ? ']' : '['}`
   const held = new Set<number>()
   const rows: Rows = new Map()
   let offEnds = 0
@@ -211,35 +242,53 @@ function linkRows(cut: Cut, window: Window, { nodes, links }: GraphTables) {
   }
   const walkedOff = new Set<number>()
   const missing: string[] = []
+  const insideNodes = new Set<number>()
+  // a step as its node's index and whether it counts as on the reference
+  const stepOf = (id: number | undefined, name = '', at = Number.NaN) => {
+    const index = indexOf(id)
+    const within = id !== undefined && !Number.isNaN(at) && inside(name, id, at)
+    if (within) {
+      insideNodes.add(id)
+    }
+    return {
+      index,
+      on: index !== undefined && onR(index) && !within,
+    }
+  }
+  type Step = ReturnType<typeof stepOf>
   const walk = (
-    a: number | undefined,
+    a: Step,
     aRight: boolean,
-    b: number | undefined,
+    b: Step,
     bRight: boolean,
     where: string | undefined,
   ) => {
-    if (a !== undefined && b !== undefined) {
-      const key = pair(a, aRight, b, bRight)
+    if (a.index !== undefined && b.index !== undefined) {
+      const key = pair(a.index, aRight, b.index, bRight)
       if (!held.has(key)) {
         if (where !== undefined) {
           missing.push(where)
         }
-      } else if (onR(a) !== onR(b)) {
+      } else if (a.on !== b.on) {
         walkedOff.add(key)
         add(
           rows,
           'walked, with an end off the reference',
-          onR(a) ? end(a, aRight) : end(b, bRight),
+          a.on ? end(a.index, aRight) : end(b.index, bRight),
         )
-      } else if (!onR(a)) {
+      } else if (!a.on) {
         walkedOff.add(key)
       }
     }
   }
   for (const f of cut.fragments) {
-    let last = indexOf(f.ids[0])
+    let at = f.hapStart
+    const stepAt = (i: number) =>
+      stepOf(f.ids[i], f.name, Number.isNaN(f.refStarts[i]) ? at : Number.NaN)
+    let last = stepAt(0)
     for (let i = 1; i < f.ids.length; i++) {
-      const next = indexOf(f.ids[i])
+      at += length(f.ids[i - 1]!)
+      const next = stepAt(i)
       walk(
         last,
         f.rev[i - 1] === 0,
@@ -263,33 +312,38 @@ function linkRows(cut: Cut, window: Window, { nodes, links }: GraphTables) {
       endingAt.set(node.end, id)
     }
   }
+  const reversedAt = (id: number | undefined) =>
+    id !== undefined &&
+    reversedOnR(id, cut.graph.nodes.get(id)?.start ?? Number.NaN) === true
   for (const d of cut.departures) {
     if (d.steps && d.steps.ids.length > 0) {
       const { ids, rev } = d.steps
       const where = d.fromSteps
         ? `${d.name} departure at ${d.hapStart}`
         : undefined
+      const leave = (d.leaveReversed ? startingAt : endingAt).get(d.leavePos)
+      const rejoin = (d.rejoinReversed ? endingAt : startingAt).get(d.rejoinPos)
+      const own: Step[] = []
+      let at = d.hapStart
+      for (const id of ids) {
+        own.push(stepOf(id, d.name, at))
+        at += length(id)
+      }
       walk(
-        indexOf((d.leaveReversed ? startingAt : endingAt).get(d.leavePos)),
-        !d.leaveReversed,
-        indexOf(ids[0]),
+        stepOf(leave),
+        reversedAt(leave) === d.leaveReversed,
+        own[0]!,
         rev[0] !== 0,
         where,
       )
       for (let i = 1; i < ids.length; i++) {
-        walk(
-          indexOf(ids[i - 1]),
-          rev[i - 1] === 0,
-          indexOf(ids[i]),
-          rev[i] !== 0,
-          where,
-        )
+        walk(own[i - 1]!, rev[i - 1] === 0, own[i]!, rev[i] !== 0, where)
       }
       walk(
-        indexOf(ids.at(-1)),
+        own.at(-1)!,
         rev.at(-1) === 0,
-        indexOf((d.rejoinReversed ? endingAt : startingAt).get(d.rejoinPos)),
-        d.rejoinReversed,
+        stepOf(rejoin),
+        reversedAt(rejoin) !== d.rejoinReversed,
         where,
       )
     }
@@ -298,11 +352,97 @@ function linkRows(cut: Cut, window: Window, { nodes, links }: GraphTables) {
     rows,
     missing,
     setAside: offEnds - walkedOff.size,
+    insideNodes,
     placeholderNames: nodes.names.filter(
       (_, i) => nodes.placeholders?.[i] === 1,
     ),
   }
 }
+
+// The reference's strand at each pass of its nodes, as `id@start`, from the
+// ref rows of the tiles holding the positions asked for, each tile read once
+function referenceStrands(file: WalkFile) {
+  const tilesRead = new Set<number>()
+  const reversed = new Map<string, boolean>()
+  const cover = async (refName: string, positions: number[]) => {
+    const units = (await file.units(refName)).filter(
+      u =>
+        u.kind === 'tile' &&
+        !tilesRead.has(u.offset) &&
+        positions.some(at => u.start <= at && at <= u.end),
+    )
+    if (tilesRead.size + units.length > TILES_HELD) {
+      tilesRead.clear()
+      reversed.clear()
+    }
+    const lines = await file.read(units)
+    units.forEach((unit, k) => {
+      tilesRead.add(unit.offset)
+      for (const line of lines[k] ?? []) {
+        const cols = line.split('\t')
+        if (cols[3] === 'ref') {
+          const lengths = (cols[10] ?? '').split(',').map(Number)
+          let start = Number(cols[6])
+          let id = 0
+          for (const [j, token] of (cols[9] ?? '').split(',').entries()) {
+            const t = Number(token)
+            const r = t - 2 * Math.floor(t / 2)
+            id += (t - r) / 2
+            reversed.set(`${id}@${start}`, r === 1)
+            start += lengths[j]!
+          }
+        }
+      }
+    })
+  }
+  return {
+    cover,
+    reversedOnR: (id: number, start: number) => reversed.get(`${id}@${start}`),
+  }
+}
+
+type Strands = ReturnType<typeof referenceStrands>
+
+const TILES_HELD = 4096
+
+// Whether a step on `id` at `start` on its walk's contig lies inside a run
+// the unloaded cut holds as a placeholder, on a node of the reference
+const insideRun =
+  (cut: Cut, unloaded: Unloaded | undefined) =>
+  (name: string, id: number, start: number) => {
+    const node = cut.graph.nodes.get(id)
+    const end = start + (node ? node.end - node.start : 0)
+    return (
+      unloaded !== undefined &&
+      node?.rank === 0 &&
+      !node.placeholder &&
+      (unloaded.runs.get(name) ?? []).some(([a, b]) => a <= start && end <= b)
+    )
+  }
+
+// Each walk's stretches of its contig that the unloaded cut holds as
+// placeholders, and the reference nodes it keeps
+function unloadedRuns(cut: Cut) {
+  const runs = new Map<string, [number, number][]>()
+  for (const node of cut.graph.nodes.values()) {
+    if (node.placeholder) {
+      runs.set(node.refName, [
+        ...(runs.get(node.refName) ?? []),
+        [node.start, node.end],
+      ])
+    }
+  }
+  const keptOnReference = new Set<number>()
+  for (const id of cut.kept) {
+    const node = cut.graph.nodes.get(id)
+    if (node?.rank === 0 && !node.placeholder) {
+      keptOnReference.add(id)
+    }
+  }
+  return { runs, keptOnReference }
+}
+
+type Unloaded = ReturnType<typeof unloadedRuns>
 
 // The walks holding a placeholder among their steps, a departure's or a
 // gap's, whose walks' and departures' abridgedSteps state no step
@@ -407,8 +547,33 @@ function placeholderRuns(cut: Cut) {
   return runs
 }
 
-// What a cut states, as rows to compare; the cut itself is let go
-function summary(cut: Cut, window: Window) {
+// What a cut states, as rows to compare; the cut itself is let go. Given
+// what the unloaded cut of the same window holds, the reference nodes only a
+// loaded cut can keep are set aside, with their links
+function summary(
+  cut: Cut,
+  window: Window,
+  strands: Strands,
+  unloaded?: Unloaded,
+) {
+  const tables = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+    cut.gaps,
+  )
+  const links = linkRows(
+    cut,
+    window,
+    tables,
+    strands.reversedOnR,
+    insideRun(cut, unloaded),
+  )
+  const aside = new Set(
+    [...links.insideNodes].filter(
+      id => unloaded?.keptOnReference.has(id) === false,
+    ),
+  )
   const walks = cut.fragments.filter(f => f.name !== window.refName)
   const fragments = new Map<string, Fragment[]>()
   for (const f of walks) {
@@ -459,17 +624,10 @@ function summary(cut: Cut, window: Window) {
   const kept: Rows = new Map()
   for (const id of cut.kept) {
     const node = cut.graph.nodes.get(id)
-    if (node?.rank === 0 && !node.placeholder) {
+    if (node?.rank === 0 && !node.placeholder && !aside.has(id)) {
       add(kept, 'on the reference', String(id))
     }
   }
-  const tables = cut.graph.tables(
-    cut.kept,
-    cut.fragments,
-    cut.departures,
-    cut.gaps,
-  )
-  const links = linkRows(cut, window, tables)
   let offReference = 0
   for (const id of cut.kept) {
     offReference += cut.graph.nodes.get(id)?.rank === 0 ? 0 : 1
@@ -502,6 +660,9 @@ function summary(cut: Cut, window: Window) {
     placeholdersHeld: placeholdersIn(cut),
     unloadedStepsOff: unloadedStepsOff(cut),
     uncounted: uncounted(tables),
+    runs: unloaded ? undefined : unloadedRuns(cut),
+    aside: [...aside],
+    insideNodes: links.insideNodes,
     placeholderNames: links.placeholderNames,
     placeholderRuns: placeholderRuns(cut),
     unloaded: walks.filter(
@@ -746,6 +907,30 @@ const setAside = {
   loadedLinks: 0,
   unloadedOffReference: 0,
   loadedOffReference: 0,
+  insideNodes: 0,
+  insideLinks: 0,
+}
+
+// The links between reference nodes the loaded cut's tables hold and the
+// unloaded cut's do not, with an end on a node the loaded cut steps on inside
+// a run the unloaded cut holds as a placeholder, taken out of `loaded`
+function linksOnlyInside(unloaded: Rows, loaded: Rows, inside: Set<number>) {
+  const key = 'between reference nodes'
+  const theirs = new Set(unloaded.get(key) ?? [])
+  const taken: string[] = []
+  const kept: string[] = []
+  for (const row of loaded.get(key) ?? []) {
+    const ends = row.split(' ').map(end => Number(end.slice(0, -1)))
+    if (!theirs.has(row) && ends.some(id => inside.has(id))) {
+      taken.push(row)
+    } else {
+      kept.push(row)
+    }
+  }
+  if (loaded.has(key)) {
+    loaded.set(key, kept)
+  }
+  return taken
 }
 const found = new Map<string, number>()
 const differing = new Set<string>()
@@ -798,9 +983,33 @@ async function compare(
   where: string,
   mode: Mode,
   cut: (expanding: boolean) => Promise<Cut>,
+  revisited: boolean,
+  strands: Strands,
 ) {
-  const unloaded = summary(await cut(false), window)
-  const loaded = summary(await cut(true), window)
+  const summarize = async (held: Cut, runs?: Unloaded) => {
+    await strands.cover(
+      window.refName,
+      held.departures.flatMap(d => [d.leavePos, d.rejoinPos]),
+    )
+    return summary(held, window, strands, runs)
+  }
+  const unloaded = await summarize(await cut(false))
+  const loaded = await summarize(
+    await cut(true),
+    revisited ? unloaded.runs : undefined,
+  )
+  const asideLinks = linksOnlyInside(
+    unloaded.links,
+    loaded.links,
+    loaded.insideNodes,
+  )
+  if (loaded.aside.length > 0 || asideLinks.length > 0) {
+    setAside.insideNodes += loaded.aside.length
+    setAside.insideLinks += asideLinks.length
+    print(
+      `ASIDE reference-node-inside-unloaded-run ${where} nodes ${loaded.aside.join(' ')} links ${asideLinks.join(' | ')}`,
+    )
+  }
   const both = fragmentsAndGaps(unloaded, loaded, mode)
   report('fragment', where, both.fragment)
   report('gap', where, both.gap)
@@ -869,47 +1078,70 @@ async function abridgedTiles(reader: WalkReader) {
   return tiles
 }
 
+const open = (location: string) =>
+  /^https?:/.test(location) ? new RemoteFile(location) : new LocalFile(location)
+
 async function main() {
-  const reader = WalkReader.open(path, location =>
-    /^https?:/.test(location)
-      ? new RemoteFile(location)
-      : new LocalFile(location),
+  const file = new WalkFile(
+    open(path),
+    open(path.replace(/(?=$|[?#])/, '.idx')),
   )
+  const reader = new WalkReader(file)
+  const strands = referenceStrands(file)
   const tiles = await abridgedTiles(reader)
-  const { haplotypes } = await reader.header()
+  const { haplotypes, revisited = 0 } = await reader.header()
   const batches =
     perCut > 0 && haplotypes.length > perCut
       ? Array.from({ length: Math.ceil(haplotypes.length / perCut) }, (_, b) =>
           haplotypes.slice(b * perCut, (b + 1) * perCut),
         )
       : [haplotypes]
+  const windows: (Window | undefined)[] = []
+  if (stated.length > 0) {
+    for (const at of stated) {
+      windows.push(at)
+    }
+  } else {
+    const next = random(seed)
+    for (let k = 0; k < windowCount && tiles.length > 0; k++) {
+      const tile = tiles[Math.floor(next() * tiles.length)]!
+      const start =
+        tile.start +
+        Math.floor(next() * Math.max(1, tile.end - tile.start - width))
+      windows.push(
+        k >= firstWindow
+          ? { refName: tile.refName, start, end: start + width }
+          : undefined,
+      )
+    }
+  }
   print(
-    `${path}: ${tiles.length} abridged tiles, ${haplotypes.length} haplotypes cut ${batches.length > 1 ? `${perCut} at a time` : 'together'}; windows ${firstWindow + 1} to ${windowCount} of ${width} bp, seed ${seed}, ${MODES.map(m => m.name).join(', ')}`,
+    `${path}: ${tiles.length} abridged tiles, ${haplotypes.length} haplotypes cut ${batches.length > 1 ? `${perCut} at a time` : 'together'}; ${stated.length > 0 ? `the ${stated.length} windows stated` : `windows ${firstWindow + 1} to ${windowCount} of ${width} bp, seed ${seed}`}, ${MODES.map(m => m.name).join(', ')}`,
   )
-  const next = random(seed)
-  for (let k = 0; k < windowCount && tiles.length > 0; k++) {
-    const tile = tiles[Math.floor(next() * tiles.length)]!
-    const start =
-      tile.start +
-      Math.floor(next() * Math.max(1, tile.end - tile.start - width))
-    const window = { refName: tile.refName, start, end: start + width }
-    if (k >= firstWindow) {
+  for (const [k, window] of windows.entries()) {
+    if (window) {
       for (const mode of MODES) {
         for (const [b, batch] of batches.entries()) {
           const where = `${window.refName}:${window.start}-${window.end} ${mode.name}${batches.length > 1 ? ` haplotypes ${b * perCut + 1}-${b * perCut + batch.length}` : ''}`
-          const names = await compare(window, where, mode, expanding =>
-            reader.cut(window.refName, window, {
-              keep:
-                batches.length > 1
-                  ? walksKept(batch, window.refName)
-                  : undefined,
-              context: mode.context,
-              contained: mode.contained,
-              stepBudget: Infinity,
-              byteBudget: Infinity,
-              departureByteBudget: Infinity,
-              ...(expanding ? { expand } : {}),
-            }),
+          const names = await compare(
+            window,
+            where,
+            mode,
+            expanding =>
+              reader.cut(window.refName, window, {
+                keep:
+                  batches.length > 1
+                    ? walksKept(batch, window.refName)
+                    : undefined,
+                context: mode.context,
+                contained: mode.contained,
+                stepBudget: Infinity,
+                byteBudget: Infinity,
+                departureByteBudget: Infinity,
+                ...(expanding ? { expand } : {}),
+              }),
+            revisited > 0,
+            strands,
           )
           report(
             'placeholder-name-as-a-node',
@@ -920,7 +1152,7 @@ async function main() {
       }
       totals.windows++
       process.stderr.write(
-        `window ${k + 1} of ${windowCount}, ${window.refName}:${window.start}-${window.end}: ${count(found)} differences so far, ${Math.round(process.memoryUsage().rss / 1e6)} MB\n`,
+        `window ${k + 1} of ${windows.length}, ${window.refName}:${window.start}-${window.end}: ${count(found)} differences so far, ${Math.round(process.memoryUsage().rss / 1e6)} MB\n`,
       )
     }
   }
@@ -932,6 +1164,9 @@ async function main() {
   )
   print(
     `set aside, not compared: ${setAside.unloadedLinks} links of the unloaded cuts and ${setAside.loadedLinks} of the loaded with an end off the reference that the cut walks nowhere; the identity of the ${setAside.unloadedOffReference} nodes and placeholders off the reference the unloaded cuts keep and the ${setAside.loadedOffReference} nodes the loaded keep, whose bp are compared run by run; links between two nodes off the reference; each fragment's list of unloaded pieces and its unloadedSteps, which only an unloaded cut has`,
+  )
+  print(
+    `set aside, by design: ${setAside.insideNodes} reference nodes and ${setAside.insideLinks} links between reference nodes that only a loaded cut keeps, by a step inside a run the unloaded cut holds as a placeholder, on a node the file's reference passes elsewhere (revisited:i:${revisited}); such a step's links are walked as a node's off the reference`,
   )
   print(
     `differences from the loaded cut: ${count(found)} in ${differing.size} pairs of cuts${[...found].map(([kind, n]) => `, ${kind} ${n}`).join('')}`,
