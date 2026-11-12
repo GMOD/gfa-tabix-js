@@ -230,6 +230,45 @@ const pieceStarts = (rows: WalkRow[]) => {
   return starts
 }
 
+// A piece of a line a cut holds, whether it lies over the drawn stretch, and
+// what the cut reads it by
+interface LinePiece<T> {
+  piece: number
+  on: boolean
+  item?: T
+}
+
+// Of each line's pieces, by runs of consecutive piece numbers, those from a
+// run's first piece over the drawn stretch to its last, as the items they are
+// read by, each with whether it is that first or that last
+function betweenDrawn<T>(lines: Iterable<LinePiece<T>[]>) {
+  const between: { item: T; first: boolean; last: boolean }[] = []
+  for (const line of lines) {
+    line.sort((a, b) => a.piece - b.piece)
+    let from = 0
+    for (let i = 1; i <= line.length; i++) {
+      if (i === line.length || line[i]!.piece !== line[i - 1]!.piece + 1) {
+        let first = -1
+        let last = -1
+        for (let j = from; j < i; j++) {
+          if (line[j]!.on) {
+            first = first < 0 ? j : first
+            last = j
+          }
+        }
+        for (let j = Math.max(first, 0); j <= last; j++) {
+          const { item } = line[j]!
+          if (item !== undefined) {
+            between.push({ item, first: j === first, last: j === last })
+          }
+        }
+        from = i
+      }
+    }
+  }
+  return between
+}
+
 const keptNodes = (kept: Set<number>) => {
   let count = 0
   for (const id of kept) {
@@ -636,25 +675,17 @@ export class WalkReader {
     }
     const onDrawn = (span: { start: number; end: number }) =>
       span.start < over.end && span.end > over.start
-    // each window piece's blocks to build whole: those from the first block
-    // over the drawn stretch to the last, of the pieces that join it
-    const coresOf = (pieces: Read[], others: Met[]) => {
-      const lines = new Map<
-        string,
-        { piece: number; on: boolean; read?: Read }[]
-      >()
-      for (const read of pieces) {
-        const { name, fragStart, piece } = read.piece
+    // the lines `held` names a piece of, each with its pieces among `held`
+    // and the rows decoded
+    const linesOf = <T>(
+      held: (LinePiece<T> & { name: string; fragStart: number })[],
+    ) => {
+      const lines = new Map<string, LinePiece<T>[]>()
+      for (const { name, fragStart, ...piece } of held) {
         const key = `${name}\t${fragStart}`
         const line = lines.get(key) ?? []
         lines.set(key, line)
-        line.push({ piece, on: read.on.first >= 0, read })
-      }
-      for (const { piece } of others) {
-        lines.get(`${piece.name}\t${piece.fragStart}`)?.push({
-          piece: piece.piece,
-          on: onDrawn(piece.span),
-        })
+        line.push(piece)
       }
       for (const row of rows) {
         lines.get(`${row.name}\t${row.fragStart}`)?.push({
@@ -664,32 +695,26 @@ export class WalkReader {
             onDrawn({ start: row.span[0], end: row.span[1] }),
         })
       }
+      return lines.values()
+    }
+    const bySpan = <T extends Met>(item: T) => {
+      const { name, fragStart, piece, span } = item.piece
+      return { name, fragStart, piece, on: onDrawn(span), item }
+    }
+    // each window piece's blocks to build whole: those from the first block
+    // over the drawn stretch to the last, of the pieces that join it
+    const coresOf = (pieces: Read[], others: Met[]) => {
       const cores = new Map<Read, [number, number]>()
-      for (const line of lines.values()) {
-        line.sort((a, b) => a.piece - b.piece)
-        let from = 0
-        for (let i = 1; i <= line.length; i++) {
-          if (i === line.length || line[i]!.piece !== line[i - 1]!.piece + 1) {
-            let first = -1
-            let last = -1
-            for (let j = from; j < i; j++) {
-              if (line[j]!.on) {
-                first = first < 0 ? j : first
-                last = j
-              }
-            }
-            for (let j = Math.max(first, 0); j <= last; j++) {
-              const read = line[j]!.read
-              if (read) {
-                cores.set(read, [
-                  j === first ? read.on.first : 0,
-                  j === last ? read.on.last : read.blocks.begins.length - 1,
-                ])
-              }
-            }
-            from = i
-          }
-        }
+      for (const { item, first, last } of betweenDrawn(
+        linesOf([
+          ...pieces.map(read => ({ ...bySpan(read), on: read.on.first >= 0 })),
+          ...others.map(other => ({ ...bySpan(other), item: undefined })),
+        ]),
+      )) {
+        cores.set(item, [
+          first ? item.on.first : 0,
+          last ? item.on.last : item.blocks.begins.length - 1,
+        ])
       }
       return cores
     }
@@ -721,10 +746,11 @@ export class WalkReader {
       return { unit, ref, piece: item.piece, into: item.into }
     }
     // every abridged row met is read. A walk the cut expands is read from
-    // its detail records: those of its pieces over the drawn stretch and of
-    // the tiles fetched for own steps, by its abridged rows alone, and those
-    // of its other pieces a record attaches steps of. Every other piece is
-    // built from its blocks row
+    // its detail records: those of its pieces over the drawn stretch, of the
+    // pieces between two such pieces of a line and of the tiles fetched for
+    // own steps, by its abridged rows alone, and those of its other pieces a
+    // record attaches steps of. Every other piece is built from its blocks
+    // row
     const resolve = async (attaching: boolean) => {
       const batch = met
       met = []
@@ -736,11 +762,14 @@ export class WalkReader {
           details.push(detailOf(item))
         }
       }
-      for (const item of batch) {
-        if (
-          expand?.(item.piece.name) === true &&
-          (attaching || onDrawn(item.piece.span))
-        ) {
+      const expanded = batch.filter(item => expand?.(item.piece.name) === true)
+      const loading = new Set(
+        attaching
+          ? expanded
+          : betweenDrawn(linesOf(expanded.map(bySpan))).map(held => held.item),
+      )
+      for (const item of expanded) {
+        if (loading.has(item)) {
           wantDetail(item)
         }
       }

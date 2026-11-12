@@ -715,6 +715,37 @@ test('a cut that expands a walk reads the piece a record attaches steps of, thou
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
 
+// between.R.gfa: R as in blocks.R. W MID 1 c >7>8>1>27>2>9 has pieces 7,8 in
+// the tile at 60, then 1,27,2 in the tile at 0, with 5 bp in 27, then 9 in the
+// tile at 60; W AFTER 1 c >7>8>1>28>2 ends on its piece in the tile at 0. A
+// window on 60-90 with 10 bp of context reads the tile at 0 and draws none of
+// 0-20
+test('a cut that expands a walk loads its piece between two over the drawn stretch, which lies off it, and not one past its last', async () => {
+  const { reader: walks, fetched, watch } = counted('between.R')
+  await watch(R)
+  const window = { start: 60, end: 90 }
+  const loaded = await walks.cut(R, window, { context: 10, expand: all })
+  expect(fetched.sort()).toEqual([
+    'blocks 0',
+    'departures .',
+    'departures .',
+    'detail 0:1',
+    'detail 60:0',
+    'detail 60:1',
+    'tile 0',
+    'tile 60',
+  ])
+  const [mid] = loaded.fragments.filter(f => f.name === 'MID#1#c')
+  expect([...mid!.ids]).toEqual([7, 8, 1, 27, 2, 9])
+  expect(loaded.fragments.some(f => f.abridged)).toBe(false)
+  expect(loaded.placeholders).toBe(0)
+  const unloaded = await walks.cut(R, window, { context: 10 })
+  expect(rows(unloaded, 'MID#1#c')).toEqual([
+    [0, 55, '>7@60 >8@70 >1@0 off:5 >2@10 >9@80'],
+  ])
+  expect(stated(unloaded, R)).toEqual(stated(loaded, R))
+})
+
 test('a piece in two fragments of a contained cut counts its steps on the first', async () => {
   const { unloaded } = await cuts(80, 90, { contained: true })
   const { walks } = unloaded.graph.tables(

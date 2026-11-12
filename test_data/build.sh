@@ -45,6 +45,7 @@ build abredge abredge.R.gfa --refs R --tile 20 --abridge-bytes 1
 build drawnedge drawnedge.R.gfa --refs R --tile 10000 --abridge-steps 3
 build attachmany attachmany.R.gfa --refs R --tile 10
 build blocks blocks.R.gfa --refs R --tile 60 --abridge-bytes 1
+build between between.R.gfa --refs R --tile 60 --abridge-bytes 1
 build hairpin hairpin.R.gfa --refs R --tile 36 --abridge-bytes 1
 build revref revref.gfa --refs GRCh38 --abridge-bytes 1
 build cover cover.R.gfa --refs R --abridge-bytes 1
