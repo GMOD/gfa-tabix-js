@@ -27,9 +27,10 @@ export interface WalkDeparture {
   rejoinPasses: number
   // computed from a piece's steps by the cut, rather than read from a record
   fromSteps: boolean
-  // the own steps the cut holds, in the path's order; fewer bp than ownBp
-  // less missingBp where some lie on other reference sequences, or in
-  // pieces the cut did not read
+  // the own steps the cut holds, in the path's order, where the departure
+  // leaves or rejoins on the window or its context and its own bp are within
+  // attachBp; fewer bp than ownBp less missingBp where some lie on other
+  // reference sequences, or in pieces the cut did not read
   steps?: { ids: Int32Array; rev: Uint8Array }
   // the pieces the cut did not load with a step among `steps`, in the path's
   // order
@@ -67,7 +68,7 @@ export function squeezer(holes: Hole[], refName: string) {
       }
 }
 
-type Ends = Pick<
+export type DepartureEnds = Pick<
   WalkDeparture,
   'ownBp' | 'leavePos' | 'leaveReversed' | 'rejoinPos' | 'rejoinReversed'
 >
@@ -75,7 +76,10 @@ type Ends = Pick<
 // Whether two consecutive steps on S follow S at their passes, and so depart
 // nowhere: no sequence of the path's own between them, the same strand and
 // one's breakpoint the other's, holes removed
-export function adjacentSteps(d: Ends, squeeze: (bp: number) => number) {
+export function adjacentSteps(
+  d: DepartureEnds,
+  squeeze: (bp: number) => number,
+) {
   return (
     d.ownBp === 0 &&
     d.leaveReversed === d.rejoinReversed &&
@@ -93,7 +97,7 @@ export function adjacentSteps(d: Ends, squeeze: (bp: number) => number) {
 export type DepartureKind = 'switch' | 'back' | 'adjacent' | 'forward'
 
 export function departureKind(
-  d: Ends,
+  d: DepartureEnds,
   squeeze: (bp: number) => number = bp => bp,
 ): DepartureKind {
   if (d.leaveReversed !== d.rejoinReversed) {
@@ -110,12 +114,30 @@ export function departureKind(
 
 // The bases of S a departure covers, from the base beside one breakpoint to
 // the base beside the other, [lo, hi), as its record is filed
-export function departureStretch(d: Ends): [number, number] {
+export function departureStretch(d: DepartureEnds): [number, number] {
   const leaveBase = d.leaveReversed ? d.leavePos : d.leavePos - 1
   const rejoinBase = d.rejoinReversed ? d.rejoinPos - 1 : d.rejoinPos
   const lo = Math.max(0, Math.min(leaveBase, rejoinBase))
   return [lo, Math.max(lo, leaveBase, rejoinBase) + 1]
 }
+
+// Whether a departure leaves or rejoins on `span`: the base of its leave step
+// or of its rejoin step beside the breakpoint lies there
+export function leavesOrRejoinsOn(
+  d: DepartureEnds,
+  span: { start: number; end: number },
+) {
+  const [lo, hi] = departureStretch(d)
+  const on = (base: number) => base >= span.start && base < span.end
+  return on(lo) || on(hi - 1)
+}
+
+// Whether a cut over `drawn` attaches a departure's own steps
+export const attachesOwnSteps = (
+  d: DepartureEnds,
+  drawn: { start: number; end: number },
+  attachBp: number,
+) => d.ownBp <= attachBp && leavesOrRejoinsOn(d, drawn)
 
 /**
  * Whether a departure's place on the reference is the writer's choice: an

@@ -657,6 +657,82 @@ test("a record's own steps come from its leave and rejoin pieces, and a record l
   expect(over.unattached).toEqual([])
 })
 
+// The window's nodes are 2 and 3, over 100-300; the stretch drawn is 150-250
+describe('a departure’s own steps, by where it leaves and rejoins', () => {
+  const drawn = { start: 150, end: 250 }
+  const record = (
+    name: string,
+    hapStart: number,
+    leavePos: number,
+    rejoinPos: number,
+  ): WalkDeparture => ({
+    name,
+    hapStart,
+    ownBp: 100,
+    missingBp: 0,
+    leavePos,
+    leaveReversed: false,
+    leavePasses: 1,
+    rejoinPos,
+    rejoinReversed: false,
+    rejoinPasses: 1,
+    fromSteps: false,
+  })
+
+  test('one that jumps over the drawn stretch keeps its ends and its own bp, holds no steps and asks for none, inside one piece or between two', () => {
+    const g = graph()
+    const { kept, departures, unattached } = walkCut(
+      joinPieces([run(g, 'HG002#1#chr1', 0, [1, 5, 4])]),
+      g.nodes,
+      'GRCh38#0#chr1',
+      [record('HG002#2#chr1', 100, 100, 300)],
+      { drawn },
+    )
+    expect(departures.map(departure)).toEqual([
+      ['HG002#1#chr1', 100, 100, '100+', '300+', 'steps', undefined],
+      ['HG002#2#chr1', 100, 100, '100+', '300+', 'record', undefined],
+    ])
+    expect(unattached).toEqual([])
+    expect([...kept].sort((a, b) => a - b)).toEqual([2, 3])
+  })
+
+  test('one that leaves or rejoins on the drawn stretch holds its steps, and a record of the kind lacking a piece is asked for', () => {
+    const g = graph()
+    const leaves = record('HG002#3#chr1', 200, 200, 300)
+    const { kept, departures, unattached } = walkCut(
+      joinPieces([
+        run(g, 'HG002#1#chr1', 0, [1, 5, 3]),
+        run(g, 'HG002#2#chr1', 0, [2, 5, 4]),
+      ]),
+      g.nodes,
+      'GRCh38#0#chr1',
+      [leaves],
+      { drawn },
+    )
+    expect(departures.map(departure)).toEqual([
+      ['HG002#1#chr1', 100, 100, '100+', '200+', 'steps', [5]],
+      ['HG002#2#chr1', 100, 100, '200+', '300+', 'steps', [5]],
+      ['HG002#3#chr1', 200, 100, '200+', '300+', 'record', undefined],
+    ])
+    expect(unattached).toEqual([{ departure: leaves }])
+    expect([...kept].sort((a, b) => a - b)).toEqual([2, 3, 5])
+  })
+
+  test('one that leaves a drawn node at its end past the drawn stretch holds no steps', () => {
+    const g = graph()
+    const { departures } = walkCut(
+      joinPieces([run(g, 'HG002#1#chr1', 0, [3, 5, 4])]),
+      g.nodes,
+      'GRCh38#0#chr1',
+      [],
+      { drawn },
+    )
+    expect(departures.map(departure)).toEqual([
+      ['HG002#1#chr1', 100, 100, '300+', '300+', 'steps', undefined],
+    ])
+  })
+})
+
 test('a contained cut splits a walk where it steps onto the reference off the window', () => {
   const g = graph()
   g.placeNode(8, {

@@ -1,9 +1,11 @@
 import { decodeChunk, referenceNodes } from './walkChunk.ts'
 import {
   adjacentSteps,
+  attachesOwnSteps,
   departureKind,
   departureRowKey,
   departureStretch,
+  leavesOrRejoinsOn,
   parseDepartureRow,
   placementChoice,
   squeezer,
@@ -133,4 +135,49 @@ test('a departure covers the bases beside its breakpoints, as its record is file
   expect(departureStretch(ends(70, '-', 50, '-'))).toEqual([49, 71])
   expect(departureStretch(ends(20, '+', 20, '+', 6))).toEqual([19, 21])
   expect(departureStretch(ends(0, '-', 0, '+'))).toEqual([0, 1])
+})
+
+// A step along the reference leaves from the base before its breakpoint and
+// rejoins at the base there; a step against it, the other way round
+test.each([
+  { end: 'a + leave', at: (pos: number) => ends(pos, '+', 900, '+'), base: -1 },
+  { end: 'a - leave', at: (pos: number) => ends(pos, '-', 900, '-'), base: 0 },
+  { end: 'a + rejoin', at: (pos: number) => ends(900, '+', pos, '+'), base: 0 },
+  {
+    end: 'a - rejoin',
+    at: (pos: number) => ends(900, '-', pos, '-'),
+    base: -1,
+  },
+])(
+  'a departure leaves or rejoins on a stretch where the base its end step has beside the breakpoint lies there: $end',
+  ({ at, base }) => {
+    const span = { start: 150, end: 250 }
+    const on = (pos: number) => leavesOrRejoinsOn(at(pos), span)
+    expect([149, 150, 249, 250].map(b => on(b - base))).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ])
+  },
+)
+
+test('a departure that jumps over a stretch, forward or back, neither leaves nor rejoins on it', () => {
+  const span = { start: 150, end: 250 }
+  expect(leavesOrRejoinsOn(ends(100, '+', 300, '+'), span)).toBe(false)
+  expect(leavesOrRejoinsOn(ends(300, '+', 100, '+'), span)).toBe(false)
+  expect(leavesOrRejoinsOn(ends(300, '-', 100, '-'), span)).toBe(false)
+  expect(leavesOrRejoinsOn(ends(150, '+', 250, '+'), span)).toBe(false)
+  expect(leavesOrRejoinsOn(ends(200, '+', 200, '+', 40), span)).toBe(true)
+  expect(leavesOrRejoinsOn(ends(100, '+', 200, '+'), span)).toBe(true)
+  expect(leavesOrRejoinsOn(ends(200, '+', 300, '+'), span)).toBe(true)
+})
+
+test('a cut attaches the own steps of a departure within attachBp that leaves or rejoins on its drawn stretch', () => {
+  const drawn = { start: 150, end: 250 }
+  expect(attachesOwnSteps(ends(200, '+', 300, '+', 40), drawn, 40)).toBe(true)
+  expect(attachesOwnSteps(ends(200, '+', 300, '+', 41), drawn, 40)).toBe(false)
+  expect(attachesOwnSteps(ends(100, '+', 300, '+', 40), drawn, 40)).toBe(false)
+  expect(attachesOwnSteps(ends(100, '+', 300, '+', 0), drawn, 0)).toBe(false)
+  expect(attachesOwnSteps(ends(200, '+', 300, '+', 0), drawn, 0)).toBe(true)
 })

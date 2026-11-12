@@ -156,6 +156,47 @@ test('bytesFor counts the tiles a cut fetches for own steps within attachBp, and
   }
 })
 
+// attachmany.R.gfa: ten records, each with its own steps in one of the tiles
+// at 0 to 90, leave at 10 to 100 and rejoin at 300 to 390. All ten lie over
+// 195-205 and none leaves or rejoins there; over 365-375 lie four, and the
+// one that rejoins at 370 names the tile at 20
+test.each([
+  { window: { start: 195, end: 205 }, own: [], tiles: ['190', '200'] },
+  { window: { start: 365, end: 375 }, own: ['20'], tiles: ['360', '370'] },
+  {
+    window: { start: 300, end: 400 },
+    own: Array.from({ length: 10 }, (_, k) => String(10 * k)),
+    tiles: Array.from({ length: 10 }, (_, k) => String(300 + 10 * k)),
+  },
+])(
+  'bytesFor counts a tile past the window’s for a record that leaves or rejoins on the window, and none for one that jumps over it: $window',
+  async ({ window, own, tiles }) => {
+    const { reader, sequences, reads } = await opened('attachmany.R')
+    const [{ refName, units } = { refName: '', units: [] }] = sequences
+    const bytes = (keep: (u: (typeof units)[number]) => boolean) =>
+      units.filter(keep).reduce((sum, u) => sum + u.length, 0)
+    const said = await reader.bytesFor(refName, window, { context: 0 })
+    expect(said).toBe(
+      bytes(u => u.kind === 'tile' && [...tiles, ...own].includes(u.name)) +
+        bytes(
+          u =>
+            u.kind === 'departures' &&
+            u.start < window.end &&
+            u.end > window.start,
+        ),
+    )
+    reads.length = 0
+    await reader.cut(refName, window, { context: 0 })
+    expect(bytesRead(reads)).toBe(said)
+    expect(
+      unitsRead(units, reads)
+        .filter(u => u.kind === 'tile')
+        .map(u => u.name)
+        .sort((a, b) => Number(a) - Number(b)),
+    ).toEqual([...own, ...tiles].sort((a, b) => Number(a) - Number(b)))
+  },
+)
+
 test('bytesFor reads the departure blocks a cut would, and none past the departure budget', async () => {
   const { reader, sequences, reads } = await opened('ownends.R')
   const [{ refName, units } = { refName: '', units: [] }] = sequences

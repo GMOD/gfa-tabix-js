@@ -27,6 +27,7 @@ export {
   adjacentSteps,
   departureKind,
   departureStretch,
+  leavesOrRejoinsOn,
   parseDepartureRow,
   placementChoice,
   squeezer,

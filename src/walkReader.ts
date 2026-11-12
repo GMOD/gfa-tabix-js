@@ -17,6 +17,7 @@ import {
 } from './walkChunk.ts'
 import {
   ATTACH_BP,
+  attachesOwnSteps,
   departureOwnTiles,
   parseDepartureRow,
   squeezer,
@@ -136,9 +137,11 @@ export interface WalkCutOptions {
   // default; Infinity has no limit
   departureByteBudget?: number
   // the most bp of own sequence a departure gets its steps attached for,
-  // ATTACH_BP by default. The cut fetches every tile holding own steps of
-  // such a record that its read lacks, which gives those records their steps
-  // and nothing else
+  // ATTACH_BP by default: it bounds the nodes a cut keeps for one departure,
+  // not what it reads. A departure gets its steps where it leaves or rejoins
+  // on the window or its context, and the cut fetches every tile holding own
+  // steps of such a record that its read lacks, which gives those records
+  // their steps and nothing else
   attachBp?: number
   /**
    * @deprecated Ignored: every eligible record's tiles are fetched, their
@@ -360,9 +363,11 @@ function departureRecords(
  * context, in one read wherever their bytes touch, each tile decoded once;
  * the `blocks` unit of each of those tiles that abridges a walk kept and not
  * expanded; the detail records of the pieces of the walks `expand` names
- * that the cut builds; then every tile holding the own steps of records
- * within `attachBp` the read lacks, which give those steps alone, from the
- * tile's rows and the records, with no `blocks` unit read. The table gives
+ * that the cut builds; then every tile holding own steps the read lacks of
+ * a record within `attachBp` that leaves or rejoins on the window or its
+ * context, which give those steps alone, from the tile's rows and the
+ * records, with no `blocks` unit read. A record that only jumps over them
+ * costs no read past its line. The table gives
  * each read's bytes before it is made; a window whose tiles are past the
  * byte budget reads no row, and one whose attach tiles take it past reads
  * none of them. Only the walks `keep` accepts are decoded. The step budget
@@ -458,9 +463,10 @@ export class WalkReader {
   /**
    * The compressed bytes a cut of `region` reads when it keeps every walk
    * and expands none: its tiles, their blocks units, its departure blocks,
-   * which this reads as the cut does, and the tiles its records within
-   * `attachBp` name for their own steps. A cut that keeps fewer walks reads
-   * no more, and one that expands walks no more but for their detail units
+   * which this reads as the cut does, and the tiles named for their own
+   * steps by its records within `attachBp` that leave or rejoin on the
+   * window or its context. A cut that keeps fewer walks reads no more, and
+   * one that expands walks no more but for their detail units
    */
   async bytesFor(
     refName: string,
@@ -491,7 +497,7 @@ export class WalkReader {
     )
     const attachNames = new Set(
       records
-        .filter(d => d.ownBp <= attachBp)
+        .filter(d => attachesOwnSteps(d, drawn, attachBp))
         .flatMap(d => ownTiles.get(d) ?? []),
     )
     const blocks = units.filter(
@@ -812,7 +818,7 @@ export class WalkReader {
           ? [
               {
                 ...stretch,
-                attached: d.ownBp <= attachBp,
+                attached: attachesOwnSteps(d, drawn, attachBp),
                 pos: stretch.trailing ? d.leavePos : d.rejoinPos,
                 reversed: stretch.trailing ? d.leaveReversed : d.rejoinReversed,
                 key: stretch.trailing
@@ -901,7 +907,7 @@ export class WalkReader {
     }
     // The cut builds the pieces whose span lies over the drawn stretch, those
     // between two such pieces of a line, those holding the own steps of a
-    // record within attachBp and, contained with context, those whose own
+    // record it attaches and, contained with context, those whose own
     // steps the context reaches before a piece over the drawn stretch: an
     // expanded walk's from its detail unit, any other from its tile's blocks
     // unit. Of a tile fetched to attach it builds the pieces holding those

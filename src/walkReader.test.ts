@@ -266,32 +266,59 @@ test('a node longer than a tile is read from the tile whose extent holds it', as
   expect(walkNames(text)).toEqual(['GRCh38#0#chr1', 'HG002#1#chr1'])
 })
 
-// Tile 0's extent is 0-1200, as node 2 runs past it; tile 1000's 1200-2400
-test('a cut reads the tiles and departure blocks its window overlaps, in one read where they touch, and fetches the tile holding a leave base', async () => {
-  let departures: WalkDeparture[] = []
-  const reads = await unitsRead(
-    'header.GRCh38',
-    'GRCh38#0#chr1',
-    async walks => {
-      departures = (
-        await walks.cut(
-          'GRCh38#0#chr1',
-          { start: 2100, end: 2600 },
-          { context: 0 },
-        )
-      ).departures
-    },
-  )
-  expect(reads).toEqual([
-    ['tile 1000'],
-    ['tile 2000', 'departures 2000'],
-    ['tile 0'],
-  ])
-  expect(departures.map(departure)).toEqual([
-    ['HG002#1#chr1', 1200, 550, 0, '1200+', '1800+', 'forward', 'record', '>7'],
-    ['HG002#2#chr1', 2400, 20, 0, '2400+', '3000+', 'forward', 'record', '>8'],
-  ])
-})
+// Tile 0's extent is 0-1200, as node 2 runs past it; tile 1000's 1200-2400.
+// HG002#1 rejoins at 1800 and HG002#2 leaves at 2400, the two ends of node 4,
+// which either window draws whole
+test.each([
+  {
+    window: { start: 2100, end: 2600 },
+    read: [['tile 1000'], ['tile 2000', 'departures 2000']],
+    steps: [undefined, '>8'],
+  },
+  {
+    window: { start: 1700, end: 2300 },
+    read: [['tile 1000', 'departures 1000'], ['departures 2000'], ['tile 0']],
+    steps: ['>7', undefined],
+  },
+])(
+  'a cut reads the tiles and departure blocks its window overlaps, in one read where they touch, and a tile for the own steps of a record that leaves or rejoins on it alone: $window',
+  async ({ window, read, steps }) => {
+    let departures: WalkDeparture[] = []
+    const reads = await unitsRead(
+      'header.GRCh38',
+      'GRCh38#0#chr1',
+      async walks => {
+        departures = (await walks.cut('GRCh38#0#chr1', window, { context: 0 }))
+          .departures
+      },
+    )
+    expect(reads).toEqual(read)
+    expect(departures.map(departure)).toEqual([
+      [
+        'HG002#1#chr1',
+        1200,
+        550,
+        0,
+        '1200+',
+        '1800+',
+        'forward',
+        'record',
+        steps[0],
+      ],
+      [
+        'HG002#2#chr1',
+        2400,
+        20,
+        0,
+        '2400+',
+        '3000+',
+        'forward',
+        'record',
+        steps[1],
+      ],
+    ])
+  },
+)
 
 // A reference that passes nodes twice, in 1 kb chunks:
 //   W GRCh38 0 chr1 >1>2>3>4>5>6>5>6>7>8>7>8>9>10
@@ -1313,49 +1340,79 @@ test('a window inside a jump finds the jump in the departure read', async () => 
 //   W HG002  1 chr1 >1>2>3>4>20>21>22>8>9>10   its own steps filed in chunk 20
 //   W HG003  1 chr1 <10<9<8<22<21<20<4<3<2<1   its own steps filed in chunk 60
 //   W HG004  1 chr1 <10<9<8<5<4<3<2<1          jumps from 70 to 50
-// A cut of 50-55 reads chunks 20 and 40
-const spanCut = (haplotype: string, opts = {}, walks = reader('span.GRCh38')) =>
-  walks.cut(
-    'GRCh38#0#chr1',
-    { start: 50, end: 55 },
-    { context: 0, keep: walkNameFilter([haplotype], 'GRCh38'), ...opts },
-  )
+// HG002#1 and HG003#1 leave or rejoin at 40 and at 70, and a cut of 50-55
+// lies between
+const spanCut = (
+  haplotype: string,
+  opts = {},
+  walks = reader('span.GRCh38'),
+  window = { start: 50, end: 55 },
+) =>
+  walks.cut('GRCh38#0#chr1', window, {
+    context: 0,
+    keep: walkNameFilter([haplotype], 'GRCh38'),
+    ...opts,
+  })
+const atRejoin = { start: 70, end: 75 }
 
-test("a record under the attach threshold carries the walk's own steps from the read", async () => {
-  const { fragments, departures } = await spanCut('HG002#1')
-  expect(fragments.map(f => f.name)).toEqual(['GRCh38#0#chr1'])
+test('a record that jumps over the window keeps its ends and its own bp, and the cut fetches no tile for its own steps', async () => {
+  let cut: Awaited<ReturnType<typeof spanCut>> | undefined
+  const reads = await unitsRead('span.GRCh38', 'GRCh38#0#chr1', async walks => {
+    cut = await spanCut('HG002#1', {}, walks)
+  })
+  expect(reads).toEqual([['tile 40', 'departures 40']])
+  expect(cut?.fragments.map(f => f.name)).toEqual(['GRCh38#0#chr1'])
+  expect(cut?.departures.map(departure)).toEqual([
+    ['HG002#1#chr1', 40, 30, 0, '40+', '70+', 'forward', 'record', undefined],
+  ])
+  expect([...(cut?.kept ?? [])].sort((a, b) => a - b)).toEqual([6])
+})
+
+test("a record that rejoins on the window carries the walk's own steps, from the tile of its leave piece", async () => {
+  let departures: WalkDeparture[] = []
+  const reads = await unitsRead('span.GRCh38', 'GRCh38#0#chr1', async walks => {
+    departures = (await spanCut('HG002#1', {}, walks, atRejoin)).departures
+  })
   expect(departures.map(departure)).toEqual([
     ['HG002#1#chr1', 40, 30, 0, '40+', '70+', 'forward', 'record', '>20>21>22'],
   ])
+  expect(reads).toEqual([['tile 60', 'departures 60'], ['tile 20']])
 })
 
 test('a leave piece the read lacks is fetched for the own steps, once per tile, within the byte budget', async () => {
+  const atLeave = { start: 35, end: 40 }
+  const cut = (opts = {}, walks?: WalkReader) =>
+    spanCut('HG003#1', opts, walks, atLeave)
   let departures: WalkDeparture[] = []
   const reads = await unitsRead('span.GRCh38', 'GRCh38#0#chr1', async walks => {
-    departures = (await spanCut('HG003#1', {}, walks)).departures
+    departures = (await cut({}, walks)).departures
   })
   expect(departures.map(departure)).toEqual([
     ['HG003#1#chr1', 30, 30, 0, '70-', '40-', 'forward', 'record', '<22<21<20'],
   ])
-  expect(reads).toEqual([['tile 40', 'departures 40'], ['tile 60']])
+  expect(reads).toEqual([['tile 20', 'departures 20'], ['tile 60']])
   const units = await reader('span.GRCh38').units('GRCh38#0#chr1')
   const bytes = units
-    .filter(u => u.kind === 'tile' && (u.name === '40' || u.name === '60'))
+    .filter(u => u.kind === 'tile' && (u.name === '20' || u.name === '60'))
     .reduce((sum, u) => sum + u.length, 0)
-  expect(
-    (await spanCut('HG003#1', { byteBudget: bytes })).departures.map(departure),
-  ).toEqual(departures.map(departure))
-  await expect(
-    spanCut('HG003#1', { byteBudget: bytes - 1 }),
-  ).rejects.toBeInstanceOf(RegionTooLargeError)
+  expect((await cut({ byteBudget: bytes })).departures.map(departure)).toEqual(
+    departures.map(departure),
+  )
+  await expect(cut({ byteBudget: bytes - 1 })).rejects.toBeInstanceOf(
+    RegionTooLargeError,
+  )
 })
 
-test('a record over the attach threshold carries no steps', async () => {
-  const { departures, kept } = await spanCut('HG002#1', { attachBp: 29 })
-  expect(departures.map(departure)).toEqual([
+test('a record over the attach threshold carries no steps, and the cut fetches no tile for them', async () => {
+  let cut: Awaited<ReturnType<typeof spanCut>> | undefined
+  const reads = await unitsRead('span.GRCh38', 'GRCh38#0#chr1', async walks => {
+    cut = await spanCut('HG002#1', { attachBp: 29 }, walks, atRejoin)
+  })
+  expect(reads).toEqual([['tile 60', 'departures 60']])
+  expect(cut?.departures.map(departure)).toEqual([
     ['HG002#1#chr1', 40, 30, 0, '40+', '70+', 'forward', 'record', undefined],
   ])
-  expect([...kept].sort((a, b) => a - b)).toEqual([6])
+  expect([...(cut?.kept ?? [])].sort((a, b) => a - b)).toEqual([8])
 })
 
 test('a direct jump across the window is a record with nothing of its own', async () => {
@@ -1444,7 +1501,8 @@ test.each([
 })
 
 // header.GRCh38.gfa: HG002#1's record over 600-2400 has its own steps in the
-// tile at 0, which a cut of 2100-2600 fetches to attach them
+// tile at 0, which a cut of 1700-2300, where it rejoins, fetches to attach
+// them, and a cut of 2100-2600 does not
 test("a sequence's length and the reference nodes over a window come from its tiles, and the bytes a cut reads from its table and its records' ownTiles", async () => {
   const walks = reader('header.GRCh38')
   const units = await walks.units('GRCh38#0#chr1')
@@ -1452,19 +1510,28 @@ test("a sequence's length and the reference nodes over a window come from its ti
     units.find(u => u.kind === 'tile' && u.name === name)!
   expect(await walks.sequenceLength('GRCh38#0#chr1')).toBe(3600)
   expect(await walks.sequenceLength('GRCh38#0#chr2')).toBe(0)
+  const departureBlock = (start: number) =>
+    units.find(u => u.kind === 'departures' && u.start === start)!
+  expect(
+    await walks.bytesFor(
+      'GRCh38#0#chr1',
+      { start: 1700, end: 2300 },
+      { context: 0 },
+    ),
+  ).toBe(
+    tile('1000').length +
+      departureBlock(1000).length +
+      departureBlock(2000).length +
+      tile('0').length,
+  )
   expect(
     await walks.bytesFor(
       'GRCh38#0#chr1',
       { start: 2100, end: 2600 },
-      {
-        context: 0,
-      },
+      { context: 0 },
     ),
   ).toBe(
-    tile('1000').length +
-      tile('2000').length +
-      units.find(u => u.kind === 'departures' && u.start === 2000)!.length +
-      tile('0').length,
+    tile('1000').length + tile('2000').length + departureBlock(2000).length,
   )
   expect(
     (
@@ -1480,22 +1547,30 @@ test("a sequence's length and the reference nodes over a window come from its ti
 //   W GRCh38 0 chr1 0  100 >1>2>3>4>5>6>7>8>9>10
 //   W HG002  1 chr1 0  20  >8>9
 //   W HG002  1 chr1 25 75  >20>3>4>5>6
-// Its record's ownTiles names tile 20, so a cut lacking both pieces fetches
-// it, and one holding the leave piece alone reports the record unattached
+// Its record's ownTiles names tile 20, which a cut over the leave at 90
+// fetches and a cut over the rejoin at 20 holds; a cut of 50-60, which the
+// jump back passes over, fetches nothing and states the record without them
 test.each([
-  { start: 50, end: 60 },
-  { start: 80, end: 90 },
+  { start: 80, end: 90, steps: '>20', fetched: ['tile 20'] },
+  { start: 20, end: 30, steps: '>20', fetched: [] },
+  { start: 50, end: 60, steps: undefined, fetched: [] },
 ])(
-  'a jump back whose own steps lie in the rejoin piece gets them attached, cut $start-$end',
-  async ({ start, end }) => {
-    const { departures } = await reader('jumpback.GRCh38').cut(
+  'a jump back whose own steps lie in the rejoin piece gets them attached where it leaves or rejoins on the window, cut $start-$end',
+  async ({ start, end, steps, fetched }) => {
+    let departures: WalkDeparture[] = []
+    const reads = await unitsRead(
+      'jumpback.GRCh38',
       'GRCh38#0#chr1',
-      { start, end },
-      { context: 0 },
+      async walks => {
+        departures = (
+          await walks.cut('GRCh38#0#chr1', { start, end }, { context: 0 })
+        ).departures
+      },
     )
     expect(departures.map(departure)).toEqual([
-      ['HG002#1#chr1', 20, 15, 5, '90+', '20+', 'back', 'record', '>20'],
+      ['HG002#1#chr1', 20, 15, 5, '90+', '20+', 'back', 'record', steps],
     ])
+    expect(reads.slice(1).flat()).toEqual(fetched)
   },
 )
 
@@ -1559,9 +1634,34 @@ test("a cut's drawn stretch takes every pass over the window, not one per node",
     ['F#1#f', 6, 24, '6,12,18'],
   ])
   expect(departures.filter(d => d.name === 'F#1#f').map(departure)).toEqual([
-    ['F#1#f', 24, 2, 0, '24+', '24+', 'adjacent', 'record', '>5'],
+    ['F#1#f', 24, 2, 0, '24+', '24+', 'adjacent', 'record', undefined],
   ])
 })
+
+// F leaves at 24, the end of the second pass of 2, which a window to 20 draws
+// whole and does not reach the end of
+test.each([
+  { end: 20, steps: undefined },
+  { end: 24, steps: '>5' },
+  { end: 25, steps: '>5' },
+])(
+  'a walk that leaves at the end of a node the window draws gets its own steps where the window holds the base it leaves from: to $end',
+  async ({ end, steps }) => {
+    const { fragments, departures } = await reader('loop.R').cut(
+      'R#0#chr',
+      { start: 8, end },
+      { context: 0 },
+    )
+    expect(
+      fragments
+        .filter(f => f.name === 'F#1#f')
+        .map(f => [...f.refStarts].slice(0, 3).join(',')),
+    ).toEqual(['6,12,18'])
+    expect(departures.filter(d => d.name === 'F#1#f').map(departure)).toEqual([
+      ['F#1#f', 24, 2, 0, '24+', '24+', 'adjacent', 'record', steps],
+    ])
+  },
+)
 
 // Twelve 4 bp reference nodes in 16 bp tiles. H's second piece goes to tile
 // 32 and its record back to 20 names that tile; G's record names tile 0 and
@@ -1616,32 +1716,65 @@ test.each([
 )
 
 // Forty 10 bp reference nodes in 10 bp tiles (attachmany.R.gfa). Each Hk,
-// k from 1 to 10, leaves R after node k for its own 5 bp node 100+k and
-// rejoins at 41-k, so a cut in the middle holds none of their pieces and
-// fetches tiles 0 to 90 for their own steps:
+// k from 1 to 10, leaves R after node k, at 10k, for its own 5 bp node 100+k
+// and rejoins at 41-k, at 400-10k, so all ten jump over a cut in the middle,
+// and their own steps lie in tiles 0 to 90:
 //   W R  0 chr >1>2>...>40
 //   W Hk 1 h   >1>...>k>(100+k)>(41-k)>...>40
 const attachMany = { start: 195, end: 205 }
+const attachManyRejoins = { start: 300, end: 400 }
 
-test('a cut attaches the own steps of every record within attachBp, however many tiles hold them', async () => {
+const attachManyCut = async (
+  window: { start: number; end: number },
+  opts = {},
+) => {
   let departures: WalkDeparture[] = []
   const reads = await unitsRead('attachmany.R', 'R#0#chr', async walks => {
-    departures = (await walks.cut('R#0#chr', attachMany, { context: 0 }))
+    departures = (await walks.cut('R#0#chr', window, { context: 0, ...opts }))
       .departures
   })
-  expect(departures.map(d => `${d.name} ${departure(d)[8]}`).sort()).toEqual(
-    Array.from({ length: 10 }, (_, k) => `H${k + 1}#1#h >${101 + k}`).sort(),
-  )
-  expect(
-    reads
+  return {
+    steps: departures.map(d => `${d.name} ${departure(d)[8]}`).sort(),
+    ends: departures.map(d => `${d.name} ${d.leavePos} ${d.rejoinPos}`).sort(),
+    ownBp: departures.map(d => d.ownBp),
+    tiles: reads
       .flat()
       .filter(unit => unit.startsWith('tile'))
-      .sort(),
-  ).toEqual(
-    [190, 200, ...Array.from({ length: 10 }, (_, k) => 10 * k)]
-      .map(start => `tile ${start}`)
-      .sort(),
-  )
+      .map(unit => Number(unit.slice(5)))
+      .sort((a, b) => a - b),
+  }
+}
+const tenth = <T>(of: (k: number) => T) =>
+  Array.from({ length: 10 }, (_, k) => of(k + 1))
+
+test('a cut attaches the own steps of every record that rejoins on the window, however many tiles hold them', async () => {
+  const { steps, tiles } = await attachManyCut(attachManyRejoins)
+  expect(steps).toEqual(tenth(k => `H${k}#1#h >${100 + k}`).sort())
+  expect(tiles).toEqual([
+    ...tenth(k => 10 * (k - 1)),
+    ...tenth(k => 290 + 10 * k),
+  ])
+})
+
+test('a cut fetches no tile for the own steps of records that jump over the window, and states each with its ends and its own bp', async () => {
+  const { steps, ends, ownBp, tiles } = await attachManyCut(attachMany)
+  expect(tiles).toEqual([190, 200])
+  expect(steps).toEqual(tenth(k => `H${k}#1#h undefined`).sort())
+  expect(ends).toEqual(tenth(k => `H${k}#1#h ${10 * k} ${400 - 10 * k}`).sort())
+  expect(ownBp).toEqual(tenth(() => 5))
+})
+
+// Over 365-375, H1 and H2 jump over the window, H3 rejoins on it at 370, and
+// H4 rejoins at 360, where the node the window draws from 360 to 370 starts
+test('of the records over a window, a cut fetches a tile for those alone that leave or rejoin on it', async () => {
+  const { steps, tiles } = await attachManyCut({ start: 365, end: 375 })
+  expect(tiles).toEqual([20, 360, 370])
+  expect(steps).toEqual([
+    'H1#1#h undefined',
+    'H2#1#h undefined',
+    'H3#1#h >103',
+    'H4#1#h undefined',
+  ])
 })
 
 test('a cut whose attach fetches take it past the byte budget attaches none and says so', async () => {
@@ -1649,9 +1782,9 @@ test('a cut whose attach fetches take it past the byte budget attaches none and 
   const tiles = (await walks.units('R#0#chr')).filter(u => u.kind === 'tile')
   const bytesOf = (starts: (start: number) => boolean) =>
     tiles.filter(u => starts(u.start)).reduce((sum, u) => sum + u.length, 0)
-  const bytes = bytesOf(start => start < 100 || start === 190 || start === 200)
+  const bytes = bytesOf(start => start < 100 || start >= 300)
   const cut = (byteBudget: number) =>
-    walks.cut('R#0#chr', attachMany, { context: 0, byteBudget })
+    walks.cut('R#0#chr', attachManyRejoins, { context: 0, byteBudget })
   expect((await cut(bytes)).departures.every(d => d.steps !== undefined)).toBe(
     true,
   )
@@ -1659,7 +1792,7 @@ test('a cut whose attach fetches take it past the byte budget attaches none and 
     regionTooLarge: true,
     zoomHelps: true,
   })
-  const firstTile = bytesOf(start => start < 100 || start === 190)
+  const firstTile = bytesOf(start => start < 100 || start === 300)
   const message: unknown = expect.stringMatching(
     /^Too many departures here whose own steps the cut must fetch.*choose fewer haplotypes or a smaller attachBp$/,
   )
@@ -1672,7 +1805,7 @@ test('a cut whose attach fetches take it past the byte budget attaches none and 
 
 test('the byte budget counts the tiles of the context past the window', async () => {
   const walks = reader('attachmany.R')
-  const opts = { context: 10, attachBp: 0 }
+  const opts = { context: 10 }
   const bytes = (await walks.units('R#0#chr'))
     .filter(u => u.kind === 'tile' && u.start >= 180 && u.start <= 210)
     .reduce((sum, u) => sum + u.length, 0)

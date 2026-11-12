@@ -5,12 +5,17 @@ import {
   panSNMatchesPrefix,
 } from './util.ts'
 import { SKIPPED, placeAndLink } from './walkChunk.ts'
-import { ATTACH_BP, adjacentSteps, departureStretch } from './walkDeparture.ts'
+import {
+  ATTACH_BP,
+  adjacentSteps,
+  attachesOwnSteps,
+  departureStretch,
+} from './walkDeparture.ts'
 import { GAP_KINDS, walkGaps } from './walkGaps.ts'
 
 import type { DepartureTable, GapTable, GraphTables } from './util.ts'
 import type { Chunk } from './walkChunk.ts'
-import type { Hole, WalkDeparture } from './walkDeparture.ts'
+import type { DepartureEnds, Hole, WalkDeparture } from './walkDeparture.ts'
 import type { WalkGap } from './walkGaps.ts'
 
 // A walk row of gfa-to-tabix's format 6, its steps decoded with its chunk
@@ -302,7 +307,9 @@ export interface WalkCutOptions {
   // a position with the reference's holes before it removed
   squeeze?: (bp: number) => number
   // the window and its context: every pass of a run's step over it widens
-  // the drawn stretch to the step's node
+  // the drawn stretch to the step's node, and a departure that leaves or
+  // rejoins on it gets its own steps. Not given, the reference nodes on the
+  // window stand for it
   drawn?: { start: number; end: number }
   // runs of tiles read only for records' own steps, which give those steps
   // and nothing else
@@ -312,8 +319,8 @@ export interface WalkCutOptions {
   placeholder?: (name: string, start: number, end: number) => number
 }
 
-// A record whose own steps the cut should attach and may not hold: the cut
-// lacks its leave piece or its rejoin piece, either of which can hold them
+// A record whose own steps the cut attaches and may not hold: the cut lacks
+// its leave piece or its rejoin piece, either of which can hold them
 export interface Unattached {
   departure: WalkDeparture
 }
@@ -354,11 +361,14 @@ export const edgeKey = (
  * between pieces, in different tiles or across W lines, are `records`, every
  * one of which comes back, as the reader read them over the window and its
  * context. A computed departure's leave and rejoin passes come from the ref
- * rows the cut read, 0 for a node it places off R. A record within
- * `attachBp` of own sequence gets its own steps, a 0 bp step included, from
- * the leave and rejoin pieces of `runs` or of `attach`, which give nothing
- * else; `unattached` lists the records lacking either piece, whose tiles the
- * reader fetches into `attach`.
+ * rows the cut read, 0 for a node it places off R. A departure within
+ * `attachBp` of own sequence that leaves or rejoins on `drawn`, the base of
+ * its leave step or of its rejoin step beside the breakpoint lying there,
+ * gets its own steps, a 0 bp step included: a record from the leave and
+ * rejoin pieces of `runs` or of `attach`, which give nothing else.
+ * `unattached` lists those records lacking either piece, whose tiles the
+ * reader fetches into `attach`. Any other departure states its ends and its
+ * own bp alone.
  */
 export function walkCut(
   readRuns: WalkRun[],
@@ -419,6 +429,12 @@ export function walkCut(
       }
     }
   }
+  const attaches = (d: DepartureEnds) =>
+    attachesOwnSteps(
+      d,
+      drawn ?? { start: windowStart, end: windowEnd },
+      attachBp,
+    )
   const stepOnWindow = (run: WalkRun, i: number) => {
     const start = run.refStarts[i]!
     const bp = before(run)
@@ -700,7 +716,7 @@ export function walkCut(
                 rejoinPasses: passesOf(ids[i]!),
                 fromSteps: true,
               }
-              if (i > last + 1 && ownBp <= attachBp) {
+              if (i > last + 1 && attaches(ends)) {
                 d.steps = {
                   ids: ids.subarray(last + 1, i),
                   rev: rev.subarray(last + 1, i),
@@ -778,7 +794,7 @@ export function walkCut(
   }
   const unattached: Unattached[] = []
   for (const d of records) {
-    if (d.ownBp <= attachBp) {
+    if (attaches(d)) {
       const ids: number[] = []
       const rev: number[] = []
       const held: Abridged[] = []

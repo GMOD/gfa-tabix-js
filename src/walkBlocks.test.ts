@@ -476,15 +476,15 @@ test.each([
 )
 
 // The graphs of gfa-to-tabix's ADR 0013, each abridged whole, cut on a window
-// whose tile holds none of a record's own steps, so its tile at 0 is fetched
-// to attach them. In each pair of twins the tiles and the record differ in
+// where a record rejoins and whose tile lacks its leave piece, so its tile at
+// 0 is fetched to attach its own steps there. In each pair of twins the tiles and the record differ in
 // hapBp alone, and H or P has 10 or 5 bp, or 700 or 690, in its leave piece
 // before a later W line or a step on another sequence. adv's CROSS, NOREF
 // and PLAIN have rows alike but for path and hapBp. pickwrong's record owns
 // the 7 bp that lead its contig's third W line, in a tile where its first W
 // line's piece starts before the record does. twopieces' record owns 10 bp
-// that trail one piece and 7 that lead another, in two tiles. The one blocks
-// unit a cut reads is its window's tile's
+// that trail one piece, in the tile fetched, and 7 that lead another, in the
+// window's. The one blocks unit a cut reads is its window's tile's
 test.each([
   {
     fixture: 'twinmidlineA.R',
@@ -556,9 +556,9 @@ test.each([
   },
   {
     fixture: 'twopieces.R',
-    windowBlocks: [],
+    windowBlocks: ['blocks 24'],
     refName: 'R#0#chr1',
-    window: { start: 12, end: 24 },
+    window: { start: 24, end: 36 },
     held: { 'H#1#c': ['H#1#c:6-16', 'H#1#c:30-37'] },
     nodes: { 'H#1#c': ['11', '13'] },
   },
