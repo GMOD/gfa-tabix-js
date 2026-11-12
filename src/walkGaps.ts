@@ -1,3 +1,5 @@
+import { SKIPPED } from './walkChunk.ts'
+
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkFragment, WalkRun } from './walkRows.ts'
 
@@ -184,7 +186,9 @@ export function walkGaps({
         .flatMap(run => {
           const bp = before(run)
           return [...run.ids.keys()]
-            .filter(i => !Number.isNaN(run.refStarts[i]))
+            .filter(
+              i => !Number.isNaN(run.refStarts[i]) || run.ids[i] === SKIPPED,
+            )
             .map(i => ({
               run,
               i,

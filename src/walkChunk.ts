@@ -205,6 +205,11 @@ export class RefPath {
     return this.starts[i] === start ? i : undefined
   }
 
+  endingAt(end: number) {
+    const i = firstAtLeast(this.starts, end) - 1
+    return i >= 0 && this.end(i) === end ? i : undefined
+  }
+
   // the position `bp` of R's steps past position i
   past(i: number, bp: number) {
     const target = this.before[i]! + bp
@@ -490,13 +495,13 @@ export interface DecodedChunk {
   // R's later passes over a node in `nodes`
   revisits: (PlacedNode & { id: number })[]
   // the first and last handle of the reference's rows and the kept rows,
-  // for links between pieces
+  // for links between pieces, where the cut knows them
   ends: {
     name: string
     fragStart: number
     piece: number
-    first: number
-    last: number
+    first?: number
+    last?: number
   }[]
   chunk: Chunk
 }
@@ -656,20 +661,118 @@ const jumpOver = (
   )
 }
 
-// A piece's first step on R as a record rejoins at it and its last as one
-// leaves from it: the breakpoint, the strand and the place on the contig
-export const pieceEnds = (piece: AbridgedPiece, blocks: PieceBlocks) => ({
-  rejoin: {
-    pos: blocks.begins[0]!,
-    reversed: blocks.against[0]!,
-    hap: piece.hapOffset + blocks.before,
-  },
-  leave: {
-    pos: blocks.end,
-    reversed: blocks.against.at(-1)!,
-    hap: piece.hapOffset + blocks.before + blocks.bp,
+// A record's own steps in an abridged piece: their stretch of the contig,
+// whether they trail the piece, the record's end beside them, its leave where
+// they trail and else its rejoin, and that end's edge key
+export interface OwnRun {
+  key: string
+  start: number
+  end: number
+  trailing: boolean
+  pos: number
+  reversed: boolean
+}
+
+// Where a record's own steps lie in an abridged piece of its path, on their
+// contig: nowhere, or in the piece's whole run off R at one end
+export function ownStretch(
+  piece: Pick<AbridgedPiece, 'name' | 'piece' | 'hapOffset' | 'hapBp'>,
+  record: { hapStart: number; ownBp: number },
+) {
+  const pieceEnd = piece.hapOffset + piece.hapBp
+  const start = Math.max(piece.hapOffset, record.hapStart)
+  const end = Math.min(pieceEnd, record.hapStart + record.ownBp)
+  const trailing = start > piece.hapOffset
+  if (start < end && trailing === end < pieceEnd) {
+    throw new WalkRowError(
+      `the departure record of ${piece.name} with own steps over [${record.hapStart}, ${record.hapStart + record.ownBp}) of its contig lies ${trailing ? 'inside' : 'over all of'} piece ${piece.piece}, which covers [${piece.hapOffset}, ${pieceEnd}), where a record's own steps are a run at one end of a piece`,
+    )
+  }
+  return start < end ? { start, end, trailing } : undefined
+}
+
+const pieceRow = (piece: AbridgedPiece, ids: number[], bp: number[]) => ({
+  chunkStart: piece.chunkStart,
+  name: piece.name,
+  fragStart: piece.fragStart,
+  hapOffset: piece.hapOffset,
+  piece: piece.piece,
+  n: ids.length,
+  steps: {
+    ids: Int32Array.from(ids),
+    rev: new Uint8Array(ids.length),
+    refStarts: new Float64Array(ids.length).fill(Number.NaN),
+    against: new Uint8Array(ids.length),
+    bp: Int32Array.from(bp),
   },
 })
+
+// The walk row of an abridged piece the cut builds no step of: its bp
+export const bpRow = (piece: AbridgedPiece) =>
+  pieceRow(piece, [SKIPPED], [piece.hapBp])
+
+// The walk row of an abridged piece as its records' own runs, each a
+// placeholder linked to the step on R the record names beside it, from its
+// abridged row, the records and its tile's R alone
+export function ownRunsRow(
+  piece: AbridgedPiece,
+  runs: OwnRun[],
+  path: RefPath,
+  placeholder: (start: number, end: number) => number,
+) {
+  const ids: number[] = []
+  const bp: number[] = []
+  const own: NonNullable<WalkRow['own']> = []
+  const nodes = new Map<number, PlacedNode>()
+  const links: number[] = []
+  const add = (start: number, end: number, run?: OwnRun) => {
+    const id = run ? placeholder(start, end) : SKIPPED
+    if (run) {
+      const atNodeEnd = run.trailing !== run.reversed
+      const i = atNodeEnd ? path.endingAt(run.pos) : path.startingAt(run.pos)
+      if (i === undefined) {
+        throw new WalkRowError(
+          `a departure record of ${piece.name} ${run.trailing ? 'leaves' : 'rejoins'} at ${run.pos}, where the reference path of the tile holding its own steps has no node ${atNodeEnd ? 'ending' : 'starting'}`,
+        )
+      }
+      const beside = path.handleAt(i, !run.reversed)
+      links.push(run.trailing ? beside : id * 2, run.trailing ? id * 2 : beside)
+      nodes.set(id, {
+        refName: piece.name,
+        start,
+        end,
+        rank: 1,
+        passes: 0,
+        placeholder: true,
+      })
+      own.push({
+        key: run.key,
+        leave: run.trailing,
+        from: ids.length,
+        to: ids.length + 1,
+      })
+    }
+    ids.push(id)
+    bp.push(end - start)
+    return id * 2
+  }
+  const leading = runs.find(run => !run.trailing)
+  const trailing = runs.find(run => run.trailing)
+  const first = leading ? add(leading.start, leading.end, leading) : undefined
+  add(
+    leading?.end ?? piece.hapOffset,
+    trailing?.start ?? piece.hapOffset + piece.hapBp,
+  )
+  const last = trailing
+    ? add(trailing.start, trailing.end, trailing)
+    : undefined
+  const row: WalkRow = {
+    ...pieceRow(piece, ids, bp),
+    abridged: piece.abridged,
+    own,
+  }
+  return { row, nodes, links, first, last }
+}
 
 // The first and last blocks over `span`
 export function blocksOver(
@@ -1228,7 +1331,10 @@ export function referenceNodes(rows: string[][]) {
 // Links between consecutive pieces of a path, each piece's last step to the
 // next one's first, among the pieces read
 export function pieceLinks(ends: DecodedChunk['ends']) {
-  const byPath = new Map<string, Map<number, { first: number; last: number }>>()
+  const byPath = new Map<
+    string,
+    Map<number, { first?: number; last?: number }>
+  >()
   for (const e of ends) {
     const key = `${e.name}\t${e.fragStart}`
     let pieces = byPath.get(key)
@@ -1241,9 +1347,9 @@ export function pieceLinks(ends: DecodedChunk['ends']) {
   const links: [number, number][] = []
   for (const pieces of byPath.values()) {
     for (const [piece, e] of pieces) {
-      const next = pieces.get(piece + 1)
-      if (next) {
-        links.push(canonicalLink(e.last, next.first))
+      const first = pieces.get(piece + 1)?.first
+      if (e.last !== undefined && first !== undefined) {
+        links.push(canonicalLink(e.last, first))
       }
     }
   }

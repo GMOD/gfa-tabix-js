@@ -4,11 +4,13 @@ import { refNameLookup, resolveRefName } from './refNames.ts'
 import { checkRange } from './tabixSource.ts'
 import {
   blocksOver,
+  bpRow,
   canonicalLink,
   chunkRef,
   decodeChunk,
+  ownRunsRow,
+  ownStretch,
   parseBlocks,
-  pieceEnds,
   pieceLinks,
   referenceNodes,
   unloadedRow,
@@ -187,6 +189,24 @@ const drawnSpan = (
   end: region.end + context,
 })
 
+// The tiles and departure blocks a cut over `drawn` reads first
+const windowUnits = (
+  units: WalkUnit[],
+  drawn: { start: number; end: number },
+) => ({
+  tiles: units.filter(u => u.kind === 'tile' && overlaps(u, drawn)),
+  departureBlocks: units.filter(
+    u => u.kind === 'departures' && overlaps(u, drawn),
+  ),
+})
+
+function checkDepartureBytes(departureBlocks: WalkUnit[], budget: number) {
+  const bytes = bytesOf(departureBlocks)
+  if (bytes > budget) {
+    throw new DepartureReadError(bytes, budget)
+  }
+}
+
 // The tiles an attach fetch reads for a record: those its `ownTiles` names
 export function attachTiles(units: WalkUnit[], ownTiles: number[]) {
   return units.filter(
@@ -199,6 +219,9 @@ const pieceKey = (
   fragStart: number | string,
   piece: number | string,
 ) => `${name}\t${fragStart}\t${piece}`
+
+const keyOf = (row: { name: string; fragStart: number; piece: number }) =>
+  pieceKey(row.name, row.fragStart, row.piece)
 
 // A unit to read, and the base a window must reach to need it
 interface Needed {
@@ -221,6 +244,16 @@ interface Read extends Met {
   on: ReturnType<typeof blocksOver>
 }
 
+// A detail unit to read, and the pieces a cut takes from it, each with the
+// bp its abridged row states
+interface Detail {
+  unit: WalkUnit
+  ref: ChunkRef
+  piece: AbridgedPiece
+  into: WalkRow[]
+  pieces: Map<string, number>
+}
+
 // Where each piece of `rows` starts on its contig
 const pieceStarts = (rows: WalkRow[]) => {
   const starts = new Map<string, number>()
@@ -238,13 +271,12 @@ interface LinePiece<T> {
   item?: T
 }
 
-// Of each line's pieces, by runs of consecutive piece numbers, those from a
-// run's first piece over the drawn stretch to its last, as the items they are
-// read by, each with whether it is that first or that last
-function betweenDrawn<T>(lines: Iterable<LinePiece<T>[]>) {
+// Of each line's pieces, in piece order, by runs of consecutive piece numbers,
+// those from a run's first piece over the drawn stretch to its last, as the
+// items they are read by, each with whether it is that first or that last
+function betweenDrawn<T>(lines: LinePiece<T>[][]) {
   const between: { item: T; first: boolean; last: boolean }[] = []
   for (const line of lines) {
-    line.sort((a, b) => a.piece - b.piece)
     let from = 0
     for (let i = 1; i <= line.length; i++) {
       if (i === line.length || line[i]!.piece !== line[i - 1]!.piece + 1) {
@@ -267,6 +299,20 @@ function betweenDrawn<T>(lines: Iterable<LinePiece<T>[]>) {
     }
   }
   return between
+}
+
+function beforeDrawn<T>(lines: LinePiece<T>[][]) {
+  const before: T[] = []
+  for (const line of lines) {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const { item, piece } = line[i]!
+      const next = line[i + 1]!
+      if (item !== undefined && next.on && next.piece === piece + 1) {
+        before.push(item)
+      }
+    }
+  }
+  return before
 }
 
 const keptNodes = (kept: Set<number>) => {
@@ -312,16 +358,16 @@ function departureRecords(
  * time. At open the directory, the header and the sequence's unit table; for
  * a window, the tiles and departure blocks overlapping the window and its
  * context, in one read wherever their bytes touch, each tile decoded once;
- * then every tile holding the own steps of records within `attachBp` the
- * read lacks, which give those steps alone, the `blocks` unit of
- * each tile that abridges a walk kept, and the detail records of the walks
- * `expand` names. The
- * table gives each read's bytes before it is made;
- * a window whose tiles are past the byte budget reads no row, and one whose
- * attach tiles take it past reads none of them. Only the walks `keep`
- * accepts are decoded. The step budget bounds the steps the cut keeps, and
- * rows of the window holding READ_STEPS_PER_KEPT times as many stop the
- * read.
+ * the `blocks` unit of each of those tiles that abridges a walk kept and not
+ * expanded; the detail records of the pieces of the walks `expand` names
+ * that the cut builds; then every tile holding the own steps of records
+ * within `attachBp` the read lacks, which give those steps alone, from the
+ * tile's rows and the records, with no `blocks` unit read. The table gives
+ * each read's bytes before it is made; a window whose tiles are past the
+ * byte budget reads no row, and one whose attach tiles take it past reads
+ * none of them. Only the walks `keep` accepts are decoded. The step budget
+ * bounds the steps the cut keeps, and rows of the window holding
+ * READ_STEPS_PER_KEPT times as many stop the read.
  */
 export class WalkReader {
   private readonly file: WalkFile
@@ -481,10 +527,7 @@ export class WalkReader {
     ])
     const { tile } = header
     const drawn = drawnSpan(region, context)
-    const tiles = units.filter(u => u.kind === 'tile' && overlaps(u, drawn))
-    const departureBlocks = units.filter(
-      u => u.kind === 'departures' && overlaps(u, drawn),
-    )
+    const { tiles, departureBlocks } = windowUnits(units, drawn)
     const tileBytesTo = (end: number) =>
       bytesOf(tiles.filter(u => u.start < end + context))
     const checkBytes = (
@@ -506,10 +549,7 @@ export class WalkReader {
       }
     }
     checkBytes(tileBytesTo)
-    const departureBytes = bytesOf(departureBlocks)
-    if (departureBytes > departureByteBudget) {
-      throw new DepartureReadError(departureBytes, departureByteBudget)
-    }
+    checkDepartureBytes(departureBlocks, departureByteBudget)
     const reads = new AbortController()
     const stop = () => {
       reads.abort(signal?.reason)
@@ -560,13 +600,10 @@ export class WalkReader {
     // the abridged rows decoded and not yet read from a blocks row or a
     // detail record
     let met: Met[] = []
-    const detailsRead = new Set<string>()
     const refs = new Map<WalkUnit, ChunkRef>()
     // the drawn stretch, as far as the reference's passes over it reach
     const over = { ...drawn }
-    // the ends of the records whose own steps the cut attaches
-    const attachLeaves = new Set<string>()
-    const attachRejoins = new Set<string>()
+    const ownRecords = new Map<string, WalkDeparture[]>()
     const checkNodes = (
       chunk: { nodes: Map<number, unknown>; rows: WalkRow[] },
       readTo: number,
@@ -647,16 +684,12 @@ export class WalkReader {
       }
       place(tileCut, unit.end)
     }
-    const readDetail = async ({ unit }: { unit: WalkUnit }) => {
+    const readDetail = async ({ unit }: Detail) => {
       const [lines = []] = await this.file.read([unit], reads.signal)
       return lines.map(line => line.split('\t'))
     }
     const decodeDetail = (
-      {
-        ref,
-        piece,
-        into,
-      }: { ref: ChunkRef; piece: AbridgedPiece; into: WalkRow[] },
+      { unit, ref, piece, into, pieces }: Detail,
       held: string[][],
     ) => {
       const tileCut = decodeChunk(
@@ -666,17 +699,36 @@ export class WalkReader {
         opts.sequences,
         ref,
       )
-      for (const decodedRow of tileCut.rows) {
-        if (decodedRow.name === piece.name) {
-          into.push(decodedRow)
-        }
+      const taken = tileCut.rows.filter(row => pieces.has(keyOf(row)))
+      if (taken.length !== pieces.size) {
+        throw new WalkFormatError(
+          `${refName}'s detail unit ${unit.name} holds walk rows for ${taken.length} of the ${pieces.size} pieces of ${piece.name} that the cut reads from it`,
+        )
       }
-      place(tileCut, piece.chunkStart + tile)
+      for (const row of taken) {
+        const { bp } = row.steps
+        const rowBp = bp?.reduce((sum, stepBp) => sum + stepBp, 0)
+        const hapBp = pieces.get(keyOf(row))
+        if (bp?.every(stepBp => stepBp >= 0) === true && rowBp !== hapBp) {
+          throw new WalkFormatError(
+            `${refName}'s detail unit ${unit.name} holds ${rowBp} bp of steps for piece ${row.piece} of ${row.name}, and its abridged row states a hapBp of ${hapBp}`,
+          )
+        }
+        into.push(row)
+      }
+      place(
+        {
+          ...tileCut,
+          rows: taken,
+          ends: tileCut.ends.filter(end => pieces.has(keyOf(end))),
+        },
+        piece.chunkStart + tile,
+      )
     }
     const onDrawn = (span: { start: number; end: number }) =>
       span.start < over.end && span.end > over.start
     // the lines `held` names a piece of, each with its pieces among `held`
-    // and the rows decoded
+    // and the rows decoded, in piece order
     const linesOf = <T>(
       held: (LinePiece<T> & { name: string; fragStart: number })[],
     ) => {
@@ -695,13 +747,15 @@ export class WalkReader {
             onDrawn({ start: row.span[0], end: row.span[1] }),
         })
       }
-      return lines.values()
+      return [...lines.values()].map(line =>
+        line.sort((a, b) => a.piece - b.piece),
+      )
     }
     const bySpan = <T extends Met>(item: T) => {
       const { name, fragStart, piece, span } = item.piece
       return { name, fragStart, piece, on: onDrawn(span), item }
     }
-    // each window piece's blocks to build whole: those from the first block
+    // each built piece's blocks to build whole: those from the first block
     // over the drawn stretch to the last, of the pieces that join it
     const coresOf = (pieces: Read[], others: Met[]) => {
       const cores = new Map<Read, [number, number]>()
@@ -718,64 +772,32 @@ export class WalkReader {
       }
       return cores
     }
-    const attachNeeds = ({ piece, blocks }: Read) => {
-      const { leave, rejoin } = pieceEnds(piece, blocks)
-      return (
-        (blocks.after > 0 &&
-          attachLeaves.has(
-            edgeKey(piece.name, leave.pos, leave.reversed, leave.hap),
-          )) ||
-        (blocks.before > 0 &&
-          attachRejoins.has(
-            edgeKey(piece.name, rejoin.pos, rejoin.reversed, rejoin.hap),
-          ))
-      )
-    }
-    const loaded = (item: Met) =>
-      detailsRead.has(item.piece.abridged.detail.name)
-    const detailOf = (item: Met) => {
-      const { name } = item.piece.abridged.detail
-      const unit = detailUnits.get(name)
-      if (!unit) {
-        throw new WalkFormatError(
-          `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${item.piece.name} names`,
-        )
-      }
-      const ref = refs.get(item.unit) ?? chunkRef(item.tileRows)
-      refs.set(item.unit, ref)
-      return { unit, ref, piece: item.piece, into: item.into }
-    }
-    // every abridged row met is read. A walk the cut expands is read from
-    // its detail records: those of its pieces over the drawn stretch, of the
-    // pieces between two such pieces of a line and of the tiles fetched for
-    // own steps, by its abridged rows alone, and those of its other pieces a
-    // record attaches steps of. Every other piece is built from its blocks
-    // row
-    const resolve = async (attaching: boolean) => {
-      const batch = met
-      met = []
-      const details: ReturnType<typeof detailOf>[] = []
-      const wantDetail = (item: Met) => {
-        const { name } = item.piece.abridged.detail
-        if (!detailsRead.has(name)) {
-          detailsRead.add(name)
-          details.push(detailOf(item))
-        }
-      }
-      const expanded = batch.filter(item => expand?.(item.piece.name) === true)
-      const loading = new Set(
-        attaching
-          ? expanded
-          : betweenDrawn(linesOf(expanded.map(bySpan))).map(held => held.item),
-      )
-      for (const item of expanded) {
-        if (loading.has(item)) {
-          wantDetail(item)
-        }
-      }
-      const blocked = batch.filter(item => !loaded(item))
+    const expanding = (item: Met) => expand?.(item.piece.name) === true
+    const ownRunsOf = (piece: AbridgedPiece) =>
+      (ownRecords.get(piece.name) ?? []).flatMap(d => {
+        const stretch = ownStretch(piece, d)
+        return stretch
+          ? [
+              {
+                ...stretch,
+                attached: d.ownBp <= attachBp,
+                pos: stretch.trailing ? d.leavePos : d.rejoinPos,
+                reversed: stretch.trailing ? d.leaveReversed : d.rejoinReversed,
+                key: stretch.trailing
+                  ? edgeKey(d.name, d.leavePos, d.leaveReversed, d.hapStart)
+                  : edgeKey(
+                      d.name,
+                      d.rejoinPos,
+                      d.rejoinReversed,
+                      d.hapStart + d.ownBp,
+                    ),
+              },
+            ]
+          : []
+      })
+    const blocksOf = async (items: Met[], attaching: boolean) => {
       const tilesMet = new Map<WalkUnit, number>()
-      for (const { unit, from } of blocked) {
+      for (const { unit, from } of items) {
         tilesMet.set(unit, Math.min(tilesMet.get(unit) ?? from, from))
       }
       const wanted = [...tilesMet].map(([tileUnit, from]) => {
@@ -807,29 +829,90 @@ export class WalkReader {
         }
         listed.set(tileUnit, byPiece)
       }
-      const pieces = blocked.map(item => {
-        const { name, fragStart, piece } = item.piece
-        const cols = listed
-          .get(item.unit)
-          ?.get(pieceKey(name, fragStart, piece))
-        if (!cols) {
-          throw new WalkFormatError(
-            `${refName}'s blocks unit ${item.unit.name} holds no row for piece ${piece} of ${name}, which its tile abridges`,
-          )
-        }
-        const blocks = parseBlocks(cols)
-        return { ...item, blocks, on: blocksOver(blocks, over) }
-      })
-      const cores = attaching
-        ? new Map<Read, [number, number]>()
-        : coresOf(pieces, batch.filter(loaded))
-      for (const read of pieces) {
-        if (expand?.(read.piece.name) === true && attachNeeds(read)) {
-          wantDetail(read)
-        }
+      return new Map(
+        items.map(item => {
+          const { name, piece, hapBp } = item.piece
+          const cols = listed.get(item.unit)?.get(keyOf(item.piece))
+          if (!cols) {
+            throw new WalkFormatError(
+              `${refName}'s blocks unit ${item.unit.name} holds no row for piece ${piece} of ${name}, which its tile abridges`,
+            )
+          }
+          const blocks = parseBlocks(cols)
+          const listBp = blocks.before + blocks.bp + blocks.after
+          if (listBp !== hapBp) {
+            throw new WalkFormatError(
+              `${refName}'s blocks row of ${name}, piece ${piece} in tile ${item.unit.name}, adds up to ${listBp} bp, and its abridged row states a hapBp of ${hapBp}`,
+            )
+          }
+          return [item, { ...item, blocks, on: blocksOver(blocks, over) }]
+        }),
+      )
+    }
+    const detailOf = (item: Met) => {
+      const { name } = item.piece.abridged.detail
+      const unit = detailUnits.get(name)
+      if (!unit) {
+        throw new WalkFormatError(
+          `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${item.piece.name} names`,
+        )
       }
+      const ref = refs.get(item.unit) ?? chunkRef(item.tileRows)
+      refs.set(item.unit, ref)
+      return {
+        unit,
+        ref,
+        piece: item.piece,
+        into: item.into,
+        pieces: new Map<string, number>(),
+      }
+    }
+    // The cut builds the pieces whose span lies over the drawn stretch, those
+    // between two such pieces of a line, those holding the own steps of a
+    // record within attachBp and, contained with context, those whose own
+    // steps the context reaches before a piece over the drawn stretch: an
+    // expanded walk's from its detail unit, any other from its tile's blocks
+    // unit. Of a tile fetched to attach it builds the pieces holding those
+    // own steps, an unexpanded one from its abridged row and the record. Any
+    // other piece of a window's tile is its bp
+    const resolve = async (attaching: boolean) => {
+      const batch = met
+      met = []
+      const lines = attaching ? [] : linesOf(batch.map(bySpan))
+      const drawnPieces = new Set(betweenDrawn(lines).map(held => held.item))
+      const reached = new Set(
+        contained && context > 0 && !attaching ? beforeDrawn(lines) : [],
+      )
+      const ownRuns = new Map(batch.map(item => [item, ownRunsOf(item.piece)]))
+      const built = batch.filter(item => {
+        const runs = ownRuns.get(item) ?? []
+        return (
+          drawnPieces.has(item) ||
+          runs.some(run => run.attached) ||
+          (reached.has(item) && runs.some(run => run.trailing))
+        )
+      })
+      const details = new Map<string, Detail>()
+      for (const item of built.filter(expanding)) {
+        const { name } = item.piece.abridged.detail
+        const detail = details.get(name) ?? detailOf(item)
+        details.set(name, detail)
+        detail.pieces.set(keyOf(item.piece), item.piece.hapBp)
+      }
+      const blocks = await blocksOf(
+        attaching ? [] : batch.filter(item => !expanding(item)),
+        attaching,
+      )
+      const fromBlocks = built.flatMap(item => {
+        const read = blocks.get(item)
+        return read ? [{ read, runs: ownRuns.get(item) ?? [] }] : []
+      })
+      const cores = coresOf(
+        fromBlocks.map(({ read }) => read),
+        built.filter(expanding),
+      )
       await readInOrder(
-        details,
+        [...details.values()],
         DETAIL_READS,
         reads.signal,
         readDetail,
@@ -837,44 +920,74 @@ export class WalkReader {
       )
       const starts = attaching ? pieceStarts(attachRows) : pieceStarts(rows)
       for (const { piece } of batch) {
-        starts.set(
-          pieceKey(piece.name, piece.fragStart, piece.piece),
-          piece.hapOffset,
-        )
+        starts.set(keyOf(piece), piece.hapOffset)
       }
-      for (const read of pieces) {
-        const { piece, blocks } = read
+      for (const { piece, unit } of batch) {
         const next = starts.get(
           pieceKey(piece.name, piece.fragStart, piece.piece + 1),
         )
-        const pieceEnd =
-          piece.hapOffset + blocks.before + blocks.bp + blocks.after
+        const pieceEnd = piece.hapOffset + piece.hapBp
         if (next !== undefined && next !== pieceEnd) {
           throw new WalkFormatError(
-            `${refName}'s blocks row of ${piece.name}, piece ${piece.piece} in tile ${read.unit.name}, ends at ${pieceEnd} on its contig, and the line's next piece starts at ${next}`,
+            `${refName}'s abridged row of ${piece.name}, piece ${piece.piece} in tile ${unit.name}, ends at ${pieceEnd} on its contig, and the line's next piece starts at ${next}`,
           )
         }
-        if (!loaded(read)) {
-          const built = unloadedRow(
+      }
+      for (const { read, runs } of fromBlocks) {
+        const { piece } = read
+        for (const run of runs) {
+          const listed = run.trailing ? read.blocks.after : read.blocks.before
+          if (listed !== run.end - run.start) {
+            throw new WalkFormatError(
+              `${refName}'s blocks row of ${piece.name}, piece ${piece.piece} in tile ${read.unit.name}, ${run.trailing ? 'ends' : 'starts'} with ${listed} bp off the reference, and a departure record's own steps there are ${run.end - run.start} bp by its abridged row`,
+            )
+          }
+        }
+        const made = unloadedRow(
+          piece,
+          read.blocks,
+          read.path,
+          over,
+          cores.get(read),
+          (start, end) => placeholderId(piece.name, start, end),
+        )
+        read.into.push(made.row)
+        placeNodes(made.nodes)
+        addLinks(made.links)
+        ends.push({
+          name: piece.name,
+          fragStart: piece.fragStart,
+          piece: piece.piece,
+          first: made.first,
+          last: made.last,
+        })
+        checkNodes({ nodes: made.nodes, rows: [made.row] }, read.unit.end)
+      }
+      const unbuilt = new Set(batch)
+      for (const item of built) {
+        unbuilt.delete(item)
+        if (attaching && !expanding(item)) {
+          const { piece } = item
+          const made = ownRunsRow(
             piece,
-            read.blocks,
-            read.path,
-            over,
-            cores.get(read),
+            (ownRuns.get(item) ?? []).filter(run => run.attached),
+            item.path,
             (start, end) => placeholderId(piece.name, start, end),
           )
-          read.into.push(built.row)
-          placeNodes(built.nodes)
-          addLinks(built.links)
+          item.into.push(made.row)
+          placeNodes(made.nodes)
+          addLinks(made.links)
           ends.push({
             name: piece.name,
             fragStart: piece.fragStart,
             piece: piece.piece,
-            first: built.first,
-            last: built.last,
+            first: made.first,
+            last: made.last,
           })
-          checkNodes({ nodes: built.nodes, rows: [built.row] }, read.unit.end)
         }
+      }
+      for (const item of attaching ? [] : unbuilt) {
+        item.into.push(bpRow(item.piece))
       }
     }
     // the blocks units and detail records the tiles decoded need, then the
@@ -899,18 +1012,10 @@ export class WalkReader {
         keep,
       )
       for (const d of records) {
-        if (d.ownBp > 0 && d.ownBp <= attachBp) {
-          attachLeaves.add(
-            edgeKey(d.name, d.leavePos, d.leaveReversed, d.hapStart),
-          )
-          attachRejoins.add(
-            edgeKey(
-              d.name,
-              d.rejoinPos,
-              d.rejoinReversed,
-              d.hapStart + d.ownBp,
-            ),
-          )
+        if (d.ownBp > 0) {
+          const held = ownRecords.get(d.name) ?? []
+          ownRecords.set(d.name, held)
+          held.push(d)
         }
       }
       tiles.forEach((unit, k) => {

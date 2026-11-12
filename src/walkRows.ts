@@ -40,6 +40,16 @@ export interface WalkRow {
   span?: [number, number]
   // set on a piece built from its `blocks` row, which the cut did not load
   abridged?: Abridged
+  own?: OwnSteps[]
+}
+
+// Steps `from` up to `to` as the own steps of the record whose leave, or
+// rejoin, has the edge key `key`
+export interface OwnSteps {
+  key: string
+  leave: boolean
+  from: number
+  to: number
 }
 
 // A piece the cut did not load: its steps in all and the detail unit that
@@ -168,6 +178,7 @@ export interface WalkRun {
   bp?: Int32Array
   // the pieces the cut did not load, each with its steps' range
   unloaded?: { from: number; to: number; piece: Abridged }[]
+  own?: OwnSteps[]
 }
 
 export function joinPieces(rows: WalkRow[]) {
@@ -210,8 +221,12 @@ function decodeRun(pieces: WalkRow[]): WalkRun {
     ? new Int32Array(n).fill(-1)
     : undefined
   const unloaded: NonNullable<WalkRun['unloaded']> = []
+  const own: OwnSteps[] = []
   let at = 0
   for (const p of pieces) {
+    for (const steps of p.own ?? []) {
+      own.push({ ...steps, from: at + steps.from, to: at + steps.to })
+    }
     if (at > 0) {
       pieceStarts.push(at)
     }
@@ -246,6 +261,7 @@ function decodeRun(pieces: WalkRow[]): WalkRun {
     against,
     ...(bp ? { bp } : {}),
     ...(unloaded.length > 0 ? { unloaded } : {}),
+    ...(own.length > 0 ? { own } : {}),
   }
 }
 
@@ -434,7 +450,7 @@ export function walkCut(
     let last = -1
     for (let i = 0; i <= ids.length; i++) {
       const on = i < ids.length && stepOnWindow(run, i)
-      if (i === ids.length || (onR(run, i) && !on)) {
+      if (i === ids.length || ids[i] === SKIPPED || (onR(run, i) && !on)) {
         if (first >= 0) {
           for (let left = context; first > from && left > 0;) {
             left = take(--first, left, true)
@@ -527,6 +543,11 @@ export function walkCut(
         ...u,
         from: shifted[u.from]!,
         to: shifted[u.to]!,
+      })),
+      own: run.own?.map(steps => ({
+        ...steps,
+        from: shifted[steps.from]!,
+        to: shifted[steps.to]!,
       })),
     }
   }
@@ -744,6 +765,15 @@ export function walkCut(
         ),
         [run, first, bounds[p]!],
       )
+    }
+  }
+  for (const run of [...runs, ...attach]) {
+    for (const { key, leave, from, to } of run.own ?? []) {
+      if (leave) {
+        leaves.set(key, [run, from - 1, to])
+      } else {
+        rejoins.set(key, [run, to, from])
+      }
     }
   }
   const unattached: Unattached[] = []

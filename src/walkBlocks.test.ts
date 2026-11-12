@@ -2,6 +2,7 @@ import { LocalFile } from 'generic-filehandle2'
 
 import { walkFileOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
+import { RefPath, WalkRowError, decodeChunk, ownRunsRow } from './walkChunk.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
 import { WalkFormatError } from './walkFile.ts'
 import { WalkReader } from './walkReader.ts'
@@ -431,12 +432,12 @@ test('a piece’s bp off R before its first step on R and after its last are rea
 
 // ownends.R.gfa: W X 1 c >1>2>11>12>13>5>6 leaves R after 2 for 30 bp of its
 // own, which trail its piece in the tile at 0; a window on 5 reads that tile
-// for the record's own steps alone
+// for the record's own steps alone, and the blocks unit of its own tile at 20
 test.each([
   { expand: undefined, held: ['placeholder'] },
   { expand: all, held: [11, 12, 13] },
 ])(
-  'a record whose leave piece is abridged in a tile fetched for its own steps holds them, a placeholder unless expanded: $held',
+  'a record whose leave piece is abridged in a tile fetched for its own steps holds them, a placeholder from the abridged row and the record unless expanded, and that tile’s blocks unit is not read: $held',
   async ({ expand, held }) => {
     const { reader: walks, fetched, watch } = counted('ownends.R')
     await watch(R)
@@ -462,12 +463,174 @@ test.each([
       ),
     ).toEqual(held)
     expect(bpOf(cut, record!.steps!.ids)).toBe(30)
-    expect(fetched.filter(u => u.startsWith('blocks')).sort()).toEqual(
-      expand ? [] : ['blocks 0', 'blocks 20'],
+    expect(fetched.filter(u => u.startsWith('blocks'))).toEqual(
+      expand ? [] : ['blocks 20'],
     )
+    expect(
+      [...record!.steps!.ids].filter(isPlaceholder).map(id => nameOf(cut, id)),
+    ).toEqual(expand ? [] : ['X#1#c:12-42'])
     expect(fetched.filter(u => u.startsWith('detail'))).toHaveLength(
       expand ? 2 : 0,
     )
+  },
+)
+
+// The graphs of gfa-to-tabix's ADR 0013, each abridged whole, cut on a window
+// whose tile holds none of a record's own steps, so its tile at 0 is fetched
+// to attach them. In each pair of twins the tiles and the record differ in
+// hapBp alone, and H or P has 10 or 5 bp, or 700 or 690, in its leave piece
+// before a later W line or a step on another sequence. adv's CROSS, NOREF
+// and PLAIN have rows alike but for path and hapBp. pickwrong's record owns
+// the 7 bp that lead its contig's third W line, in a tile where its first W
+// line's piece starts before the record does. twopieces' record owns 10 bp
+// that trail one piece and 7 that lead another, in two tiles. The one blocks
+// unit a cut reads is its window's tile's
+test.each([
+  {
+    fixture: 'twinmidlineA.R',
+    windowBlocks: ['blocks 24'],
+    refName: 'R#0#chr1',
+    window: { start: 24, end: 36 },
+    held: { 'H#1#c': ['H#1#c:6-16'] },
+    nodes: { 'H#1#c': ['11'] },
+  },
+  {
+    fixture: 'twinmidlineB.R',
+    windowBlocks: ['blocks 24'],
+    refName: 'R#0#chr1',
+    window: { start: 24, end: 36 },
+    held: { 'H#1#c': ['H#1#c:6-11'] },
+    nodes: { 'H#1#c': ['11'] },
+  },
+  {
+    fixture: 'twinotherseqA.R',
+    windowBlocks: ['blocks 24'],
+    refName: 'R#0#chr1',
+    window: { start: 24, end: 36 },
+    held: { 'H#1#c': ['H#1#c:6-16'] },
+    nodes: { 'H#1#c': ['11'] },
+  },
+  {
+    fixture: 'twinotherseqB.R',
+    windowBlocks: ['blocks 24'],
+    refName: 'R#0#chr1',
+    window: { start: 24, end: 36 },
+    held: { 'H#1#c': ['H#1#c:6-11'] },
+    nodes: { 'H#1#c': ['11'] },
+  },
+  {
+    fixture: 'twinown700.R',
+    windowBlocks: ['blocks 12'],
+    refName: 'R#0#c',
+    window: { start: 12, end: 24 },
+    held: { 'P#1#c': ['P#1#c:12-712'] },
+    nodes: { 'P#1#c': ['21'] },
+  },
+  {
+    fixture: 'twinown690.R',
+    windowBlocks: ['blocks 12'],
+    refName: 'R#0#c',
+    window: { start: 12, end: 24 },
+    held: { 'P#1#c': ['P#1#c:12-702'] },
+    nodes: { 'P#1#c': ['21'] },
+  },
+  {
+    fixture: 'adv.R',
+    windowBlocks: ['blocks 60'],
+    refName: 'R#0#c1',
+    window: { start: 90, end: 120 },
+    held: {
+      'CROSS#1#c': ['CROSS#1#c:30-37'],
+      'NOREF#1#c': ['NOREF#1#c:30-37'],
+      'PLAIN#1#c': ['PLAIN#1#c:30-36'],
+    },
+    nodes: { 'CROSS#1#c': ['21'], 'NOREF#1#c': ['21'], 'PLAIN#1#c': ['24'] },
+  },
+  {
+    fixture: 'pickwrong.R',
+    windowBlocks: ['blocks 12'],
+    refName: 'R#0#chr1',
+    window: { start: 12, end: 24 },
+    held: { 'H#1#c': ['H#1#c:40-47'] },
+    nodes: { 'H#1#c': ['13'] },
+  },
+  {
+    fixture: 'twopieces.R',
+    windowBlocks: [],
+    refName: 'R#0#chr1',
+    window: { start: 12, end: 24 },
+    held: { 'H#1#c': ['H#1#c:6-16', 'H#1#c:30-37'] },
+    nodes: { 'H#1#c': ['11', '13'] },
+  },
+])(
+  'a record’s own steps in a tile fetched to attach them come from the abridged row and the record, with no blocks unit read, as the expanded cut reads them: $fixture',
+  async ({ fixture, refName, window, windowBlocks, held, nodes }) => {
+    const ownSteps = (cut: Cut) =>
+      Object.fromEntries(
+        cut.departures
+          .filter(d => d.steps)
+          .map(d => [d.name, [...d.steps!.ids].map(id => nameOf(cut, id))]),
+      )
+    const { reader: walks, fetched, watch } = counted(fixture)
+    await watch(refName)
+    const tilesRead = () => fetched.filter(u => !u.startsWith('departures'))
+    const unloaded = await walks.cut(refName, window, { context: 0 })
+    expect(ownSteps(unloaded)).toEqual(held)
+    expect(tilesRead()).toContain('tile 0')
+    expect(tilesRead().filter(u => u.startsWith('blocks'))).toEqual(
+      windowBlocks,
+    )
+    fetched.length = 0
+    const loaded = await walks.cut(refName, window, { context: 0, expand: all })
+    expect(ownSteps(loaded)).toEqual(nodes)
+    expect(tilesRead().filter(u => u.startsWith('blocks'))).toEqual([])
+    expect(loaded.placeholders).toBe(0)
+    expect(stated(unloaded, refName)).toEqual(stated(loaded, refName))
+  },
+)
+
+// twopiecesonetile.R.gfa: W H 1 c >1>11 and, from 30, >13>2, both pieces in
+// the tile at 0, which the window reads with its blocks unit
+test('a record’s own steps in two pieces of a window’s tile are each piece’s run at one end, by its blocks row and by its abridged row alike', async () => {
+  const walks = reader('twopiecesonetile.R')
+  const window = { start: 0, end: 12 }
+  const unloaded = await walks.cut('R#0#chr1', window, { context: 0 })
+  const loaded = await walks.cut('R#0#chr1', window, {
+    context: 0,
+    expand: all,
+  })
+  expect(
+    unloaded.departures.map(d =>
+      [...(d.steps?.ids ?? [])].map(id => nameOf(unloaded, id)),
+    ),
+  ).toEqual([['H#1#c:6-16', 'H#1#c:30-37']])
+  expect(loaded.departures.map(d => [...(d.steps?.ids ?? [])])).toEqual([
+    [11, 13],
+  ])
+  expect(stated(unloaded, 'R#0#chr1')).toEqual(stated(loaded, 'R#0#chr1'))
+})
+
+// edge.R.gfa: R as in blocks.R, W LEAD 1 c >1>2>27>7>8 with 5 bp in 27 and
+// W TRAIL 1 c >7>8>28>1>2 with 3 bp in 28. Over 60-80 with 10 bp of context,
+// contained, LEAD's piece in the tile at 0 lies off the drawn stretch and its
+// last 5 bp lie within the context of its next piece's first step
+test.each([{ attachBp: 1 }, { attachBp: undefined }])(
+  'a contained cut builds the piece whose own steps its context reaches before a piece over the drawn stretch, whatever attachBp: $attachBp',
+  async ({ attachBp }) => {
+    const walks = reader('edge.R')
+    const window = { start: 60, end: 80 }
+    const opts = { context: 10, contained: true, attachBp }
+    const unloaded = await walks.cut(R, window, opts)
+    const loaded = await walks.cut(R, window, { ...opts, expand: all })
+    expect(rows(loaded, 'LEAD#1#c')).toEqual([[20, 45, 'off:5 >7@60 >8@70']])
+    expect(rows(loaded, 'TRAIL#1#c')).toEqual([[0, 23, '>7@60 >8@70 off:3']])
+    expect(
+      loaded.fragments.flatMap(f => [...f.ids]).filter(id => id < 0),
+    ).toEqual([])
+    expect(loaded.placeholders).toBe(0)
+    const [lead] = unloaded.fragments.filter(f => f.name === 'LEAD#1#c')
+    expect(nameOf(unloaded, lead!.ids[0]!)).toBe('LEAD#1#c:20-25')
+    expect(stated(unloaded, R)).toEqual(stated(loaded, R))
   },
 )
 
@@ -645,8 +808,8 @@ test('a step built for an unloaded piece counts towards the step budget as any s
 })
 
 // ownends.R.gfa, X#1 and R alone over 24-30: the cut reads the tile at 20
-// and its blocks unit, then the tile at 0 for X's record and its blocks unit
-test('the bytes of a tile fetched for own steps are checked with the blocks units read before it, before it is fetched', async () => {
+// and its blocks unit, then the tile at 0 for X's record
+test('the bytes of a tile fetched for own steps are checked with the blocks unit read before it, before it is fetched', async () => {
   const { reader: walks, fetched, watch } = counted('ownends.R')
   await watch(R)
   const units = await walks.units(R)
@@ -664,17 +827,15 @@ test('the bytes of a tile fetched for own steps are checked with the blocks unit
     )
   const read = () => fetched.filter(u => !u.startsWith('departures')).sort()
   const window = bytes('tile', '20') + bytes('blocks', '20')
-  const whole = window + bytes('tile', '0') + bytes('blocks', '0')
+  const whole = window + bytes('tile', '0')
   expect((await cut(whole)).departures).toHaveLength(1)
-  expect(read()).toEqual(['blocks 0', 'blocks 20', 'tile 0', 'tile 20'])
-  fetched.length = 0
-  await expect(cut(window + bytes('tile', '0') - 1)).rejects.toBeInstanceOf(
-    RegionTooLargeError,
-  )
-  expect(read()).toEqual(['blocks 20', 'tile 20'])
+  expect(read()).toEqual(['blocks 20', 'tile 0', 'tile 20'])
   fetched.length = 0
   await expect(cut(whole - 1)).rejects.toBeInstanceOf(RegionTooLargeError)
-  expect(read()).toEqual(['blocks 20', 'tile 0', 'tile 20'])
+  expect(read()).toEqual(['blocks 20', 'tile 20'])
+  fetched.length = 0
+  await expect(cut(window - 1)).rejects.toBeInstanceOf(RegionTooLargeError)
+  expect(read()).toEqual(['tile 20'])
 })
 
 // One contig in two W lines of one tile, both abridged: >5>6 then 30 bp off
@@ -717,16 +878,15 @@ test('a cut that expands a walk reads the piece a record attaches steps of, thou
 
 // between.R.gfa: R as in blocks.R. W MID 1 c >7>8>1>27>2>9 has pieces 7,8 in
 // the tile at 60, then 1,27,2 in the tile at 0, with 5 bp in 27, then 9 in the
-// tile at 60; W AFTER 1 c >7>8>1>28>2 ends on its piece in the tile at 0. A
-// window on 60-90 with 10 bp of context reads the tile at 0 and draws none of
-// 0-20
-test('a cut that expands a walk loads its piece between two over the drawn stretch, which lies off it, and not one past its last', async () => {
+// tile at 60; W AFTER 1 c >7>8>1>28>2 ends on its piece in the tile at 0, 23
+// bp. A window on 60-90 with 10 bp of context reads the tile at 0 and draws
+// none of 0-20
+test('a cut that expands a walk loads its piece between two over the drawn stretch, which lies off it, and of one past its last states the bp, with no blocks unit read', async () => {
   const { reader: walks, fetched, watch } = counted('between.R')
   await watch(R)
   const window = { start: 60, end: 90 }
   const loaded = await walks.cut(R, window, { context: 10, expand: all })
   expect(fetched.sort()).toEqual([
-    'blocks 0',
     'departures .',
     'departures .',
     'detail 0:1',
@@ -737,6 +897,12 @@ test('a cut that expands a walk loads its piece between two over the drawn stret
   ])
   const [mid] = loaded.fragments.filter(f => f.name === 'MID#1#c')
   expect([...mid!.ids]).toEqual([7, 8, 1, 27, 2, 9])
+  const [after] = loaded.fragments.filter(f => f.name === 'AFTER#1#c')
+  expect([[...after!.ids], after!.hapEnd, after!.trimmedAfter]).toEqual([
+    [7, 8],
+    20,
+    23,
+  ])
   expect(loaded.fragments.some(f => f.abridged)).toBe(false)
   expect(loaded.placeholders).toBe(0)
   const unloaded = await walks.cut(R, window, { context: 10 })
@@ -774,7 +940,7 @@ describe('the units a cut reads', () => {
     expect(fetched.sort()).toEqual(['blocks 0', 'tile 0'])
   })
 
-  test('a cut that expands every walk reads the detail units of the pieces with a block over the drawn stretch, and no other', async () => {
+  test('a cut that expands every walk reads the detail units of the pieces whose span lies over the drawn stretch, no other, and no blocks unit', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
     const { fragments } = await walks.cut(
@@ -782,12 +948,7 @@ describe('the units a cut reads', () => {
       { start: 6000, end: 6500 },
       { expand: all },
     )
-    expect(fetched.sort()).toEqual([
-      'blocks 0',
-      'detail 0:0',
-      'detail 0:1',
-      'tile 0',
-    ])
+    expect(fetched.sort()).toEqual(['detail 0:0', 'detail 0:1', 'tile 0'])
     expect(fragments.map(f => f.name).sort()).toEqual([
       'FAR#1#c',
       'NEAR#1#c',
@@ -795,7 +956,7 @@ describe('the units a cut reads', () => {
     ])
   })
 
-  test('a cut that expands the walks it keeps over the window reads their detail units by their abridged rows, and no blocks unit', async () => {
+  test('a cut that expands the walks it keeps reads their detail units by their abridged rows', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
     const { fragments } = await walks.cut(
@@ -823,9 +984,12 @@ describe('the units a cut reads', () => {
     ).toEqual(['FAR#1#c loaded', 'NEAR#1#c unloaded', 'R#0#c loaded'])
   })
 
-  test.each([{ expand: undefined }, { expand: all }])(
-    'a cut whose tile abridges no piece over the window and its context reads its blocks unit and no detail unit: %o',
-    async ({ expand }) => {
+  test.each([
+    { expand: undefined, read: ['blocks', 'tile'] },
+    { expand: all, read: ['tile'] },
+  ])(
+    'a cut whose tile abridges no piece over the window and its context reads no detail unit, and the tile’s blocks unit unless it expands every walk: $read',
+    async ({ expand, read }) => {
       const { reader: walks, fetched, watch } = counted('cover.R')
       await watch(R)
       const { fragments } = await walks.cut(
@@ -833,7 +997,7 @@ describe('the units a cut reads', () => {
         { start: 9000, end: 9100 },
         { context: 0, expand },
       )
-      expect(kinds(fetched)).toEqual(['blocks', 'tile'])
+      expect(kinds(fetched)).toEqual(read)
       expect(fragments.map(f => f.name)).toEqual(['R#0#c'])
     },
   )
@@ -912,23 +1076,26 @@ describe('a file whose blocks unit is not what its tile needs', () => {
     ).rejects.toThrow(/blocks row/)
   })
 
-  const nextPiece = (hapOffset: number) =>
+  const nextPiece = (hapOffset: number, expand?: () => boolean) =>
     open([
       ...abridged,
       blocks,
       'R#0#chr 20 ref R#0#chr 0 20 1 4 10,2,2,2 5,5,5,5 .',
       `R#0#chr 20 walk H#1#h 0 ${hapOffset} 1 2 10 .`,
-    ]).cut('R#0#chr', { start: 0, end: 40 }, { context: 0 })
+    ]).cut('R#0#chr', { start: 0, end: 40 }, { context: 0, expand })
 
-  test('a blocks row whose items end where the line’s next piece starts is read', async () => {
+  test('an abridged row that ends where the line’s next piece starts is read', async () => {
     expect((await nextPiece(18)).placeholders).toBe(1)
   })
 
-  test('a blocks row whose items end elsewhere than the line’s next piece starts is refused', async () => {
-    await expect(nextPiece(20)).rejects.toThrow(
-      "ends at 18 on its contig, and the line's next piece starts at 20",
-    )
-  })
+  test.each([undefined, all])(
+    'an abridged row that ends elsewhere than the line’s next piece starts is refused, by its hapBp: expand %o',
+    async expand => {
+      await expect(nextPiece(20, expand)).rejects.toThrow(
+        "R#0#chr's abridged row of H#1#h, piece 0 in tile 0, ends at 18 on its contig, and the line's next piece starts at 20",
+      )
+    },
+  )
 
   test('a blocks unit without the row of a piece its tile abridges is refused', async () => {
     await expect(
@@ -938,6 +1105,116 @@ describe('a file whose blocks unit is not what its tile needs', () => {
       ),
     ).rejects.toThrow('holds no row for piece 0 of H#1#h')
   })
+})
+
+// One contig in two W lines of one tile, both abridged, as above: >5>6 and
+// 30 bp off R to its line's end at 50, and >1>2 from 100. Its record leaves
+// 6 at 20 on the contig and owns the 80 bp to 100
+describe('a file whose abridged rows, blocks rows, detail rows and records disagree', () => {
+  const lines = [
+    '#walks format:i:8 tile:i:60',
+    '#reference R',
+    '#haplotype W#1',
+    'R#0#c 0 ref R#0#c 0 0 0 6 2,2,2,2,2,2 10,10,10,10,10,10 .',
+    'R#0#c 0 abridged W#1#c 0 0 0 3 50 0',
+    'R#0#c 0 abridged W#1#c 100 100 0 2 20 1',
+    'R#0#c 0:0 40 60 nodes 20 30',
+    'R#0#c 0:0 40 60 route 12 28 .',
+    'R#0#c 0:0 40 60 walk W#1#c 0 0 0 3 10 0',
+    'R#0#c 0:1 0 20 walk W#1#c 100 100 0 2 2 .',
+    'R#0#c 0 40 60 blocks W#1#c 0 0 40+20,30',
+    'R#0#c 0 0 20 blocks W#1#c 100 0 0+20',
+    'R#0#c 0 60 departure W#1#c 20 80 50 60 + 1 0 + 1 0',
+  ]
+  const cut = (edit: (line: string) => string, expand?: () => boolean) =>
+    WalkReader.fromFilehandles(walkFileOf(lines.map(edit))).cut(
+      R,
+      { start: 0, end: 10 },
+      { context: 0, expand },
+    )
+  const hapBp49 = (line: string) =>
+    line.replace('abridged W#1#c 0 0 0 3 50 0', 'abridged W#1#c 0 0 0 3 49 0')
+  const record = (hapStart: number, ownBp: number) => (line: string) =>
+    line.replace(
+      'departure W#1#c 20 80',
+      `departure W#1#c ${hapStart} ${ownBp}`,
+    )
+
+  test('the file as written is read, unexpanded and expanded', async () => {
+    expect((await cut(line => line)).placeholders).toBe(1)
+    expect((await cut(line => line, all)).placeholders).toBe(0)
+  })
+
+  test('a blocks row that does not add up to its abridged row’s hapBp is refused', async () => {
+    const error: unknown = await cut(hapBp49).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(WalkFormatError)
+    expect(error).toHaveProperty(
+      'message',
+      "R#0#c's blocks row of W#1#c, piece 0 in tile 0, adds up to 50 bp, and its abridged row states a hapBp of 49",
+    )
+  })
+
+  test('a detail row whose steps do not add up to its abridged row’s hapBp is refused', async () => {
+    await expect(cut(hapBp49, all)).rejects.toThrow(
+      "R#0#c's detail unit 0:0 holds 50 bp of steps for piece 0 of W#1#c, and its abridged row states a hapBp of 49",
+    )
+  })
+
+  test('a record whose own steps in a piece are not the run its blocks row ends with is refused', async () => {
+    await expect(cut(record(25, 75))).rejects.toThrow(
+      "R#0#c's blocks row of W#1#c, piece 0 in tile 0, ends with 30 bp off the reference, and a departure record's own steps there are 25 bp by its abridged row",
+    )
+  })
+
+  test.each([
+    { hapStart: 20, ownBp: 10, lies: 'inside piece 0, which covers [0, 50)' },
+    {
+      hapStart: 0,
+      ownBp: 60,
+      lies: 'over all of piece 0, which covers [0, 50)',
+    },
+  ])(
+    'a record whose own steps lie $lies is refused, unexpanded and expanded',
+    async ({ hapStart, ownBp, lies }) => {
+      for (const expand of [undefined, all]) {
+        const error: unknown = await cut(record(hapStart, ownBp), expand).catch(
+          (e: unknown) => e,
+        )
+        expect(error).toBeInstanceOf(WalkRowError)
+        expect(error).toHaveProperty(
+          'message',
+          expect.stringContaining(`of its contig lies ${lies}`),
+        )
+      }
+    },
+  )
+})
+
+// R over two 10 bp nodes: a record leaving along R at 15 names no node's end
+test('own steps beside a leave or rejoin that is no edge of a node of the tile’s reference path are refused', () => {
+  const path = new RefPath()
+  path.add([2, 4], [10, 10], 0)
+  const [piece] = decodeChunk(
+    [
+      'R#0#c\t0\t20\tref\tR#0#c\t0\t0\t0\t2\t2,2\t10,10\t.'.split('\t'),
+      'R#0#c\t0\t20\tabridged\tW#1#c\t0\t0\t0\t3\t25\t0'.split('\t'),
+    ],
+    0,
+    undefined,
+  ).abridged
+  const run = (pos: number, reversed: boolean) =>
+    ownRunsRow(
+      piece!,
+      [{ key: 'k', start: 20, end: 25, trailing: true, pos, reversed }],
+      path,
+      () => -1,
+    )
+  expect(run(20, false).links).toEqual([4, -2])
+  expect(run(10, true).links).toEqual([5, -2])
+  expect(() => run(15, false)).toThrow(
+    'a departure record of W#1#c leaves at 15, where the reference path of the tile holding its own steps has no node ending',
+  )
+  expect(() => run(15, true)).toThrow('has no node starting')
 })
 
 // The walks holding a placeholder among their steps, a departure's or a
