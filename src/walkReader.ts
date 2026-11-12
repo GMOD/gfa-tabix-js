@@ -29,6 +29,7 @@ import {
   keptNodesError,
   keptStepsError,
   megabytes,
+  runName,
   stepBudgetError,
   surelyKept,
   walkCut,
@@ -60,11 +61,6 @@ const WALK_CONTEXT = 1000
 
 // detail records an expanding cut reads at once
 const DETAIL_READS = 16
-
-// the runs off R a reader keeps the placeholder ids of, and the most ids it
-// gives before it starts again, which stay above walkChunk's SKIPPED
-const RUN_IDS = 1 << 20
-const MAX_RUN_COUNT = 2 ** 30
 
 // The budgets a cut keeps to unless its caller passes others: what a browser
 // window can hold. Infinity lifts one
@@ -330,33 +326,6 @@ export class WalkReader {
     return { ...header, tile }
   })
 
-  // the id of each run of steps off R a cut left unloaded, by its walk and
-  // its stretch of the contig: the same run has the same id in every cut
-  private runIds = new Map<string, Map<string, number>>()
-  private runsHeld = 0
-  private runCount = 0
-
-  private runId(name: string, start: number, end: number) {
-    const ids = this.runIds.get(name) ?? new Map<string, number>()
-    this.runIds.set(name, ids)
-    const key = `${start}-${end}`
-    const held = ids.get(key)
-    const id = held ?? -++this.runCount
-    ids.set(key, id)
-    this.runsHeld += held === undefined ? 1 : 0
-    return id
-  }
-
-  // Past RUN_IDS runs the ids are let go, between cuts: a run met again takes
-  // a new id, and none is given twice
-  private forgetRuns() {
-    if (this.runsHeld > RUN_IDS || this.runCount > MAX_RUN_COUNT) {
-      this.runIds = new Map()
-      this.runsHeld = 0
-      this.runCount = this.runCount > MAX_RUN_COUNT ? 0 : this.runCount
-    }
-  }
-
   private readonly readLookup = once(async () =>
     refNameLookup(await this.file.sequences()),
   )
@@ -467,7 +436,6 @@ export class WalkReader {
       expand,
     } = opts
     checkRange(refName, region.start, region.end)
-    this.forgetRuns()
     const [header, units] = await Promise.all([
       this.header({ signal }),
       this.units(refName, { signal }),
@@ -543,6 +511,13 @@ export class WalkReader {
       tileBytesTo(end) +
       bytesOf(extra.filter(x => x.from < end + context).map(x => x.unit)) +
       bytesOf(more.filter(x => x.from < end + context).map(x => x.unit))
+    const placeholderIds = new Map<string, number>()
+    const placeholderId = (name: string, start: number, end: number) => {
+      const run = runName(name, start, end)
+      const id = placeholderIds.get(run) ?? -(placeholderIds.size + 1)
+      placeholderIds.set(run, id)
+      return id
+    }
     // the abridged rows decoded and not yet read from a blocks row or a
     // detail record
     let met: Met[] = []
@@ -857,7 +832,7 @@ export class WalkReader {
             read.path,
             over,
             cores.get(read),
-            (start, end) => this.runId(piece.name, start, end),
+            (start, end) => placeholderId(piece.name, start, end),
           )
           read.into.push(built.row)
           placeNodes(built.nodes)
@@ -933,7 +908,7 @@ export class WalkReader {
           squeeze: squeezer(header.holes, refName),
           drawn: bounds,
           attach: joinPieces(attachRows),
-          placeholder: (name, start, end) => this.runId(name, start, end),
+          placeholder: placeholderId,
         })
       cut = cutRows()
       // the tiles holding own steps the read lacks, the walks wanting each,

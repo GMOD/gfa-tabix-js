@@ -542,7 +542,7 @@ test('a contained cut keeps a placeholder within its context whole, as the loade
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
 
-test('a placeholder is no node: it is flagged, as long as its run, placed on its walk’s contig and named for both, and one run keeps one id from cut to cut', async () => {
+test('a placeholder is no node: it is flagged, as long as its run, placed on its walk’s contig and named for both', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
   const unloaded = await walks.cut(R, window, { context: 0 })
@@ -602,15 +602,6 @@ test('a placeholder is no node: it is flagged, as long as its run, placed on its
     ]),
   )
   expect(flagged.some(name => /^-?\d+$/.test(name))).toBe(false)
-  const idsByRun = (cut: Cut) =>
-    Object.fromEntries(
-      [...cut.graph.nodes].flatMap(([id, node]) =>
-        node.placeholder ? [[nameOf(cut, id), id]] : [],
-      ),
-    )
-  const narrower = await walks.cut(R, { start: 90, end: 100 }, { context: 0 })
-  expect(idsByRun(unloaded)).toMatchObject(idsByRun(narrower))
-  expect(Object.keys(idsByRun(narrower)).length).toBeGreaterThan(3)
 })
 
 // Every walk of blocks.R over 60-120 keeps placeholders for its runs off R

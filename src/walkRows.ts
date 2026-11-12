@@ -874,10 +874,14 @@ export function surelyKept(
   }
 }
 
-// A node's name in the tables: its id, or for a placeholder its walk and its
-// stretch of the contig, which no node's name is
+// A run of a walk's steps by its walk and its stretch of the contig, which no
+// node's name is
+export const runName = (name: string, start: number, end: number) =>
+  `${name}:${start}-${end}`
+
+// A node's name in the tables: its id, or for a placeholder its run's name
 const nodeName = (id: number, node?: WalkNode) =>
-  node?.placeholder ? `${node.refName}:${node.start}-${node.end}` : String(id)
+  node?.placeholder ? runName(node.refName, node.start, node.end) : String(id)
 
 // Whether placement `node` beats `held`: a pass of the reference over the
 // window beats any other, then a reference position beats one off it, and

@@ -1,10 +1,104 @@
+import { createHash } from 'node:crypto'
 import { crc32, deflateRawSync } from 'node:zlib'
 
 import { BlobFile } from 'generic-filehandle2'
 
+import { isPlaceholder, runName } from './walkRows.ts'
+
 import type { GraphTables } from './util.ts'
 import type { WalkUnit } from './walkFile.ts'
+import type { WalkReader } from './walkReader.ts'
 import type { FilehandleOptions } from 'generic-filehandle2'
+import type { Hash } from 'node:crypto'
+
+type Cut = Awaited<ReturnType<WalkReader['cut']>>
+
+// Each placeholder of a cut as its id and its run's name: a node flagged one
+// by the stretch it states, and a placeholder step of a fragment by where the
+// fragment walks it
+export function placeholderRuns(cut: Cut) {
+  const runs: [number, string][] = []
+  for (const [id, node] of cut.graph.nodes) {
+    if (node.placeholder) {
+      runs.push([id, runName(node.refName, node.start, node.end)])
+    }
+  }
+  for (const f of cut.fragments) {
+    let at = f.hapStart
+    for (const id of f.ids) {
+      const node = cut.graph.nodes.get(id)
+      const end = at + (node ? node.end - node.start : Number.NaN)
+      if (isPlaceholder(id) && !Number.isNaN(end)) {
+        runs.push([id, runName(f.name, at, end)])
+      }
+      at = end
+    }
+  }
+  return runs
+}
+
+// The placeholders whose id stands for another run too, or whose run has
+// another id too
+export function idsNotOneToOne(runs: [number, string][]) {
+  const runOf = new Map<number, string>()
+  const idOf = new Map<string, number>()
+  const out = new Set<string>()
+  for (const [id, run] of runs) {
+    const heldRun = runOf.get(id) ?? run
+    const heldId = idOf.get(run) ?? id
+    if (heldRun !== run || heldId !== id) {
+      out.add(`${id} ${run}, beside ${heldId} ${heldRun}`)
+    }
+    runOf.set(id, heldRun)
+    idOf.set(run, heldId)
+  }
+  return [...out]
+}
+
+// What a cut returns and the tables it makes
+export function cutFacts(
+  cut: Cut,
+  tables = cut.graph.tables(cut.kept, cut.fragments, cut.departures, cut.gaps),
+) {
+  return {
+    tables,
+    kept: [...cut.kept],
+    nodes: [...cut.graph.nodes],
+    fragments: cut.fragments,
+    departures: cut.departures,
+    gaps: cut.gaps,
+    placeholders: cut.placeholders,
+  }
+}
+
+function hashInto(hash: Hash, value: unknown) {
+  if (ArrayBuffer.isView(value)) {
+    hash.update(`${value.constructor.name} ${value.byteLength}:`)
+    hash.update(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    )
+  } else if (Array.isArray(value)) {
+    hash.update(`[${value.length}:`)
+    for (const item of value) {
+      hashInto(hash, item)
+    }
+  } else if (typeof value === 'object' && value !== null) {
+    for (const [key, item] of Object.entries(value)) {
+      hash.update(`{${key}:`)
+      hashInto(hash, item)
+    }
+    hash.update('}')
+  } else {
+    hash.update(`${typeof value} ${String(value)};`)
+  }
+}
+
+// Equal for two cuts whose facts are the same, byte for byte
+export function cutDigest(facts: ReturnType<typeof cutFacts>) {
+  const hash = createHash('sha256')
+  hashInto(hash, facts)
+  return hash.digest('hex')
+}
 
 // The GFA a cut's tables stand for, as @jbrowse/bandage-core writes it
 export function graphTablesGFA({ nodes, links, walks }: GraphTables) {
