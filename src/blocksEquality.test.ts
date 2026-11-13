@@ -49,6 +49,15 @@ test.each(['blocks.R', 'between.R', 'ownends.R'])(
   },
 )
 
+// unbuilt.R holds two pieces of one line in one detail unit, and a window on
+// 0-10 builds the first alone: the second walks a link between two reference
+// nodes that another walk's steps keep
+test('the equality harness finds no link in a loaded cut of unbuilt.R that only a piece the cut does not build walks', () => {
+  const run = harness('unbuilt.R', '--at', 'R#0#c:0-10', '--context', '0')
+  expect(run.stdout).toContain('differences from the loaded cut: 0 in 0')
+  expect(run.status).toBe(0)
+})
+
 // The graphs of gfa-to-tabix's ADR 0013, where a record's own steps are told
 // by hapBp alone: each window is one tile, so a tile is fetched to attach
 // wherever a record leaves or rejoins on the window with own steps in

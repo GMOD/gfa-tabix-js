@@ -912,6 +912,28 @@ test('a cut that expands a walk loads its piece between two over the drawn stret
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
 })
 
+// unbuilt.R.gfa: R as in blocks.R. W BACK 1 c >1>2>7>8>4>6 has pieces 1,2 and
+// 4,6 in the tile at 0, both in one detail unit, and the second skips node 5.
+// W LOOP 1 c >1>2>3>4>5>6>1 passes node 1 twice, so a cut of 0-10 keeps nodes
+// 4 and 6 by LOOP's steps, and of BACK builds the first piece alone
+test('a cut that expands a walk holds no link of a piece it does not build, where the piece’s detail unit holds one it builds', async () => {
+  const walks = reader('unbuilt.R')
+  const window = { start: 0, end: 10 }
+  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  const unloaded = await walks.cut(R, window, { context: 0 })
+  expect(rows(loaded, 'BACK#1#c')).toEqual([[0, 10, '>1@0']])
+  expect([...loaded.kept].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6])
+  expect(links(loaded)).toEqual([
+    '1[ 6]',
+    '1] 2[',
+    '2] 3[',
+    '3] 4[',
+    '4] 5[',
+    '5] 6[',
+  ])
+  expect(links(unloaded)).toEqual(links(loaded))
+})
+
 test('a piece in two fragments of a contained cut counts its steps on the first', async () => {
   const { unloaded } = await cuts(80, 90, { contained: true })
   const { walks } = unloaded.graph.tables(

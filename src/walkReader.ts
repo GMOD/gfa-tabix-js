@@ -759,6 +759,12 @@ export class WalkReader {
           ...tileCut,
           rows: taken,
           ends: tileCut.ends.filter(end => pieces.has(keyOf(end))),
+          chunk: {
+            ...tileCut.chunk,
+            walks: tileCut.chunk.walks.filter(({ cols }) =>
+              pieces.has(pieceKey(cols[4] ?? '', cols[5] ?? '', cols[7] ?? '')),
+            ),
+          },
         },
         piece.chunkStart + tile,
       )

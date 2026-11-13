@@ -433,7 +433,8 @@ for (const d of departures) {
 - Every other piece of a tile under the window is its bp alone, from its
   `abridged` row's `hapBp`: it counts in the `trimmedBefore` or `trimmedAfter`
   of the fragment beside it and as `read` in a gap, and the cut states no step
-  of it
+  of it and no link it walks, though its detail unit holds a piece the cut
+  expands
 - A piece built from its `blocks` row is cut as a loaded one is: kept where a
   step of it lies on the drawn stretch, trimmed to its first and last steps
   there, joined to the pieces beside it, split by a contained cut, linked, and

@@ -474,7 +474,8 @@ function decodeWalk(
 export interface Chunk {
   path: RefPath
   routes: Route[]
-  // walk rows in path-name order, choices parsed
+  // walk rows in path-name order, choices parsed: a tile's, kept or not, and
+  // of a detail record those of the pieces the cut reads from it
   walks: { cols: string[]; choices: number[] }[]
   lengths: Map<number, number>
   // for a detail record, the node lengths of its chunk's R, which it shares
@@ -1174,8 +1175,8 @@ export function decodeChunk(
  * A node off R takes its position from the path whose name sorts first among
  * those visiting it in the chunks read, at its earliest offset, as format 1's
  * node rows had it. A node on any read chunk's R keeps its reference position,
- * even where another chunk's route steps on it. Links are R's and the routes',
- * both ends in the cut.
+ * even where another chunk's route steps on it. Links are R's and those of the
+ * routes a walk row of a chunk takes, both ends in the cut.
  */
 export function placeAndLink(
   chunks: Chunk[],
@@ -1201,29 +1202,37 @@ export function placeAndLink(
         linkCanonical(handles[k - 1]!, handles[k]!)
       }
     }
+    const walked = new Uint8Array(routes.length)
+    for (const { choices } of walks) {
+      for (let k = 0; k < choices.length; k += 4) {
+        walked[choices[k]!] = 1
+      }
+    }
     // routes holding a node of the cut off R
     const wanted = new Uint8Array(routes.length)
     for (let index = 0; index < routes.length; index++) {
-      const { entry, interior, exit } = routes[index]!
-      let any = false
-      let from = entry
-      for (const h of interior) {
-        const inCut = kept.has(idOf(h))
-        any ||= offR.has(idOf(h))
-        if (inCut && from !== NONE && kept.has(idOf(from))) {
-          linkCanonical(from, h)
+      if (walked[index] === 1) {
+        const { entry, interior, exit } = routes[index]!
+        let any = false
+        let from = entry
+        for (const h of interior) {
+          const inCut = kept.has(idOf(h))
+          any ||= offR.has(idOf(h))
+          if (inCut && from !== NONE && kept.has(idOf(from))) {
+            linkCanonical(from, h)
+          }
+          from = h
         }
-        from = h
+        if (
+          from !== NONE &&
+          exit !== NONE &&
+          kept.has(idOf(from)) &&
+          kept.has(idOf(exit))
+        ) {
+          linkCanonical(from, exit)
+        }
+        wanted[index] = any ? 1 : 0
       }
-      if (
-        from !== NONE &&
-        exit !== NONE &&
-        kept.has(idOf(from)) &&
-        kept.has(idOf(exit))
-      ) {
-        linkCanonical(from, exit)
-      }
-      wanted[index] = any ? 1 : 0
     }
     const lengthOf = (h: number) =>
       lengths.get(idOf(h)) ?? refLengths?.get(idOf(h)) ?? 0
