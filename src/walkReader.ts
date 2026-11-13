@@ -749,7 +749,19 @@ export class WalkReader {
         }
         into.push(row)
       }
-      place({ ...tileCut, rows: taken }, piece.chunkStart + tile)
+      place(
+        {
+          ...tileCut,
+          rows: taken,
+          chunk: {
+            ...tileCut.chunk,
+            walks: tileCut.chunk.walks.filter(({ cols }) =>
+              pieces.has(pieceKey(cols[4] ?? '', cols[5] ?? '', cols[7] ?? '')),
+            ),
+          },
+        },
+        piece.chunkStart + tile,
+      )
     }
     const onDrawn = (span: { start: number; end: number }) =>
       span.start < over.end && span.end > over.start

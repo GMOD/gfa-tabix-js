@@ -241,9 +241,8 @@ const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
 // is listed in `inside`
 function linkRows(
   cut: Cut,
-  window: Window,
   { nodes, links }: GraphTables,
-  reversedOnR: (id: number, start: number) => boolean | undefined,
+  passAt: (position: number, ending: boolean) => Pass | undefined,
   inside: (name: string, id: number, start: number) => boolean,
 ) {
   const indexOfName = new Map(nodes.names.map((name, i) => [name, i]))
@@ -351,30 +350,16 @@ function linkRows(
       last = next
     }
   }
-  const startingAt = new Map<number, number>()
-  const endingAt = new Map<number, number>()
-  for (const id of cut.kept) {
-    const node = cut.graph.nodes.get(id)
-    if (
-      node?.rank === 0 &&
-      !node.placeholder &&
-      node.refName === window.refName
-    ) {
-      startingAt.set(node.start, id)
-      endingAt.set(node.end, id)
-    }
-  }
-  const reversedAt = (id: number | undefined) =>
-    id !== undefined &&
-    reversedOnR(id, cut.graph.nodes.get(id)?.start ?? Number.NaN) === true
+  const keptPass = (pass: Pass | undefined) =>
+    pass !== undefined && cut.kept.has(pass.id) ? pass : undefined
   for (const d of cut.departures) {
     if (d.steps && d.steps.ids.length > 0) {
       const { ids, rev } = d.steps
       const where = d.fromSteps
         ? `${d.name} departure at ${d.hapStart}`
         : undefined
-      const leave = (d.leaveReversed ? startingAt : endingAt).get(d.leavePos)
-      const rejoin = (d.rejoinReversed ? endingAt : startingAt).get(d.rejoinPos)
+      const leave = keptPass(passAt(d.leavePos, !d.leaveReversed))
+      const rejoin = keptPass(passAt(d.rejoinPos, d.rejoinReversed))
       const own: Step[] = []
       let at = d.hapStart
       for (const id of ids) {
@@ -382,8 +367,8 @@ function linkRows(
         at += length(id)
       }
       walk(
-        stepOf(leave),
-        reversedAt(leave) === d.leaveReversed,
+        stepOf(leave?.id),
+        leave?.reversed === d.leaveReversed,
         own[0]!,
         rev[0] !== 0,
         where,
@@ -394,8 +379,8 @@ function linkRows(
       walk(
         own.at(-1)!,
         rev.at(-1) === 0,
-        stepOf(rejoin),
-        reversedAt(rejoin) !== d.rejoinReversed,
+        stepOf(rejoin?.id),
+        rejoin?.reversed !== d.rejoinReversed,
         where,
       )
     }
@@ -424,11 +409,18 @@ function linkRows(
   }
 }
 
-// The reference's strand at each pass of its nodes, as `id@start`, from the
-// ref rows of the tiles holding the positions asked for, each tile read once
+// A pass of the reference over a node, and whether it runs against the node
+interface Pass {
+  id: number
+  reversed: boolean
+}
+
+// The reference's pass that starts or ends at each position, from the ref
+// rows of the tiles holding the positions asked for, each tile read once
 function referenceStrands(file: WalkFile) {
   const tilesRead = new Set<number>()
-  const reversed = new Map<string, boolean>()
+  const starting = new Map<number, Pass>()
+  const ending = new Map<number, Pass>()
   const cover = async (refName: string, positions: number[]) => {
     const units = (await file.units(refName)).filter(
       u =>
@@ -438,7 +430,8 @@ function referenceStrands(file: WalkFile) {
     )
     if (tilesRead.size + units.length > TILES_HELD) {
       tilesRead.clear()
-      reversed.clear()
+      starting.clear()
+      ending.clear()
     }
     const lines = await file.read(units)
     units.forEach((unit, k) => {
@@ -453,8 +446,14 @@ function referenceStrands(file: WalkFile) {
             const t = Number(token)
             const r = t - 2 * Math.floor(t / 2)
             id += (t - r) / 2
-            reversed.set(`${id}@${start}`, r === 1)
+            const pass = { id, reversed: r === 1 }
+            if (lengths[j]! > 0 || !starting.has(start)) {
+              starting.set(start, pass)
+            }
             start += lengths[j]!
+            if (lengths[j]! > 0 || !ending.has(start)) {
+              ending.set(start, pass)
+            }
           }
         }
       }
@@ -462,7 +461,8 @@ function referenceStrands(file: WalkFile) {
   }
   return {
     cover,
-    reversedOnR: (id: number, start: number) => reversed.get(`${id}@${start}`),
+    passAt: (position: number, ended: boolean) =>
+      (ended ? ending : starting).get(position),
   }
 }
 
@@ -881,13 +881,7 @@ function summary(
     cut.departures,
     cut.gaps,
   )
-  const links = linkRows(
-    cut,
-    window,
-    tables,
-    strands.reversedOnR,
-    insideRun(cut, unloaded),
-  )
+  const links = linkRows(cut, tables, strands.passAt, insideRun(cut, unloaded))
   const aside = new Set(
     [...links.insideNodes].filter(
       id => unloaded?.keptOnReference.has(id) === false,
