@@ -840,6 +840,7 @@ export function unloadedRow(
   const { hapOffset } = piece
   let hap = hapOffset
   let skipped = 0
+  let omitted = false
   const push = (
     id: number,
     reversed: number,
@@ -855,9 +856,10 @@ export function unloadedRow(
     hap += length
   }
   const flush = () => {
-    if (skipped > 0) {
+    if (skipped > 0 || omitted) {
       const length = skipped
       skipped = 0
+      omitted = false
       push(SKIPPED, 0, Number.NaN, 0, length)
     }
   }
@@ -916,13 +918,16 @@ export function unloadedRow(
         step(firstOf(k), reversed)
       } else {
         skipped += firstBp
+        omitted = true
       }
       if (size > 1) {
         skipped += blocks.lengths[k]! - firstBp - lastBp
+        omitted ||= size > 2
         if (needLast) {
           step(lastOf(k), reversed)
         } else {
           skipped += lastBp
+          omitted = true
         }
       }
     }

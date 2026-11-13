@@ -317,6 +317,8 @@ export interface WalkCutOptions {
   // the id of the placeholder for a walk's unloaded run over a stretch of
   // its contig; given it, a contained cut keeps `context` bp of a placeholder
   placeholder?: (name: string, start: number, end: number) => number
+  // false lists no links
+  links?: boolean
 }
 
 // A record whose own steps the cut attaches and may not hold: the cut lacks
@@ -383,6 +385,7 @@ export function walkCut(
     drawn,
     attach = [],
     placeholder,
+    links: linked = true,
   }: WalkCutOptions = {},
 ) {
   // the window and its context, as the reference nodes on it span them
@@ -487,14 +490,25 @@ export function walkCut(
     }
     return { found, splits }
   }
-  // the links the steps returned walk, as pairs of handles
+  // the links the steps returned walk, as pairs of handles, each once
   const links: number[] = []
+  const linkedTo = new Map<number, Set<number>>()
+  const link = (a: number, b: number) => {
+    if (linked) {
+      const held = linkedTo.get(a) ?? new Set<number>()
+      linkedTo.set(a, held)
+      if (!held.has(b)) {
+        held.add(b)
+        links.push(a, b)
+      }
+    }
+  }
   // links each step of `run` from `from` to `to` to the one before it
   const walk = (run: WalkRun, from: number, to: number) => {
     const { ids, rev } = run
     for (let k = Math.max(from, 0) + 1; k <= to && k < ids.length; k++) {
       if (ids[k - 1] !== SKIPPED && ids[k] !== SKIPPED) {
-        links.push(ids[k - 1]! * 2 + rev[k - 1]!, ids[k]! * 2 + rev[k]!)
+        link(ids[k - 1]! * 2 + rev[k - 1]!, ids[k]! * 2 + rev[k]!)
       }
     }
   }
@@ -847,10 +861,7 @@ export function walkCut(
           last !== SKIPPED &&
           next !== SKIPPED
         ) {
-          links.push(
-            last * 2 + left.rev[end - 1]!,
-            next * 2 + right.rev[start]!,
-          )
+          link(last * 2 + left.rev[end - 1]!, next * 2 + right.rev[start]!)
         }
       }
       if (ids.length > 0) {

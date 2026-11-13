@@ -1056,6 +1056,7 @@ export class WalkReader {
           drawn: bounds,
           attach: joinPieces(attachRows),
           placeholder: placeholderId,
+          links,
         })
       cut = cutRows()
       // the tiles holding own steps the read lacks, the walks wanting each,

@@ -2090,6 +2090,20 @@ test('steps either side of a hole in the reference depart nowhere', async () => 
   ])
 })
 
+// Each link of a cut's tables, as its two nodes and their strands
+function linkNames(cut: Awaited<ReturnType<WalkReader['cut']>>) {
+  const { nodes, links } = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+  )
+  return Array.from(
+    links.from,
+    (from, k) =>
+      `${nodes.names[from]}${links.strands[k]! & 1 ? '-' : '+'} ${nodes.names[links.to[k]!]}${links.strands[k]! & 2 ? '-' : '+'}`,
+  ).sort()
+}
+
 // refhole.R.gfa: R is two W lines, >1>2 at 0-8 and >3>4 at 40-48, in one
 // 64 bp tile, and H jumps from 1 to 4. No walk goes from 2 to 3, so the graph
 // has no such link
@@ -2099,16 +2113,91 @@ test('a cut lists no link over a hole in the reference that no walk crosses, whe
     { start: 0, end: 64 },
     { context: 0 },
   )
-  const { nodes, links } = cut.graph.tables(
-    cut.kept,
-    cut.fragments,
-    cut.departures,
+  expect(linkNames(cut)).toEqual(['1+ 2+', '1+ 4+', '3+ 4+'])
+})
+
+// adv.R.gfa: R over twelve 10 bp nodes. CROSS leaves after node 3 for 21,
+// two nodes of another sequence and 22, and rejoins at node 10; NOREF's
+// first line ends on 21 and a later one starts at node 10; PLAIN leaves
+// after node 3 for 24 and rejoins at node 10. A cut holds 21 as an own step
+// of CROSS and of NOREF, and neither walks from 21 to node 10
+describe('the links at a departure record’s ends', () => {
+  const all = () => true
+
+  test('own steps that stop short of the rejoin node are not linked to it', async () => {
+    const cut = await reader('adv.R').cut(
+      'R#0#c1',
+      { start: 84, end: 96 },
+      { context: 0, expand: all },
+    )
+    expect(
+      cut.departures.map(d => [d.name, [...(d.steps?.ids ?? [])]]),
+    ).toEqual([
+      ['CROSS#1#c', [21]],
+      ['NOREF#1#c', [21]],
+      ['PLAIN#1#c', [24]],
+    ])
+    expect(linkNames(cut)).toEqual(['24+ 10+', '9+ 10+'])
+  })
+
+  test('the node a record leaves is linked to its first own step, and its last to the node it rejoins, where the cut holds them', async () => {
+    const cut = await reader('adv.R').cut(
+      'R#0#c1',
+      { start: 0, end: 15 },
+      { context: 1000, expand: all },
+    )
+    const links = linkNames(cut)
+    expect(links).toContain('3+ 21+')
+    expect(links).toContain('3+ 24+')
+    expect(links).toContain('24+ 10+')
+    expect(links.filter(link => link.includes('21'))).toEqual(['3+ 21+'])
+  })
+
+  // jumpback.GRCh38.gfa: HG002's second W line starts on node 20, off the
+  // reference, and rejoins at node 3
+  test('own steps before the rejoin are linked to the node the record rejoins', async () => {
+    const cut = await reader('jumpback.GRCh38').cut(
+      'GRCh38#0#chr1',
+      { start: 0, end: 16 },
+      { context: 10 },
+    )
+    expect(linkNames(cut)).toContain('20+ 3+')
+  })
+
+  // abridged.R.gfa: H leaves R after node 3 for node 7, 3 bp, and rejoins at
+  // node 4, inside one piece, so the cut computes the departure from H's steps
+  test.each([
+    { expand: all, links: ['3+ 7+', '7+ 4+'] },
+    { expand: undefined, links: ['3+ H#1#h:118-121+', 'H#1#h:118-121+ 4+'] },
+  ])(
+    'a departure inside a piece links its own steps to the steps either side: $links',
+    async ({ expand, links }) => {
+      const cut = await reader('abridged.R').cut(
+        'R#0#chr',
+        { start: 10, end: 18 },
+        { context: 0, ...(expand ? { expand } : {}) },
+      )
+      expect(linkNames(cut)).toEqual(expect.arrayContaining(links))
+    },
   )
-  expect(
-    Array.from(links.from, (from, k) =>
-      [nodes.names[from], nodes.names[links.to[k]!]].join('>'),
-    ).sort(),
-  ).toEqual(['1>2', '1>4', '3>4'])
+
+  // abridged.R.gfa: Q leaves R after node 1 for 6 bp of its own and rejoins
+  // at node 3; its own steps are one placeholder in a cut that expands none
+  test('a placeholder for own steps is linked to the nodes its record leaves and rejoins', async () => {
+    const cut = await reader('abridged.R').cut(
+      'R#0#chr',
+      { start: 8, end: 16 },
+      { context: 0 },
+    )
+    expect(linkNames(cut)).toEqual([
+      '1+ 2+',
+      '1+ Q#0#chr:6-12+',
+      '2+ 3+',
+      '3+ 4+',
+      '4+ 1+',
+      'Q#0#chr:6-12+ 3+',
+    ])
+  })
 })
 
 // holetile.R's tile with its ref rows written last first: R is the rows in
