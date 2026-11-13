@@ -657,6 +657,124 @@ test("a record's own steps come from its leave and rejoin pieces, and a record l
   expect(over.unattached).toEqual([])
 })
 
+// The window's nodes are 2 and 3, over 100-300. A record's own steps are
+// linked to its leave step and to its rejoin step where the walk's fragment
+// holds that step, whichever pieces the cut read
+describe('the links of a record’s own steps at its ends', () => {
+  const record = (
+    hapStart: number,
+    leavePos: number,
+    rejoinPos: number,
+  ): WalkDeparture => ({
+    name: 'HG002#1#chr1',
+    hapStart,
+    ownBp: 100,
+    missingBp: 0,
+    leavePos,
+    leaveReversed: false,
+    leavePasses: 1,
+    rejoinPos,
+    rejoinReversed: false,
+    rejoinPasses: 1,
+    fromSteps: false,
+  })
+  const piece = (
+    g: WalkGraph,
+    hapOffset: number,
+    steps: number[],
+    at: number,
+  ) =>
+    walkRow(
+      'HG002#1#chr1',
+      at,
+      hapOffset,
+      steps.map((id): [number, boolean] => [id, false]),
+      { chunkStart: hapOffset },
+      g.nodes,
+    )
+  const linksOf = (
+    pieces: (g: WalkGraph) => WalkRow[],
+    d: WalkDeparture,
+    drawn?: { start: number; end: number },
+  ) => {
+    const g = graph()
+    const { links, fragments, departures } = walkCut(
+      joinPieces(pieces(g)),
+      g.nodes,
+      'GRCh38#0#chr1',
+      [d],
+      drawn ? { drawn } : {},
+    )
+    const names: string[] = []
+    for (let k = 0; k < links.length; k += 2) {
+      names.push(`${links[k]! >> 1} ${links[k + 1]! >> 1}`)
+    }
+    return {
+      links: names.sort(),
+      fragment: fragments.map(f => [...f.ids]),
+      own: departures.map(dep => [...(dep.steps?.ids ?? [])]),
+    }
+  }
+
+  // HG002 walks 1, 2, its own 5, then 4: the piece that leaves holds 5
+  const trailing = (g: WalkGraph) => [
+    piece(g, 0, [1, 2, 5], 0),
+    piece(g, 300, [4], 1),
+  ]
+  // the same walk with 5 in the piece that rejoins
+  const leading = (g: WalkGraph) => [
+    piece(g, 0, [1, 2], 0),
+    piece(g, 200, [5, 4], 1),
+  ]
+
+  test.each([
+    { name: 'the piece it leaves', pieces: trailing },
+    { name: 'the piece that rejoins', pieces: leading },
+  ])(
+    'own steps in $name are not linked to a rejoin step off the fragment, though the cut read its piece',
+    ({ pieces }) => {
+      expect(linksOf(pieces, record(200, 200, 300))).toEqual({
+        links: ['2 5'],
+        fragment: [[2]],
+        own: [[5]],
+      })
+    },
+  )
+
+  test.each([
+    { name: 'the piece it leaves', pieces: trailing },
+    { name: 'the piece that rejoins', pieces: leading },
+  ])(
+    'own steps in $name are linked to a rejoin step the fragment holds',
+    ({ pieces }) => {
+      expect(
+        linksOf(pieces, record(200, 200, 300), { start: 150, end: 350 }).links,
+      ).toEqual(['2 5', '5 4'])
+    },
+  )
+
+  // HG002 walks 1, its own 5, then 3: node 1 is off the window
+  test.each([
+    {
+      name: 'the piece that rejoins',
+      pieces: (g: WalkGraph) => [piece(g, 0, [1], 0), piece(g, 100, [5, 3], 1)],
+    },
+    {
+      name: 'the piece it leaves',
+      pieces: (g: WalkGraph) => [piece(g, 0, [1, 5], 0), piece(g, 200, [3], 1)],
+    },
+  ])(
+    'own steps in $name are not linked to a leave step off the fragment, though the cut read its piece',
+    ({ pieces }) => {
+      expect(linksOf(pieces, record(100, 100, 200))).toEqual({
+        links: ['5 3'],
+        fragment: [[3]],
+        own: [[5]],
+      })
+    },
+  )
+})
+
 // The window's nodes are 2 and 3, over 100-300; the stretch drawn is 150-250
 describe('a departure’s own steps, by where it leaves and rejoins', () => {
   const drawn = { start: 150, end: 250 }
