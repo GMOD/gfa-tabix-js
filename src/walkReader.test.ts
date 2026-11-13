@@ -11,7 +11,7 @@ import {
   WalkReader,
   readInOrder,
 } from './walkReader.ts'
-import { isPlaceholder, walkNameFilter } from './walkRows.ts'
+import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
@@ -2114,6 +2114,39 @@ test('a cut lists no link over a hole in the reference that no walk crosses, whe
     { context: 0 },
   )
   expect(linkNames(cut)).toEqual(['1+ 2+', '1+ 4+', '3+ 4+'])
+})
+
+// hprc-chrM.GRCh38.gfa: HPRC's chrM, 44 haplotypes, no walk abridged. The
+// file's tile holds every haplotype's rows, whichever a cut keeps
+test('a cut of four haplotypes lists the links its fragments walk, and between reference nodes no other', async () => {
+  const walks = reader('hprc-chrM.GRCh38')
+  const [refName = ''] = await walks.referenceSequences()
+  const { haplotypes } = await walks.header()
+  const cut = await walks.cut(
+    refName,
+    { start: 0, end: 16_000 },
+    { keep: walksKept(haplotypes.slice(0, 4), refName) },
+  )
+  const walked = new Set<string>()
+  for (const { ids, rev } of cut.fragments) {
+    for (let i = 1; i < ids.length; i++) {
+      const [a, b] = canonicalLink(
+        ids[i - 1]! * 2 + rev[i - 1]!,
+        ids[i]! * 2 + rev[i]!,
+      )
+      walked.add(`${a >> 1}${a & 1 ? '-' : '+'} ${b >> 1}${b & 1 ? '-' : '+'}`)
+    }
+  }
+  const onReference = (name: string) =>
+    cut.graph.nodes.get(Number(name.slice(0, -1)))?.rank === 0
+  const listed = linkNames(cut)
+  expect(cut.fragments.length).toBe(5)
+  expect(listed).toEqual(expect.arrayContaining([...walked]))
+  expect(
+    listed.filter(
+      link => link.split(' ').every(onReference) && !walked.has(link),
+    ),
+  ).toEqual([])
 })
 
 // adv.R.gfa: R over twelve 10 bp nodes. CROSS leaves after node 3 for 21,
