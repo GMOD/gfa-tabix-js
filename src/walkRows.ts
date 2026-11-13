@@ -628,6 +628,17 @@ export function walkCut(
     }
   }
   const runEnd = (run: WalkRun) => run.hapOffset + before(run)[run.ids.length]!
+  // whether a fragment holds step `i` of `run`; a departure's own steps are
+  // linked to its leave step and to its rejoin step where one does
+  const spansOf = new Map<WalkRun, { first: number; last: number }[]>()
+  for (const span of spans) {
+    const held = spansOf.get(span.run) ?? []
+    spansOf.set(span.run, held)
+    held.push(span)
+  }
+  const returned = (run: WalkRun, i: number) =>
+    spansOf.get(run)?.some(({ first, last }) => first <= i && i <= last) ===
+    true
   const fragments: WalkFragment[] = []
   for (const { run, first, last } of spans) {
     const { ids, rev } = run
@@ -742,7 +753,11 @@ export function walkCut(
                   d.abridged = held
                 }
                 markAttached(run, last + 1, i)
-                walk(run, last, i)
+                walk(
+                  run,
+                  returned(run, last) ? last : last + 1,
+                  returned(run, i) ? i : i - 1,
+                )
               }
               departures.push(d)
             }
@@ -825,7 +840,7 @@ export function walkCut(
           rev.push(run.rev[k]!)
         }
         markAttached(run, i + 1, end)
-        walk(run, i, end - 1)
+        walk(run, returned(run, i) ? i : i + 1, end - 1)
         for (const piece of unloadedIn(run, i + 1, end)) {
           held.push(piece)
         }
@@ -840,14 +855,14 @@ export function walkCut(
           rev.push(run.rev[k]!)
         }
         markAttached(run, start, i)
-        walk(run, start, i)
+        walk(run, start, returned(run, i) ? i : i - 1)
         for (const piece of unloadedIn(run, start, i)) {
           held.push(piece)
         }
       }
       if (leave && rejoin && ids.length > 0) {
-        const [left, , end] = leave
-        const [right, , start] = rejoin
+        const [left, leaveStep, end] = leave
+        const [right, rejoinStep, start] = rejoin
         const last = left.ids[end - 1]
         const next = right.ids[start]
         const leftEnd = left.hapOffset + (before(left)[end] ?? Number.NaN)
@@ -856,6 +871,8 @@ export function walkCut(
         if (
           left.fragStart === right.fragStart &&
           leftEnd === rightStart &&
+          (end - 1 > leaveStep || returned(left, leaveStep)) &&
+          (start < rejoinStep || returned(right, rejoinStep)) &&
           last !== undefined &&
           next !== undefined &&
           last !== SKIPPED &&

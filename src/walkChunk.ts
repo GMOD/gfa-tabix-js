@@ -703,8 +703,8 @@ export const bpRow = (piece: AbridgedPiece) =>
   pieceRow(piece, [SKIPPED], [piece.hapBp])
 
 // The walk row of an abridged piece as its records' own runs, each a
-// placeholder linked to the step on R the record names beside it, from its
-// abridged row, the records and its tile's R alone
+// placeholder beside the step on R its record names, from its abridged row,
+// the records and its tile's R alone
 export function ownRunsRow(
   piece: AbridgedPiece,
   runs: OwnRun[],
@@ -715,7 +715,6 @@ export function ownRunsRow(
   const bp: number[] = []
   const own: NonNullable<WalkRow['own']> = []
   const nodes = new Map<number, PlacedNode>()
-  const links: number[] = []
   const add = (start: number, end: number, run?: OwnRun) => {
     const id = run ? placeholder(start, end) : SKIPPED
     if (run) {
@@ -726,8 +725,6 @@ export function ownRunsRow(
           `a departure record of ${piece.name} ${run.trailing ? 'leaves' : 'rejoins'} at ${run.pos}, where the reference path of the tile holding its own steps has no node ${atNodeEnd ? 'ending' : 'starting'}`,
         )
       }
-      const beside = path.handleAt(i, !run.reversed)
-      links.push(run.trailing ? beside : id * 2, run.trailing ? id * 2 : beside)
       nodes.set(id, {
         refName: piece.name,
         start,
@@ -763,7 +760,7 @@ export function ownRunsRow(
     abridged: piece.abridged,
     own,
   }
-  return { row, nodes, links }
+  return { row, nodes }
 }
 
 // The first and last blocks over `span`

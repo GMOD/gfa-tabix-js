@@ -231,10 +231,11 @@ const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
 
 // A cut's links as rows: every link between two reference nodes, and each
 // link with an end off the reference once for each time the cut walks it,
-// as consecutive steps of a fragment or from a departure's leave node
-// through its steps to its rejoin node, which ends it leaves and enters by
-// the reference's strand at that pass. A link no such step walks is
-// `unwalked`, and a pair of steps with no link is `missing`. A record's steps
+// as consecutive steps of a fragment or along a departure's own steps, from
+// its leave step and to its rejoin step where a fragment of its walk holds
+// that step: the step on the reference that ends at the departure's hapStart,
+// or starts where its own bp end. A link no such step walks is `unwalked`,
+// and a pair of steps with no link is `missing`. A record's steps
 // may break once, where its leave piece's steps stop and its rejoin piece's
 // start: its bp then exceed those of the steps the cut holds, one pair of
 // them may go unlinked, and if every pair is linked another step must walk
@@ -243,13 +244,7 @@ const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
 // is listed in `inside`
 function linkRows(
   cut: Cut,
-  refName: string,
   { nodes, links }: GraphTables,
-  passAt: (
-    refName: string,
-    position: number,
-    ending: boolean,
-  ) => Pass | undefined,
   inside: (name: string, id: number, start: number) => boolean,
 ) {
   const indexOfName = new Map(nodes.names.map((name, i) => [name, i]))
@@ -338,13 +333,29 @@ function linkRows(
     }
     return key === undefined ? undefined : { key, held: held.has(key) }
   }
+  // each walk's steps on the reference that its fragments hold, by where
+  // on its contig the step ends and by where it starts
+  const endingAt = new Map<string, { id: number; rev: number }>()
+  const startingAt = new Map<string, { id: number; rev: number }>()
+  const hold = (f: WalkFragment, i: number, start: number) => {
+    if (!Number.isNaN(f.refStarts[i])) {
+      const step = { id: f.ids[i]!, rev: f.rev[i]! }
+      const from = `${f.name}\t${start}`
+      if (!startingAt.has(from)) {
+        startingAt.set(from, step)
+      }
+      endingAt.set(`${f.name}\t${start + length(step.id)}`, step)
+    }
+  }
   for (const f of cut.fragments) {
     let at = f.hapStart
     const stepAt = (i: number) =>
       stepOf(f.ids[i], f.name, Number.isNaN(f.refStarts[i]) ? at : Number.NaN)
     let last = stepAt(0)
+    hold(f, 0, at)
     for (let i = 1; i < f.ids.length; i++) {
       at += length(f.ids[i - 1]!)
+      hold(f, i, at)
       const next = stepAt(i)
       walk(
         last,
@@ -356,14 +367,12 @@ function linkRows(
       last = next
     }
   }
-  const keptPass = (pass: Pass | undefined) =>
-    pass !== undefined && cut.kept.has(pass.id) ? pass : undefined
   for (const d of cut.departures) {
     if (d.steps && d.steps.ids.length > 0) {
       const { ids, rev } = d.steps
       const name = `${d.name} departure at ${d.hapStart}`
-      const leave = keptPass(passAt(refName, d.leavePos, !d.leaveReversed))
-      const rejoin = keptPass(passAt(refName, d.rejoinPos, d.rejoinReversed))
+      const leave = endingAt.get(`${d.name}\t${d.hapStart}`)
+      const rejoin = startingAt.get(`${d.name}\t${d.hapStart + d.ownBp}`)
       const own: Step[] = []
       let at = d.hapStart
       for (const id of ids) {
@@ -373,13 +382,7 @@ function linkRows(
       const whole = d.fromSteps || at - d.hapStart === d.ownBp
       const where = whole ? name : undefined
       const pairs = [
-        walk(
-          stepOf(leave?.id),
-          leave?.reversed === d.leaveReversed,
-          own[0]!,
-          rev[0] !== 0,
-          where,
-        ),
+        walk(stepOf(leave?.id), leave?.rev === 0, own[0]!, rev[0] !== 0, where),
       ]
       for (let i = 1; i < ids.length; i++) {
         pairs.push(
@@ -391,7 +394,7 @@ function linkRows(
           own.at(-1)!,
           rev.at(-1) === 0,
           stepOf(rejoin?.id),
-          rejoin?.reversed !== d.rejoinReversed,
+          rejoin?.rev !== 0,
           where,
         ),
       )
@@ -438,65 +441,6 @@ function linkRows(
     ),
   }
 }
-
-// A pass of the reference over a node, and whether it runs against the node
-interface Pass {
-  id: number
-  reversed: boolean
-}
-
-// The reference's pass that starts or ends at each position, from the ref
-// rows of the tiles holding the positions asked for, each tile read once
-function referenceStrands(file: WalkFile) {
-  const tilesRead = new Set<number>()
-  const starting = new Map<string, Pass>()
-  const ending = new Map<string, Pass>()
-  const cover = async (refName: string, positions: number[]) => {
-    const units = (await file.units(refName)).filter(
-      u =>
-        u.kind === 'tile' &&
-        !tilesRead.has(u.offset) &&
-        positions.some(at => u.start <= at && at <= u.end),
-    )
-    if (tilesRead.size + units.length > TILES_HELD) {
-      tilesRead.clear()
-      starting.clear()
-      ending.clear()
-    }
-    const lines = await file.read(units)
-    units.forEach((unit, k) => {
-      tilesRead.add(unit.offset)
-      for (const line of lines[k] ?? []) {
-        const cols = line.split('\t')
-        if (cols[3] === 'ref') {
-          const lengths = (cols[10] ?? '').split(',').map(Number)
-          let start = Number(cols[6])
-          let id = 0
-          for (const [j, token] of (cols[9] ?? '').split(',').entries()) {
-            const t = Number(token)
-            const r = t - 2 * Math.floor(t / 2)
-            id += (t - r) / 2
-            const pass = { id, reversed: r === 1 }
-            if (lengths[j]! > 0 || !starting.has(`${refName}\t${start}`)) {
-              starting.set(`${refName}\t${start}`, pass)
-            }
-            start += lengths[j]!
-            if (lengths[j]! > 0 || !ending.has(`${refName}\t${start}`)) {
-              ending.set(`${refName}\t${start}`, pass)
-            }
-          }
-        }
-      }
-    })
-  }
-  return {
-    cover,
-    passAt: (refName: string, position: number, ended: boolean) =>
-      (ended ? ending : starting).get(`${refName}\t${position}`),
-  }
-}
-
-type Strands = ReturnType<typeof referenceStrands>
 
 const BLOCK = /^-?\d+[+-](\d+)$/
 
@@ -763,8 +707,6 @@ async function attachOff(
   return off
 }
 
-const TILES_HELD = 4096
-
 // Whether a step on `id` at `start` on its walk's contig lies inside a run
 // the unloaded cut holds as a placeholder, on a node of the reference
 const insideRun =
@@ -899,25 +841,14 @@ function unloadedStepsOff(cut: Cut) {
 // What a cut states, as rows to compare; the cut itself is let go. Given
 // what the unloaded cut of the same window holds, the reference nodes only a
 // loaded cut can keep are set aside, with their links
-function summary(
-  cut: Cut,
-  window: Window,
-  strands: Strands,
-  unloaded?: Unloaded,
-) {
+function summary(cut: Cut, window: Window, unloaded?: Unloaded) {
   const tables = cut.graph.tables(
     cut.kept,
     cut.fragments,
     cut.departures,
     cut.gaps,
   )
-  const links = linkRows(
-    cut,
-    window.refName,
-    tables,
-    strands.passAt,
-    insideRun(cut, unloaded),
-  )
+  const links = linkRows(cut, tables, insideRun(cut, unloaded))
   const aside = new Set(
     [...links.insideNodes].filter(
       id => unloaded?.keptOnReference.has(id) === false,
@@ -1344,7 +1275,6 @@ async function compare(
   mode: Mode,
   cut: (expanding: boolean, fresh?: boolean) => Promise<Cut>,
   revisited: boolean,
-  strands: Strands,
   io: {
     reads: { position: number; length: number }[]
     units: WalkUnit[]
@@ -1356,16 +1286,10 @@ async function compare(
   },
 ) {
   const drawn = drawnOf(window, mode)
-  const summarize = async (held: Cut, runs?: Unloaded) => {
-    await strands.cover(
-      window.refName,
-      held.departures.flatMap(d => [d.leavePos, d.rejoinPos]),
-    )
-    return summary(held, window, strands, runs)
-  }
-  const digested = async (held: Cut) => ({
+  const summarize = (held: Cut, runs?: Unloaded) => summary(held, window, runs)
+  const digested = (held: Cut) => ({
     digests: digests(held),
-    ...(await summarize(held)),
+    ...summarize(held),
   })
   io.reads.length = 0
   const unloadedCut = await cut(false)
@@ -1415,7 +1339,7 @@ async function compare(
       io.byBlocks,
     ),
   )
-  const unloaded = await digested(unloadedCut)
+  const unloaded = digested(unloadedCut)
   const again = digests(await cut(false, true))
   io.reads.length = 0
   const loadedCut = await cut(true)
@@ -1432,10 +1356,7 @@ async function compare(
       .map(u => `blocks ${u.name}, ${u.length} bytes`),
   )
   totals.bytes += unloadedBytes
-  const loaded = await summarize(
-    loadedCut,
-    revisited ? unloaded.runs : undefined,
-  )
+  const loaded = summarize(loadedCut, revisited ? unloaded.runs : undefined)
   const asideLinks = linksOnlyInside(
     unloaded.links,
     loaded.links,
@@ -1540,7 +1461,6 @@ async function main() {
   const data = open(path)
   const file = new WalkFile(data, open(path.replace(/(?=$|[?#])/, '.idx')))
   const reader = new WalkReader(file)
-  const strands = referenceStrands(file)
   const byBlocks = ownRunsByBlocks(file)
   const reads = readsOf(data)
   const tiles = await abridgedTiles(reader)
@@ -1605,7 +1525,6 @@ async function main() {
                 },
               ),
             revisited > 0,
-            strands,
             {
               reads,
               units,

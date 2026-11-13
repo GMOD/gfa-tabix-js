@@ -2207,29 +2207,133 @@ describe('the links at a departure record’s ends', () => {
     async ({ expand, links }) => {
       const cut = await reader('abridged.R').cut(
         'R#0#chr',
-        { start: 10, end: 18 },
+        { start: 10, end: 20 },
         { context: 0, ...(expand ? { expand } : {}) },
       )
       expect(linkNames(cut)).toEqual(expect.arrayContaining(links))
     },
   )
 
+  // the same departure in a window that ends before node 4: H's fragment
+  // stops at node 3, and D's, which goes round by node 4, keeps that node
+  test.each([
+    { expand: all, link: '3+ 7+', none: '7+ 4+' },
+    {
+      expand: undefined,
+      link: '3+ H#1#h:118-121+',
+      none: 'H#1#h:118-121+ 4+',
+    },
+  ])(
+    'own steps are not linked to a rejoin step their walk’s fragment lacks, though another walk keeps its node: $none',
+    async ({ expand, link, none }) => {
+      const cut = await reader('abridged.R').cut(
+        'R#0#chr',
+        { start: 10, end: 18 },
+        { context: 0, ...(expand ? { expand } : {}) },
+      )
+      const links = linkNames(cut)
+      expect(cut.kept.has(4)).toBe(true)
+      expect(links).toContain(link)
+      expect(links).not.toContain(none)
+    },
+  )
+
   // abridged.R.gfa: Q leaves R after node 1 for 6 bp of its own and rejoins
   // at node 3; its own steps are one placeholder in a cut that expands none
-  test('a placeholder for own steps is linked to the nodes its record leaves and rejoins', async () => {
+  test('a placeholder for own steps is linked to the steps its record leaves and rejoins', async () => {
     const cut = await reader('abridged.R').cut(
       'R#0#chr',
-      { start: 8, end: 16 },
+      { start: 4, end: 16 },
       { context: 0 },
     )
     expect(linkNames(cut)).toEqual([
       '1+ 2+',
+      '1+ 3-',
       '1+ Q#0#chr:6-12+',
       '2+ 3+',
       '3+ 4+',
       '4+ 1+',
       'Q#0#chr:6-12+ 3+',
     ])
+  })
+
+  // a window that starts after node 1: Q's fragment starts at node 3, and
+  // D's keeps node 1
+  test('a placeholder for own steps is not linked to a leave step its walk’s fragment lacks', async () => {
+    const cut = await reader('abridged.R').cut(
+      'R#0#chr',
+      { start: 8, end: 16 },
+      { context: 0 },
+    )
+    expect(cut.kept.has(1)).toBe(true)
+    expect(linkNames(cut)).toEqual([
+      '1+ 2+',
+      '2+ 3+',
+      '3+ 4+',
+      '4+ 1+',
+      'Q#0#chr:6-12+ 3+',
+    ])
+  })
+})
+
+// A cut's links are those each of its walks' steps walk, so cutting several
+// haplotypes lists the links of cutting each alone with the reference
+describe('the links of a cut of several haplotypes are those of each cut alone', () => {
+  test.each([
+    'abridged.R',
+    'unabridged.R',
+    'adv.R',
+    'ownends.R',
+    'between.R',
+    'blocks.R',
+    'copies.R',
+    'unbuilt.R',
+    'attach.GRCh38',
+    'jumpback.GRCh38',
+  ])('%s', async name => {
+    const walks = reader(name)
+    const { haplotypes } = await walks.header()
+    const differing: string[] = []
+    for (const refName of await walks.referenceSequences()) {
+      const end = (await walks.units(refName)).reduce(
+        (most, unit) => Math.max(most, unit.end),
+        0,
+      )
+      for (let start = 0; start < end; start += 6) {
+        for (const context of [0, 3, 1000]) {
+          for (const contained of [false, true]) {
+            for (const expand of [undefined, () => true]) {
+              const cutOf = async (kept: string[]) =>
+                linkNames(
+                  await walks.cut(
+                    refName,
+                    { start, end: start + 8 },
+                    {
+                      keep: walksKept(kept, refName),
+                      context,
+                      contained,
+                      ...(expand ? { expand } : {}),
+                    },
+                  ),
+                )
+              const alone = new Set<string>()
+              for (const haplotype of haplotypes) {
+                for (const link of await cutOf([haplotype])) {
+                  alone.add(link)
+                }
+              }
+              const together = await cutOf(haplotypes)
+              if (together.join(' | ') !== [...alone].sort().join(' | ')) {
+                differing.push(
+                  `${refName}:${start}-${start + 8} context ${context}${contained ? ' contained' : ''}${expand ? ' expanded' : ''}: ${together.join(' | ')} AGAINST ${[...alone].sort().join(' | ')}`,
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(differing).toEqual([])
   })
 })
 

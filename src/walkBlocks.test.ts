@@ -1231,8 +1231,9 @@ test('own steps beside a leave or rejoin that is no edge of a node of the tileâ€
       path,
       () => -1,
     )
-  expect(run(20, false).links).toEqual([4, -2])
-  expect(run(10, true).links).toEqual([5, -2])
+  const own = [{ key: 'k', leave: true, from: 1, to: 2 }]
+  expect(run(20, false).row.own).toEqual(own)
+  expect(run(10, true).row.own).toEqual(own)
   expect(() => run(15, false)).toThrow(
     'a departure record of W#1#c leaves at 15, where the reference path of the tile holding its own steps has no node ending',
   )

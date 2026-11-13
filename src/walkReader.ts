@@ -1006,7 +1006,6 @@ export class WalkReader {
           )
           item.into.push(made.row)
           placeNodes(made.nodes)
-          addLinks(made.links)
         }
       }
       for (const item of attaching ? [] : unbuilt) {

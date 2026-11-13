@@ -68,13 +68,17 @@ const tables = graph.tables(kept, fragments, departures)
   nodes, links and walks as GFA
 - **A cut lists the links its steps walk, and no other:** one for each two
   consecutive steps of a fragment, and along a departure that holds own steps
-  from the node it leaves, through those steps, to the node it rejoins. Where a
+  from its leave step, through those steps, to its rejoin step, each where the
+  walk's fragment holds that step. A departure that leaves on the window and
+  rejoins past its context so has no link to the node it rejoins, though another
+  walk, or another pass of the reference, keeps that node in the cut. Where a
   departure holds the steps after its leave and the steps before its rejoin and
   not what lies between, the two stretches are not linked. A link no walk of the
-  cut takes is not listed though both its nodes are, so the links follow from
-  the steps a cut returns, however the file is tiled or abridged. The reference
-  is one of the cut's walks: a `keep` that leaves it out keeps the reference's
-  nodes on the window and none of its links, and `walksKept` always keeps it
+  cut takes is not listed though both its nodes are, so the links of a cut are
+  those of cutting each of its walks alone, however the file is tiled or
+  abridged and whichever tiles the cut read. The reference is one of the cut's
+  walks: a `keep` that leaves it out keeps the reference's nodes on the window
+  and none of its links, and `walksKept` always keeps it
 - A node the reference passes more than once, as in a collapsed repeat, takes
   the position of its pass over the window, and each walk's step on it the pass
   its row names
