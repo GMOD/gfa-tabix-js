@@ -11,7 +11,6 @@ import {
   ownRunsRow,
   ownStretch,
   parseBlocks,
-  pieceLinks,
   referenceNodes,
   unloadedRow,
 } from './walkChunk.ts'
@@ -609,7 +608,6 @@ export class WalkReader {
     const decodedBy = new Map<number, ((name: string) => boolean)[]>()
     const decodedFor = (unit: WalkUnit, name: string) =>
       decodedBy.get(unit.offset)?.some(took => took(name)) === true
-    const ends: DecodedChunk['ends'] = []
     const surely = new Set<number>()
     const bounds = {
       contained,
@@ -685,9 +683,6 @@ export class WalkReader {
       }
       graph.addSequences(tileCut.sequences)
       graph.addChunk(tileCut.chunk)
-      for (const end of tileCut.ends) {
-        ends.push(end)
-      }
       checkNodes(tileCut, readTo)
     }
     // a tile is decoded into `into`, with its nodes and the links between
@@ -754,20 +749,7 @@ export class WalkReader {
         }
         into.push(row)
       }
-      place(
-        {
-          ...tileCut,
-          rows: taken,
-          ends: tileCut.ends.filter(end => pieces.has(keyOf(end))),
-          chunk: {
-            ...tileCut.chunk,
-            walks: tileCut.chunk.walks.filter(({ cols }) =>
-              pieces.has(pieceKey(cols[4] ?? '', cols[5] ?? '', cols[7] ?? '')),
-            ),
-          },
-        },
-        piece.chunkStart + tile,
-      )
+      place({ ...tileCut, rows: taken }, piece.chunkStart + tile)
     }
     const onDrawn = (span: { start: number; end: number }) =>
       span.start < over.end && span.end > over.start
@@ -997,14 +979,6 @@ export class WalkReader {
         )
         read.into.push(made.row)
         placeNodes(made.nodes)
-        addLinks(made.links)
-        ends.push({
-          name: piece.name,
-          fragStart: piece.fragStart,
-          piece: piece.piece,
-          first: made.first,
-          last: made.last,
-        })
         checkNodes({ nodes: made.nodes, rows: [made.row] }, read.unit.end)
       }
       const unbuilt = new Set(batch)
@@ -1021,27 +995,10 @@ export class WalkReader {
           item.into.push(made.row)
           placeNodes(made.nodes)
           addLinks(made.links)
-          ends.push({
-            name: piece.name,
-            fragStart: piece.fragStart,
-            piece: piece.piece,
-            first: made.first,
-            last: made.last,
-          })
         }
       }
       for (const item of attaching ? [] : unbuilt) {
         item.into.push(bpRow(item.piece))
-      }
-    }
-    // the blocks units and detail records the tiles decoded need, then the
-    // links between pieces
-    const finish = async (attaching = false) => {
-      await resolve(attaching)
-      if (links) {
-        for (const [a, b] of pieceLinks(ends)) {
-          graph.addLinkEnds(a, b)
-        }
       }
     }
     let cut: ReturnType<typeof walkCut>
@@ -1065,7 +1022,7 @@ export class WalkReader {
       tiles.forEach((unit, k) => {
         decode(unit, read[k]!, rows, unit.start)
       })
-      await finish()
+      await resolve(false)
       const tooManyRead = stepBudgetError(
         rows,
         stepBudget,
@@ -1120,7 +1077,7 @@ export class WalkReader {
           extra.push(fetching[k]!)
           decode(unit, fetched[k]!, attachRows, from, name => names.has(name))
         }
-        await finish(true)
+        await resolve(true)
         cut = cutRows()
       }
     } catch (error) {

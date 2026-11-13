@@ -4,7 +4,7 @@ import {
   panSNHaplotypeOrSample,
   panSNMatchesPrefix,
 } from './util.ts'
-import { SKIPPED, placeAndLink } from './walkChunk.ts'
+import { SKIPPED, placeOffR } from './walkChunk.ts'
 import {
   ATTACH_BP,
   adjacentSteps,
@@ -487,8 +487,17 @@ export function walkCut(
     }
     return { found, splits }
   }
-  // the links of the split placeholders' parts, as pairs of handles
+  // the links the steps returned walk, as pairs of handles
   const links: number[] = []
+  // links each step of `run` from `from` to `to` to the one before it
+  const walk = (run: WalkRun, from: number, to: number) => {
+    const { ids, rev } = run
+    for (let k = Math.max(from, 0) + 1; k <= to && k < ids.length; k++) {
+      if (ids[k - 1] !== SKIPPED && ids[k] !== SKIPPED) {
+        links.push(ids[k - 1]! * 2 + rev[k - 1]!, ids[k]! * 2 + rev[k]!)
+      }
+    }
+  }
   // `run` with each split placeholder as two, the part within a span's
   // context and the rest
   const splitRun = (
@@ -539,14 +548,6 @@ export function walkCut(
       }
     }
     shifted[run.ids.length] = out
-    for (const { at } of splits) {
-      const first = shifted[at]!
-      for (let k = Math.max(first, 1); k <= first + 2 && k < n; k++) {
-        if (ids[k - 1] !== SKIPPED && ids[k] !== SKIPPED) {
-          links.push(ids[k - 1]! * 2 + rev[k - 1]!, ids[k]! * 2 + rev[k]!)
-        }
-      }
-    }
     return {
       ...run,
       ids,
@@ -617,6 +618,7 @@ export function walkCut(
   for (const { run, first, last } of spans) {
     const { ids, rev } = run
     const bp = before(run)
+    walk(run, first, last)
     const hapStart = run.hapOffset + bp[first]!
     const hapEnd = run.hapOffset + bp[last + 1]!
     const held = (run.unloaded ?? []).filter(
@@ -726,6 +728,7 @@ export function walkCut(
                   d.abridged = held
                 }
                 markAttached(run, last + 1, i)
+                walk(run, last, i)
               }
               departures.push(d)
             }
@@ -808,6 +811,7 @@ export function walkCut(
           rev.push(run.rev[k]!)
         }
         markAttached(run, i + 1, end)
+        walk(run, i, end - 1)
         for (const piece of unloadedIn(run, i + 1, end)) {
           held.push(piece)
         }
@@ -822,8 +826,31 @@ export function walkCut(
           rev.push(run.rev[k]!)
         }
         markAttached(run, start, i)
+        walk(run, start, i)
         for (const piece of unloadedIn(run, start, i)) {
           held.push(piece)
+        }
+      }
+      if (leave && rejoin && ids.length > 0) {
+        const [left, , end] = leave
+        const [right, , start] = rejoin
+        const last = left.ids[end - 1]
+        const next = right.ids[start]
+        const leftEnd = left.hapOffset + (before(left)[end] ?? Number.NaN)
+        const rightStart =
+          right.hapOffset + (before(right)[start] ?? Number.NaN)
+        if (
+          left.fragStart === right.fragStart &&
+          leftEnd === rightStart &&
+          last !== undefined &&
+          next !== undefined &&
+          last !== SKIPPED &&
+          next !== SKIPPED
+        ) {
+          links.push(
+            last * 2 + left.rev[end - 1]!,
+            next * 2 + right.rev[start]!,
+          )
         }
       }
       if (ids.length > 0) {
@@ -949,7 +976,7 @@ export class WalkGraph {
   readonly nodes = new Map<number, WalkNode>()
   readonly sequences = new Map<number, string>()
   private links: number[] = []
-  // the chunks read, whose nodes off R and links tables() fills in
+  // the chunks read, whose nodes off R tables() places
   private readonly chunks: Chunk[] = []
 
   private readonly window: WalkWindow
@@ -1008,19 +1035,12 @@ export class WalkGraph {
     gaps: WalkGap[] = [],
   ): GraphTables {
     if (this.chunks.length > 0) {
-      placeAndLink(
-        this.chunks,
-        kept,
-        (id, node) => {
-          const held = this.nodes.get(id)
-          if (held) {
-            this.nodes.set(id, { ...held, ...node })
-          }
-        },
-        (a, b) => {
-          this.links.push(a, b)
-        },
-      )
+      placeOffR(this.chunks, kept, (id, node) => {
+        const held = this.nodes.get(id)
+        if (held) {
+          this.nodes.set(id, { ...held, ...node })
+        }
+      })
     }
     const held: (WalkNode & { id: number })[] = []
     for (const id of kept) {

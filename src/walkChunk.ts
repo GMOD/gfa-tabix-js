@@ -470,12 +470,11 @@ function decodeWalk(
 }
 
 // A chunk as decoded, kept until the cut knows its nodes: tables() then
-// places the cut's nodes off R and lists the links among them
+// places the cut's nodes off R
 export interface Chunk {
   path: RefPath
   routes: Route[]
-  // walk rows in path-name order, choices parsed: a tile's, kept or not, and
-  // of a detail record those of the pieces the cut reads from it
+  // walk rows in path-name order, choices parsed
   walks: { cols: string[]; choices: number[] }[]
   lengths: Map<number, number>
   // for a detail record, the node lengths of its chunk's R, which it shares
@@ -491,19 +490,10 @@ export interface DecodedChunk {
   // gives
   abridged: AbridgedPiece[]
   // R's nodes with their positions, and the kept walks' nodes off R with
-  // their lengths, placed by placeAndLink
+  // their lengths, placed by placeOffR
   nodes: Map<number, PlacedNode>
   // R's later passes over a node in `nodes`
   revisits: (PlacedNode & { id: number })[]
-  // the first and last handle of the reference's rows and the kept rows,
-  // for links between pieces, where the cut knows them
-  ends: {
-    name: string
-    fragStart: number
-    piece: number
-    first?: number
-    last?: number
-  }[]
   chunk: Chunk
 }
 
@@ -755,24 +745,25 @@ export function ownRunsRow(
     }
     ids.push(id)
     bp.push(end - start)
-    return id * 2
   }
   const leading = runs.find(run => !run.trailing)
   const trailing = runs.find(run => run.trailing)
-  const first = leading ? add(leading.start, leading.end, leading) : undefined
+  if (leading) {
+    add(leading.start, leading.end, leading)
+  }
   add(
     leading?.end ?? piece.hapOffset,
     trailing?.start ?? piece.hapOffset + piece.hapBp,
   )
-  const last = trailing
-    ? add(trailing.start, trailing.end, trailing)
-    : undefined
+  if (trailing) {
+    add(trailing.start, trailing.end, trailing)
+  }
   const row: WalkRow = {
     ...pieceRow(piece, ids, bp),
     abridged: piece.abridged,
     own,
   }
-  return { row, nodes, links, first, last }
+  return { row, nodes, links }
 }
 
 // The first and last blocks over `span`
@@ -846,7 +837,6 @@ export function unloadedRow(
   const against: number[] = []
   const bp: number[] = []
   const nodes = new Map<number, PlacedNode>()
-  const links: number[] = []
   const { hapOffset } = piece
   let hap = hapOffset
   let skipped = 0
@@ -883,7 +873,6 @@ export function unloadedRow(
       placeholder: true,
     })
     push(id, 0, Number.NaN, 0, length)
-    return id * 2
   }
   const step = (i: number, reversed: boolean) => {
     flush()
@@ -898,24 +887,16 @@ export function unloadedRow(
   }
   const firstOf = (k: number) => (blocks.against[k]! ? to[k]! - 1 : from[k]!)
   const lastOf = (k: number) => (blocks.against[k]! ? from[k]! : to[k]! - 1)
-  const handle = (k: number, i: number) => path.handleAt(i, !blocks.against[k]!)
-  let before = blocks.before > 0 ? offR(blocks.before) : undefined
-  const first = before ?? handle(0, firstOf(0))
+  if (blocks.before > 0) {
+    offR(blocks.before)
+  }
   for (let k = 0; k < count; k++) {
     const reversed = blocks.against[k]!
     const run = blocks.off[k]!
-    const entry = handle(k, firstOf(k))
-    if (k > 0 && run === 0) {
-      links.push(handle(k - 1, lastOf(k - 1)), entry)
-    } else if (k > 0 && joined(k)) {
-      before = offR(run)
-      links.push(handle(k - 1, lastOf(k - 1)), before)
+    if (k > 0 && run > 0 && joined(k)) {
+      offR(run)
     } else {
       skipped += run
-    }
-    if (before !== undefined) {
-      links.push(before, entry)
-      before = undefined
     }
     const size = to[k]! - from[k]!
     const needFirst = k === 0 || joined(k)
@@ -947,10 +928,8 @@ export function unloadedRow(
     }
   }
   flush()
-  const exit = handle(count - 1, lastOf(count - 1))
-  const after = blocks.after > 0 ? offR(blocks.after) : undefined
-  if (after !== undefined) {
-    links.push(exit, after)
+  if (blocks.after > 0) {
+    offR(blocks.after)
   }
   const n = ids.length
   const row: WalkRow = {
@@ -969,7 +948,7 @@ export function unloadedRow(
     },
     abridged,
   }
-  return { row, nodes, links, first, last: after ?? exit }
+  return { row, nodes }
 }
 
 const refRows = (rows: string[][]) =>
@@ -1018,7 +997,6 @@ export function decodeChunk(
     abridged: [],
     nodes: new Map(),
     revisits: [],
-    ends: [],
     chunk: { path, routes, walks: [], lengths, refLengths: ref?.lengths },
   }
   const placed = (id: number) =>
@@ -1053,13 +1031,6 @@ export function decodeChunk(
       }
       start += length
     }
-    out.ends.push({
-      name: cols[4]!,
-      fragStart: +cols[5]!,
-      piece: +cols[7]!,
-      first: handles[0]!,
-      last: handles.at(-1)!,
-    })
     if (keep === undefined || keep(cols[4]!)) {
       out.rows.push({
         chunkStart: tileStart,
@@ -1121,7 +1092,7 @@ export function decodeChunk(
     const name = cols[4]!
     if (keep === undefined || keep(name)) {
       let interior = 0
-      // the walk's nodes off R, by length; placeAndLink gives their position
+      // the walk's nodes off R, by length; placeOffR gives their position
       for (let k = 0; k < choices.length; k += 4) {
         interior += routeOf(choices[k]!).interior.length
         for (const h of routeOf(choices[k]!).interior) {
@@ -1146,13 +1117,6 @@ export function decodeChunk(
         id => lengths.get(id) ?? ref?.lengths.get(id) ?? -1,
       )
       const n = steps.ids.length
-      out.ends.push({
-        name,
-        fragStart: +cols[5]!,
-        piece: +cols[7]!,
-        first: steps.ids[0]! * 2 + steps.rev[0]!,
-        last: steps.ids[n - 1]! * 2 + steps.rev[n - 1]!,
-      })
       out.rows.push({
         chunkStart: tileStart,
         name,
@@ -1170,19 +1134,17 @@ export function decodeChunk(
 }
 
 /**
- * The positions of the cut's nodes off R, and the links among the cut's
- * nodes, from the chunks a cut read: `kept` holds the node ids the cut draws.
- * A node off R takes its position from the path whose name sorts first among
- * those visiting it in the chunks read, at its earliest offset, as format 1's
- * node rows had it. A node on any read chunk's R keeps its reference position,
- * even where another chunk's route steps on it. Links are R's and those of the
- * routes a walk row of a chunk takes, both ends in the cut.
+ * The positions of the cut's nodes off R, from the chunks a cut read: `kept`
+ * holds the node ids the cut draws. A node off R takes its position from the
+ * path whose name sorts first among those visiting it in the chunks read, at
+ * its earliest offset, as format 1's node rows had it. A node on any read
+ * chunk's R keeps its reference position, even where another chunk's route
+ * steps on it.
  */
-export function placeAndLink(
+export function placeOffR(
   chunks: Chunk[],
   kept: Set<number>,
   place: (id: number, node: PlacedNode) => void,
-  link: (a: number, b: number) => void,
 ) {
   const offR = new Set<number>()
   for (const id of kept) {
@@ -1190,50 +1152,12 @@ export function placeAndLink(
       offR.add(id)
     }
   }
-  const linkCanonical = (a: number, b: number) => {
-    const [from, to] = canonicalLink(a, b)
-    link(from, to)
-  }
   const best = new Map<number, PlacedNode>()
   for (const { path, routes, walks, lengths, refLengths } of chunks) {
-    const handles = path.handles
-    for (let k = 1; k < handles.length; k++) {
-      if (kept.has(idOf(handles[k - 1]!)) && kept.has(idOf(handles[k]!))) {
-        linkCanonical(handles[k - 1]!, handles[k]!)
-      }
-    }
-    const walked = new Uint8Array(routes.length)
-    for (const { choices } of walks) {
-      for (let k = 0; k < choices.length; k += 4) {
-        walked[choices[k]!] = 1
-      }
-    }
     // routes holding a node of the cut off R
-    const wanted = new Uint8Array(routes.length)
-    for (let index = 0; index < routes.length; index++) {
-      if (walked[index] === 1) {
-        const { entry, interior, exit } = routes[index]!
-        let any = false
-        let from = entry
-        for (const h of interior) {
-          const inCut = kept.has(idOf(h))
-          any ||= offR.has(idOf(h))
-          if (inCut && from !== NONE && kept.has(idOf(from))) {
-            linkCanonical(from, h)
-          }
-          from = h
-        }
-        if (
-          from !== NONE &&
-          exit !== NONE &&
-          kept.has(idOf(from)) &&
-          kept.has(idOf(exit))
-        ) {
-          linkCanonical(from, exit)
-        }
-        wanted[index] = any ? 1 : 0
-      }
-    }
+    const wanted = Uint8Array.from(routes, ({ interior }) =>
+      interior.some(h => offR.has(idOf(h))) ? 1 : 0,
+    )
     const lengthOf = (h: number) =>
       lengths.get(idOf(h)) ?? refLengths?.get(idOf(h)) ?? 0
     const bp = new Float64Array(routes.length).fill(-1)
@@ -1335,32 +1259,4 @@ export function referenceNodes(rows: string[][]) {
     }
   }
   return nodes
-}
-
-// Links between consecutive pieces of a path, each piece's last step to the
-// next one's first, among the pieces read
-export function pieceLinks(ends: DecodedChunk['ends']) {
-  const byPath = new Map<
-    string,
-    Map<number, { first?: number; last?: number }>
-  >()
-  for (const e of ends) {
-    const key = `${e.name}\t${e.fragStart}`
-    let pieces = byPath.get(key)
-    if (!pieces) {
-      pieces = new Map()
-      byPath.set(key, pieces)
-    }
-    pieces.set(e.piece, e)
-  }
-  const links: [number, number][] = []
-  for (const pieces of byPath.values()) {
-    for (const [piece, e] of pieces) {
-      const first = pieces.get(piece + 1)?.first
-      if (e.last !== undefined && first !== undefined) {
-        links.push(canonicalLink(e.last, first))
-      }
-    }
-  }
-  return links
 }

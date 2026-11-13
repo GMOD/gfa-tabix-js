@@ -2090,6 +2090,27 @@ test('steps either side of a hole in the reference depart nowhere', async () => 
   ])
 })
 
+// refhole.R.gfa: R is two W lines, >1>2 at 0-8 and >3>4 at 40-48, in one
+// 64 bp tile, and H jumps from 1 to 4. No walk goes from 2 to 3, so the graph
+// has no such link
+test('a cut lists no link over a hole in the reference that no walk crosses, where both sides lie in one tile', async () => {
+  const cut = await reader('refhole.R').cut(
+    'R#0#chr',
+    { start: 0, end: 64 },
+    { context: 0 },
+  )
+  const { nodes, links } = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+  )
+  expect(
+    Array.from(links.from, (from, k) =>
+      [nodes.names[from], nodes.names[links.to[k]!]].join('>'),
+    ).sort(),
+  ).toEqual(['1>2', '1>4', '3>4'])
+})
+
 // holetile.R's tile with its ref rows written last first: R is the rows in
 // hapOffset order whatever order the tile lists them in
 test("a tile's R joins its ref rows in hapOffset order", async () => {

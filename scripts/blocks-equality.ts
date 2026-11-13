@@ -10,7 +10,8 @@
 // nodes kept; the links between reference nodes, and each link with an end
 // off the reference as often as the cut walks it; each haplotype's cover and
 // departures; and the structural forms. A loaded cut that holds a
-// placeholder anywhere, a pair of steps a cut walks with no link, and a walk
+// placeholder anywhere, a pair of steps a cut walks with no link, a link of
+// either cut that no step it returns walks, and a walk
 // with a placeholder anywhere in the unloaded cut's tables whose walks and
 // departures state none of its unloaded steps are differences too. A link
 // between reference nodes that only the loaded cut holds and no step it
@@ -283,6 +284,8 @@ function linkRows(
     }
   }
   const walkedOff = new Set<number>()
+  // every link a step the cut returns walks
+  const walked = new Set<number>()
   // the links between reference nodes that a step the cut returns walks
   const walkedOn = new Set<string>()
   const missing: string[] = []
@@ -309,6 +312,7 @@ function linkRows(
   ) => {
     if (a.index !== undefined && b.index !== undefined) {
       const key = pair(a.index, aRight, b.index, bRight)
+      walked.add(key)
       if (!held.has(key)) {
         if (where !== undefined) {
           missing.push(where)
@@ -396,9 +400,21 @@ function linkRows(
       )
     }
   }
+  const unwalked: string[] = []
+  for (let k = 0; k < links.from.length; k++) {
+    const strands = links.strands[k]!
+    const from = links.from[k]!
+    const to = links.to[k]!
+    const fromRight = (strands & 1) === 0
+    const toRight = (strands & 2) !== 0
+    if (!walked.has(pair(from, fromRight, to, toRight))) {
+      unwalked.push(`${end(from, fromRight)} ${end(to, toRight)}`)
+    }
+  }
   return {
     rows,
     missing,
+    unwalked,
     setAside: offEnds - walkedOff.size,
     walkedOn,
     insideNodes,
@@ -958,6 +974,7 @@ function summary(
     kept,
     links: links.rows,
     linksMissing: links.missing,
+    linksUnwalked: links.unwalked,
     linksSetAside: links.setAside,
     linksWalked: links.walkedOn,
     offReference,
@@ -1423,6 +1440,8 @@ async function compare(
     ),
   )
   report('links', where, differences(unloaded.links, loaded.links))
+  report('link-no-step-walks-unloaded', where, unloaded.linksUnwalked)
+  report('link-no-step-walks-loaded', where, loaded.linksUnwalked)
   report('link-missing-unloaded', where, unloaded.linksMissing)
   report('link-missing-loaded', where, loaded.linksMissing)
   report('placeholder-in-loaded-cut', where, loaded.placeholdersHeld)
