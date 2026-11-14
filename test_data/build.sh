@@ -59,6 +59,8 @@ for twin in twinmidlineA twinmidlineB twinotherseqA twinotherseqB twinown690 twi
 done
 build adv adv.R.gfa --refs R --tile 60 --abridge-bytes 1
 build edge edge.R.gfa --refs R --tile 60 --abridge-bytes 1
+build farrejoin farrejoin.R.gfa --refs R --tile 10
+build detailtwice detailtwice.R.gfa --refs R --tile 40 --abridge-bytes 1
 build extension/plain extension/follow.R.gfa --refs R --tile 100 --sequences --abridge-bytes 1
 addition() {
   local name=$1; shift

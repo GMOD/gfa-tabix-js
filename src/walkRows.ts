@@ -15,7 +15,12 @@ import { GAP_KINDS, walkGaps } from './walkGaps.ts'
 
 import type { DepartureTable, GapTable, GraphTables } from './util.ts'
 import type { Chunk } from './walkChunk.ts'
-import type { DepartureEnds, Hole, WalkDeparture } from './walkDeparture.ts'
+import type {
+  DepartureEnds,
+  DepartureRecord,
+  Hole,
+  WalkDeparture,
+} from './walkDeparture.ts'
 import type { WalkGap } from './walkGaps.ts'
 
 // A walk row of gfa-to-tabix's format 6, its steps decoded with its chunk
@@ -324,7 +329,7 @@ export interface WalkCutOptions {
 // A record whose own steps the cut attaches and may not hold: the cut lacks
 // its leave piece or its rejoin piece, either of which can hold them
 export interface Unattached {
-  departure: WalkDeparture
+  departure: Readonly<DepartureRecord>
 }
 
 // A placeholder a contained span's context ends inside: step `at`, of which
@@ -376,7 +381,7 @@ export function walkCut(
   readRuns: WalkRun[],
   nodes: Map<number, WalkNode>,
   refName: string,
-  records: WalkDeparture[],
+  records: readonly Readonly<DepartureRecord>[],
   {
     contained = false,
     context = 0,
@@ -825,7 +830,8 @@ export function walkCut(
     }
   }
   const unattached: Unattached[] = []
-  for (const d of records) {
+  for (const record of records) {
+    const d: WalkDeparture = { ...record }
     if (attaches(d)) {
       const ids: number[] = []
       const rev: number[] = []
@@ -891,7 +897,7 @@ export function walkCut(
         }
       }
       if (!leave || !rejoin) {
-        unattached.push({ departure: d })
+        unattached.push({ departure: record })
       }
     }
     departures.push(d)

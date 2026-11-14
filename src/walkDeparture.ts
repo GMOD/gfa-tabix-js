@@ -41,6 +41,13 @@ export interface WalkDeparture {
   abridged?: Abridged[]
 }
 
+// A departure as its record row states it, which each cut copies before
+// giving the copy the steps it holds
+export type DepartureRecord = Omit<
+  WalkDeparture,
+  'steps' | 'breakAt' | 'abridged'
+>
+
 // A stretch of a reference sequence no line of the reference covers, from a
 // `#hole` header line
 export interface Hole {

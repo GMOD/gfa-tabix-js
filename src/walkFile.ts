@@ -1,5 +1,7 @@
 import { unzip } from '@gmod/bgzf-filehandle'
 
+import { WalkRowError } from './walkChunk.ts'
+
 import type { GenericFilehandle } from 'generic-filehandle2'
 
 /**
@@ -122,6 +124,14 @@ function untagged(row: string) {
     : undefined
 }
 
+// The fixed columns a row's kind holds, where the row holds fewer
+function lacking(row: string) {
+  const fixed = FIXED_COLUMNS.get(row.split('\t', 4)[3] ?? '')
+  return fixed !== undefined && row.split('\t', fixed).length < fixed
+    ? fixed
+    : undefined
+}
+
 function checkUnit(unit: WalkUnit, head: string | undefined, rows: string[]) {
   const stated = [
     '#unit',
@@ -142,6 +152,10 @@ function checkUnit(unit: WalkUnit, head: string | undefined, rows: string[]) {
     kinds === undefined
       ? undefined
       : rows.find(row => untagged(row) !== undefined)
+  const short =
+    kinds === undefined
+      ? undefined
+      : rows.find(row => lacking(row) !== undefined)
   if (head !== stated) {
     throw new WalkFormatError(
       `${unitName(unit)} starts ${JSON.stringify(head?.slice(0, 80) ?? '')}`,
@@ -153,6 +167,10 @@ function checkUnit(unit: WalkUnit, head: string | undefined, rows: string[]) {
   } else if (extra !== undefined) {
     throw new WalkFormatError(
       `${unitName(unit)} holds a row with a column after its fixed ones that is no tag, ${JSON.stringify(untagged(extra)?.slice(0, 40))}: ${JSON.stringify(extra.slice(0, 80))}`,
+    )
+  } else if (short !== undefined) {
+    throw new WalkRowError(
+      `${unitName(unit)} holds a row of fewer columns than the ${lacking(short)} its kind holds: ${JSON.stringify(short.slice(0, 80))}`,
     )
   }
 }

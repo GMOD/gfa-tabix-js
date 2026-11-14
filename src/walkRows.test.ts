@@ -868,6 +868,31 @@ describe('the links of a record’s own steps at its ends', () => {
       departures.map(d => [d.fromSteps, [...(d.steps?.ids ?? [])], d.breakAt]),
     ).toEqual([[true, [5], undefined]])
   })
+
+  // the reader cuts its records twice, the second time with the tiles it
+  // fetched for their own steps
+  test('a record cut again keeps nothing of the cut before: steps, break or abridged pieces', () => {
+    const g = graph()
+    const d = record(200, 200, 300)
+    const detail = { refName: 'GRCh38#0#chr1', start: 0, name: '0:0' }
+    const leave = piece(g, 0, [1, 2, 5], 0)
+    const cut = (pieces: WalkRow[]) =>
+      walkCut(joinPieces(pieces), g.nodes, 'GRCh38#0#chr1', [d], {
+        drawn: { start: 150, end: 350 },
+      }).departures.map(dep => [
+        dep.steps ? [...dep.steps.ids] : undefined,
+        dep.breakAt,
+        dep.abridged,
+      ])
+    expect(cut([{ ...leave, abridged: { steps: 3, detail } }])).toEqual([
+      [[5], 1, [{ steps: 3, detail }]],
+    ])
+    expect(cut([leave, piece(g, 300, [4], 1)])).toEqual([
+      [[5], undefined, undefined],
+    ])
+    expect(cut([])).toEqual([[undefined, undefined, undefined]])
+    expect(d).toEqual(record(200, 200, 300))
+  })
 })
 
 // The window's nodes are 2 and 3, over 100-300; the stretch drawn is 150-250

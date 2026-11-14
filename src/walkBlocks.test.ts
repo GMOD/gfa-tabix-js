@@ -2,7 +2,15 @@ import { LocalFile } from 'generic-filehandle2'
 
 import { walkFileOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
-import { RefPath, WalkRowError, decodeChunk, ownRunsRow } from './walkChunk.ts'
+import {
+  RefPath,
+  SKIPPED,
+  WalkRowError,
+  decodeChunk,
+  ownRunsRow,
+  parseBlocks,
+  unloadedRow,
+} from './walkChunk.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
 import { WalkFormatError } from './walkFile.ts'
 import { WalkReader } from './walkReader.ts'
@@ -1238,6 +1246,30 @@ test('own steps beside a leave or rejoin that is no edge of a node of the tileâ€
     'a departure record of W#1#c leaves at 15, where the reference path of the tile holding its own steps has no node ending',
   )
   expect(() => run(15, true)).toThrow('has no node starting')
+})
+
+// R walks 1 and 2 of 10 bp, 9 of 0 bp and 3 of 10 bp; W walks 1, 8 bp of its
+// own, then 2, 9 and 3, a block of which a cut over 1 keeps the end steps.
+// The format does not refuse a 0 bp step, though gfa-to-tabix writes none
+test('the steps an unloaded piece leaves out of a block stand as a skipped step, though they hold 0 bp', () => {
+  const { abridged, chunk } = decodeChunk(
+    [
+      'R#0#c\t0\t30\tref\tR#0#c\t0\t0\t0\t4\t2,2,14,-12\t10,10,0,10\t.',
+      'R#0#c\t0\t30\tabridged\tW#1#c\t0\t0\t0\t5\t38\t0',
+    ].map(row => row.split('\t')),
+    0,
+    undefined,
+  )
+  const { row } = unloadedRow(
+    abridged[0]!,
+    parseBlocks('R#0#c\t0\t30\tblocks\tW#1#c\t0\t0\t0+10,8,0+20'.split('\t')),
+    chunk.path,
+    { start: 0, end: 10 },
+    [0, 0],
+    () => -1,
+  )
+  expect([...row.steps.ids]).toEqual([1, -1, 2, SKIPPED, 3])
+  expect([...(row.steps.bp ?? [])]).toEqual([10, 8, 10, 0, 10])
 })
 
 // The walks holding a placeholder among their steps, a departure's or a

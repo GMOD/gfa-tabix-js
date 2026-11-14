@@ -793,10 +793,10 @@ describe.each([
 test('the same walks in pieces of their own cut whole, with the jumps as records', async () => {
   const departureRecords = [
     ...pieces,
-    'R#0#chr 4 24 departure H1#1#c 8 0 0 8 + 1 20 + 1',
-    'R#0#chr 8 24 departure H1#1#c 12 0 0 24 + 1 8 + 1',
-    'R#0#chr 4 24 departure H2#1#c 8 0 0 24 + 1 4 + 1',
-    'R#0#chr 4 28 departure H2#1#c 12 0 0 8 + 1 24 + 1',
+    'R#0#chr 4 24 departure H1#1#c 8 0 0 8 + 1 20 + 1 .',
+    'R#0#chr 8 24 departure H1#1#c 12 0 0 24 + 1 8 + 1 .',
+    'R#0#chr 4 24 departure H2#1#c 8 0 0 24 + 1 4 + 1 .',
+    'R#0#chr 4 28 departure H2#1#c 12 0 0 8 + 1 24 + 1 .',
   ]
   const { tables } = await inline(departureRecords).cutRegion(
     { refName: 'chr', start: 4, end: 20 },
@@ -967,8 +967,8 @@ const copyJump = [
   'R#0#chr 16 walk H#1#h 0 16 2 3 12 .',
   'R#0#chr 32 ref R#0#chr 0 32 2 4 18,2,2,2 4,4,4,4 .',
   'R#0#chr 32 walk H#1#h 0 12 1 1 22 .',
-  'R#0#chr 24 44 departure H#1#h 12 0 0 28 + 1 40 + 1',
-  'R#0#chr 20 44 departure H#1#h 16 0 0 44 + 1 20 + 1',
+  'R#0#chr 24 44 departure H#1#h 12 0 0 28 + 1 40 + 1 .',
+  'R#0#chr 20 44 departure H#1#h 16 0 0 44 + 1 20 + 1 .',
 ]
 const copyJumpCut = async (
   start: number,
@@ -1156,6 +1156,22 @@ test('an expanded walk is read from its detail records as the unabridged file cu
     ['I#1#i', 18, 0, 0, '6-', '18+', 'switch', 'record', undefined],
     ['Q#0#chr', 6, 6, 0, '6+', '12+', 'forward', 'record', '>6'],
   ])
+})
+
+// detailtwice.R in 40 bp tiles: H walks 1, its own 20, 2, then 9 and 10 in
+// tile 80, then 3, its own 20 again, and 4. Its two pieces in tile 0 are one
+// detail unit
+test('a node off the reference takes its offset from the detail rows a cut builds, not from another piece of their unit', async () => {
+  const placed = async (start: number, end: number) => {
+    const { graph, kept, fragments, departures } = await reader(
+      'detailtwice.R',
+    ).cut('R#0#c', { start, end }, { context: 0, expand: () => true })
+    const { nodes } = graph.tables(kept, fragments, departures)
+    const k = nodes.names.indexOf('20')
+    return [nodes.refNames[nodes.refs[k]!], nodes.starts[k]]
+  }
+  expect(await placed(20, 40)).toEqual(['H#1#h', 55])
+  expect(await placed(0, 40)).toEqual(['H#1#h', 10])
 })
 
 test('the reference sequences leave out detail records and departures', async () => {
@@ -2316,6 +2332,24 @@ describe('a record between two W lines that abut', () => {
   })
 })
 
+// farrejoin.R in 10 bp tiles: X walks 1, 2, its own 50, then 8, its own 51,
+// then 3 and 4. A cut of [0, 30) reads the piece leaving 2 and fetches tile
+// 70 for the own steps of the record rejoining at 3, and that tile holds the
+// piece rejoining at 8 too
+test('a record whose rejoin piece comes in a fetch for another record states no break', async () => {
+  const cut = await reader('farrejoin.R').cut(
+    'R#0#c',
+    { start: 0, end: 30 },
+    { context: 0 },
+  )
+  expect(
+    cut.departures.map(d => [d.hapStart, [...(d.steps?.ids ?? [])], d.breakAt]),
+  ).toEqual([
+    [20, [50], undefined],
+    [35, [51], undefined],
+  ])
+})
+
 // A cut's links are those each of its walks' steps walk, so cutting several
 // haplotypes lists the links of cutting each alone with the reference
 describe('the links of a cut of several haplotypes are those of each cut alone', () => {
@@ -2735,14 +2769,16 @@ const everyKind = [
 ]
 const everyKindCut = (lines: string[], expand?: (name: string) => boolean) =>
   inline(lines).cut('R#0#chr', { start: 0, end: 20 }, { context: 0, expand })
-const withColumn = (kind: string, column: string, from = 0) =>
+const withRow = (kind: string, edit: (line: string) => string, from = 0) =>
   everyKind.map((line, k) =>
     k === everyKind.findIndex((l, i) => i >= from && l.includes(` ${kind} `))
-      ? `${line} ${column}`
+      ? edit(line)
       : line,
   )
+const withColumn = (kind: string, column: string, from = 0) =>
+  withRow(kind, line => `${line} ${column}`, from)
 
-test.each([
+const rowKinds = [
   { kind: 'ref', unit: 'tile' },
   { kind: 'nodes', unit: 'tile' },
   { kind: 'route', unit: 'tile' },
@@ -2753,7 +2789,9 @@ test.each([
   { kind: 'nodes', unit: 'detail', from: 9, expand: () => true },
   { kind: 'route', unit: 'detail', from: 9, expand: () => true },
   { kind: 'walk', unit: 'detail', from: 9, expand: () => true },
-])(
+]
+
+test.each(rowKinds)(
   'a column after the fixed columns of a $kind row of a $unit unit is ignored where it is a tag, and refused where it is not',
   async ({ kind, unit, from, expand }) => {
     const plain = await everyKindCut(everyKind, expand)
@@ -2773,6 +2811,29 @@ test.each([
       expect.stringMatching(
         new RegExp(
           `R#0#chr's ${unit} .* holds a row with a column after its fixed ones that is no tag, "junk"`,
+        ),
+      ),
+    )
+  },
+)
+
+test.each(rowKinds)(
+  'a $kind row of a $unit unit without its last fixed column is a WalkRowError',
+  async ({ kind, unit, from, expand }) => {
+    const short = withRow(
+      kind,
+      line => line.slice(0, line.lastIndexOf(' ')),
+      from,
+    )
+    const refused: unknown = await everyKindCut(short, expand).catch(
+      (e: unknown) => e,
+    )
+    expect(refused).toBeInstanceOf(WalkRowError)
+    expect(refused).toHaveProperty(
+      'message',
+      expect.stringMatching(
+        new RegExp(
+          `R#0#chr's ${unit} .* holds a row of fewer columns than the \\d+ its kind holds`,
         ),
       ),
     )

@@ -32,7 +32,12 @@ export {
   placementChoice,
   squeezer,
 } from './walkDeparture.ts'
-export type { DepartureKind, Hole, WalkDeparture } from './walkDeparture.ts'
+export type {
+  DepartureKind,
+  DepartureRecord,
+  Hole,
+  WalkDeparture,
+} from './walkDeparture.ts'
 export { DepartureReadError, WALK_BUDGETS, WalkReader } from './walkReader.ts'
 export { WALK_FORMAT, WalkFile, WalkFormatError } from './walkFile.ts'
 export type { WalkFilehandle, WalkUnit } from './walkFile.ts'
