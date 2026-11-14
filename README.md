@@ -59,8 +59,8 @@ const tables = graph.tables(kept, fragments, departures)
   a generic-filehandle2 handle's `read`, `readFile`, `stat` and `source` will do
 - A file gfa-to-tabix 5.0 or later wrote, in walk format 8; the reader refuses
   any other format and says to rebuild the file. jbrowse.org's hosted HPRC
-  release 2.1 walk file is format 7 until it is rebuilt,
-  `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38.GRCh38.walks.gz`
+  release 2.1 walk file is format 7, which graph-walks 6 reads, until it is
+  rebuilt, `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38.GRCh38.walks.gz`
 - `tables` lists the nodes with their lengths and reference positions, the links
   the cut's steps walk, each walk's steps, and every departure from the
   reference over the window ([Departures](#departures)). `graphTablesGFA` in
