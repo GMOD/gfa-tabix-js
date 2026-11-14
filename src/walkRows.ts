@@ -864,8 +864,7 @@ export function walkCut(
         leave !== undefined &&
         rejoin !== undefined &&
         leave[0].fragStart === rejoin[0].fragStart &&
-        leave[0].hapOffset + (before(leave[0])[leave[2]] ?? Number.NaN) ===
-          rejoin[0].hapOffset + (before(rejoin[0])[rejoin[2]] ?? Number.NaN)
+        pieceOf(leave[0], leave[1]) + 1 === pieceOf(rejoin[0], rejoin[1])
       if (leave && rejoin && consecutive && ids.length > 0) {
         const [left, leaveStep, end] = leave
         const [right, rejoinStep, start] = rejoin
@@ -920,6 +919,9 @@ export function walkCut(
   }
   return { kept, fragments, departures, unattached, gapsOf, links }
 }
+
+const pieceOf = (run: WalkRun, step: number) =>
+  run.firstPiece + run.pieceStarts.filter(start => start <= step).length
 
 // Where each of a run's pieces starts, and where the last ends
 function pieceBounds(run: WalkRun) {

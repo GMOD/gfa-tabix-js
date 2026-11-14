@@ -813,12 +813,34 @@ describe('the links of a record’s own steps at its ends', () => {
       links: ['2 5', '6 4'],
     },
     {
+      name: 'its two pieces and not one of 0 bp between',
+      pieces: (g: WalkGraph) => [
+        piece(g, 0, [1, 2, 5], 0),
+        piece(g, 300, [4], 2),
+      ],
+      d: record(200, 200, 300),
+      own: [5],
+      breakAt: 1,
+      links: ['2 5'],
+    },
+    {
       name: 'its two pieces, of two W lines that abut',
       pieces: (g: WalkGraph) => [
         piece(g, 0, [1, 2, 5], 0),
         { ...piece(g, 300, [4], 0), fragStart: 300 },
       ],
       d: record(200, 200, 300),
+      own: [5],
+      breakAt: 1,
+      links: ['2 5'],
+    },
+    {
+      name: 'its two pieces, the rejoin piece the second of another W line',
+      pieces: (g: WalkGraph) => [
+        piece(g, 0, [1, 2, 5], 0),
+        { ...piece(g, 320, [4], 1), fragStart: 310 },
+      ],
+      d: { ...record(200, 200, 300), ownBp: 120, missingBp: 10 },
       own: [5],
       breakAt: 1,
       links: ['2 5'],
