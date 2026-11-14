@@ -2276,6 +2276,46 @@ describe('the links at a departure record’s ends', () => {
   })
 })
 
+// abut.R: ONE walks 1, 2, its own 20, then 4, 5, 6 as one W line; ABUT the
+// same steps as two lines, the second starting on its contig where the first
+// ends. Their departure records state the same
+describe('a record between two W lines that abut', () => {
+  const cutOf = async (haplotype: string, start: number, end: number) => {
+    const cut = await reader('abut.R').cut(
+      'R#0#c',
+      { start, end },
+      { context: 0, keep: walksKept([haplotype], 'R#0#c') },
+    )
+    return {
+      links: linkNames(cut),
+      departures: cut.departures.map(d => ({
+        ...d,
+        name: '',
+        steps: [...(d.steps?.ids ?? [])],
+      })),
+    }
+  }
+
+  test('a cut holding both pieces links the own step to the rejoin step on one line, and states a break between two', async () => {
+    const one = await cutOf('ONE#1', 10, 40)
+    const abut = await cutOf('ABUT#1', 10, 40)
+    expect(one.links).toContain('20+ 4+')
+    expect(abut.links).not.toContain('20+ 4+')
+    expect(one.departures.map(d => [d.steps, d.breakAt])).toEqual([
+      [[20], undefined],
+    ])
+    expect(abut.departures.map(d => [d.steps, d.breakAt])).toEqual([[[20], 1]])
+    expect(abut.links).toEqual(one.links.filter(link => link !== '20+ 4+'))
+  })
+
+  test('a cut holding the leave piece alone states the same of both', async () => {
+    const one = await cutOf('ONE#1', 10, 20)
+    const abut = await cutOf('ABUT#1', 10, 20)
+    expect(one.departures.map(d => [d.steps, d.breakAt])).toEqual([[[20], 1]])
+    expect(abut).toEqual(one)
+  })
+})
+
 // A cut's links are those each of its walks' steps walk, so cutting several
 // haplotypes lists the links of cutting each alone with the reference
 describe('the links of a cut of several haplotypes are those of each cut alone', () => {
@@ -2290,6 +2330,7 @@ describe('the links of a cut of several haplotypes are those of each cut alone',
     'unbuilt.R',
     'attach.GRCh38',
     'jumpback.GRCh38',
+    'abut.R',
   ])('%s', async name => {
     const walks = reader(name)
     const { haplotypes } = await walks.header()

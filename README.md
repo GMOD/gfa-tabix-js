@@ -67,18 +67,22 @@ const tables = graph.tables(kept, fragments, departures)
   [@jbrowse/bandage-core](https://github.com/GMOD/bandage-core) writes the
   nodes, links and walks as GFA
 - **A cut lists the links its steps walk, and no other:** one for each two
-  consecutive steps of a fragment, and along a departure that holds own steps
-  from its leave step, through those steps, to its rejoin step, each where the
-  walk's fragment holds that step. A departure that leaves on the window and
-  rejoins past its context so has no link to the node it rejoins, though another
-  walk, or another pass of the reference, keeps that node in the cut. Where a
-  departure holds the steps after its leave and the steps before its rejoin and
-  not what lies between, the two stretches are not linked. A link no walk of the
-  cut takes is not listed though both its nodes are, so the links of a cut are
-  those of cutting each of its walks alone, however the file is tiled or
-  abridged and whichever tiles the cut read. The reference is one of the cut's
-  walks: a `keep` that leaves it out keeps the reference's nodes on the window
-  and none of its links, and `walksKept` always keeps it
+  consecutive steps of a fragment, and one for each two consecutive own steps a
+  departure holds. A departure's first own step is linked to its leave step
+  where a fragment of its walk holds that step, the one on the reference that
+  ends at the departure's `hapStart`, and its last own step to its rejoin step,
+  the one that starts where its own bp end, likewise. A departure that leaves on
+  the window and rejoins past its context so has no link to the node it rejoins,
+  though another walk, or another pass of the reference, keeps that node in the
+  cut. Where a departure holds the steps after its leave and the steps before
+  its rejoin and not what lies between, the two stretches are not linked, and
+  its `breakAt` says where they part. A link no walk of the cut takes is not
+  listed though both its nodes are, so the links follow from the fragments and
+  departures a cut returns, and are those of cutting each of its walks alone,
+  however the file is tiled or abridged and whichever tiles the cut read. The
+  reference is one of the cut's walks: a `keep` that leaves it out keeps the
+  reference's nodes on the window and none of its links, and `walksKept` always
+  keeps it
 - A node the reference passes more than once, as in a collapsed repeat, takes
   the position of its pass over the window, and each walk's step on it the pass
   its row names
@@ -387,6 +391,13 @@ for (const d of departures) {
   the leave piece and the start of the rejoin piece. A step of 0 bp is an own
   step, so a record with `ownBp` 0, or no more than its `missingBp`, can carry
   one; own sequence between the contig's W lines has no steps
+- `breakAt` is set where the cut does not hold `steps` as one run from the leave
+  step to the rejoin step: the steps before that index follow the leave step and
+  those from it lead to the rejoin step, so it is 0 where the cut holds the
+  rejoin piece's alone and their count where it holds the leave piece's alone. A
+  record's steps are one run where the cut holds its leave and rejoin pieces and
+  they are consecutive on one W line, and a computed departure's always. The
+  `departures` table has it as `breakAt`, -1 where not set
 - **A departure that jumps over the window and its context** comes back with
   everything its row states and no `steps`: its walk, `hapStart`, `ownBp`,
   `missingBp`, both breakpoints with their strands and passes, and so its

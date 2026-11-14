@@ -860,17 +860,18 @@ export function walkCut(
           held.push(piece)
         }
       }
-      if (leave && rejoin && ids.length > 0) {
+      const consecutive =
+        leave !== undefined &&
+        rejoin !== undefined &&
+        leave[0].fragStart === rejoin[0].fragStart &&
+        leave[0].hapOffset + (before(leave[0])[leave[2]] ?? Number.NaN) ===
+          rejoin[0].hapOffset + (before(rejoin[0])[rejoin[2]] ?? Number.NaN)
+      if (leave && rejoin && consecutive && ids.length > 0) {
         const [left, leaveStep, end] = leave
         const [right, rejoinStep, start] = rejoin
         const last = left.ids[end - 1]
         const next = right.ids[start]
-        const leftEnd = left.hapOffset + (before(left)[end] ?? Number.NaN)
-        const rightStart =
-          right.hapOffset + (before(right)[start] ?? Number.NaN)
         if (
-          left.fragStart === right.fragStart &&
-          leftEnd === rightStart &&
           (end - 1 > leaveStep || returned(left, leaveStep)) &&
           (start < rejoinStep || returned(right, rejoinStep)) &&
           last !== undefined &&
@@ -883,6 +884,9 @@ export function walkCut(
       }
       if (ids.length > 0) {
         d.steps = { ids: Int32Array.from(ids), rev: Uint8Array.from(rev) }
+        if (!consecutive) {
+          d.breakAt = leave ? leave[2] - leave[1] - 1 : 0
+        }
         if (held.length > 0) {
           d.abridged = held
         }
@@ -1298,6 +1302,7 @@ function departureTable(
     ),
     rejoinPasses: Int32Array.from(departures, d => d.rejoinPasses),
     fromSteps: Uint8Array.from(departures, d => (d.fromSteps ? 1 : 0)),
+    breakAt: Int32Array.from(departures, d => d.breakAt ?? -1),
     offsets,
     steps,
     reversed,

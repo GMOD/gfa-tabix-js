@@ -102,6 +102,9 @@ export interface DepartureTable {
   reversed: Uint8Array
   // absent from tables another source builds
   abridgedSteps?: Float64Array
+  // how many of a departure's steps follow its leave step before they break,
+  // -1 where they run unbroken from the leave step to the rejoin step
+  breakAt?: Int32Array
 }
 
 /**

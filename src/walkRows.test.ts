@@ -698,7 +698,7 @@ describe('the links of a record’s own steps at its ends', () => {
     drawn?: { start: number; end: number },
   ) => {
     const g = graph()
-    const { links, fragments, departures } = walkCut(
+    const { links, fragments, departures, kept } = walkCut(
       joinPieces(pieces(g)),
       g.nodes,
       'GRCh38#0#chr1',
@@ -713,6 +713,10 @@ describe('the links of a record’s own steps at its ends', () => {
       links: names.sort(),
       fragment: fragments.map(f => [...f.ids]),
       own: departures.map(dep => [...(dep.steps?.ids ?? [])]),
+      breakAt: departures.map(dep => dep.breakAt),
+      table: [
+        ...(g.tables(kept, fragments, departures).departures.breakAt ?? []),
+      ],
     }
   }
 
@@ -737,6 +741,8 @@ describe('the links of a record’s own steps at its ends', () => {
         links: ['2 5'],
         fragment: [[2]],
         own: [[5]],
+        breakAt: [undefined],
+        table: [-1],
       })
     },
   )
@@ -770,9 +776,76 @@ describe('the links of a record’s own steps at its ends', () => {
         links: ['5 3'],
         fragment: [[3]],
         own: [[5]],
+        breakAt: [undefined],
+        table: [-1],
       })
     },
   )
+
+  // HG002 walks 1, 2, its own 5, then 4, or its own 5, a piece the cut lacks,
+  // its own 6, then 4; the fragments hold 2 and 4
+  test.each([
+    {
+      name: 'its leave piece alone',
+      pieces: (g: WalkGraph) => [piece(g, 0, [1, 2, 5], 0)],
+      d: record(200, 200, 300),
+      own: [5],
+      breakAt: 1,
+      links: ['2 5'],
+    },
+    {
+      name: 'its rejoin piece alone',
+      pieces: (g: WalkGraph) => [piece(g, 200, [5, 4], 1)],
+      d: record(200, 200, 300),
+      own: [5],
+      breakAt: 0,
+      links: ['5 4'],
+    },
+    {
+      name: 'its two pieces and not the one between',
+      pieces: (g: WalkGraph) => [
+        piece(g, 0, [1, 2, 5], 0),
+        piece(g, 400, [6, 4], 2),
+      ],
+      d: { ...record(200, 200, 300), ownBp: 300 },
+      own: [5, 6],
+      breakAt: 1,
+      links: ['2 5', '6 4'],
+    },
+    {
+      name: 'its two pieces, of two W lines that abut',
+      pieces: (g: WalkGraph) => [
+        piece(g, 0, [1, 2, 5], 0),
+        { ...piece(g, 300, [4], 0), fragStart: 300 },
+      ],
+      d: record(200, 200, 300),
+      own: [5],
+      breakAt: 1,
+      links: ['2 5'],
+    },
+  ])(
+    'a record of which the cut holds $name says where its steps break, and no link crosses the break',
+    ({ pieces, d, own, breakAt, links }) => {
+      const cut = linksOf(pieces, d, { start: 150, end: 350 })
+      expect(cut.own).toEqual([own])
+      expect(cut.breakAt).toEqual([breakAt])
+      expect(cut.table).toEqual([breakAt])
+      expect(cut.links).toEqual(links)
+    },
+  )
+
+  test('a departure computed inside one piece states no break', () => {
+    const g = graph()
+    const { departures } = walkCut(
+      joinPieces([piece(g, 100, [2, 5, 3], 0)]),
+      g.nodes,
+      'GRCh38#0#chr1',
+      [],
+    )
+    expect(
+      departures.map(d => [d.fromSteps, [...(d.steps?.ids ?? [])], d.breakAt]),
+    ).toEqual([[true, [5], undefined]])
+  })
 })
 
 // The window's nodes are 2 and 3, over 100-300; the stretch drawn is 150-250

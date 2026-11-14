@@ -235,13 +235,18 @@ const pair = (a: number, aRight: boolean, b: number, bRight: boolean) => {
 // its leave step and to its rejoin step where a fragment of its walk holds
 // that step: the step on the reference that ends at the departure's hapStart,
 // or starts where its own bp end. A link no such step walks is `unwalked`,
-// and a pair of steps with no link is `missing`. A record's steps
-// may break once, where its leave piece's steps stop and its rejoin piece's
-// start: its bp then exceed those of the steps the cut holds, one pair of
-// them may go unlinked, and if every pair is linked another step must walk
-// one of the links. A step `inside` says lies in a run the unloaded cut
-// holds as a placeholder is walked as a node off the reference, and its node
-// is listed in `inside`
+// and a pair of steps with no link is `missing`. A departure's steps break
+// at its `breakAt`, where no pair is walked, the leave step's where it is 0
+// and the rejoin step's where it is their count; `breaks` lists the
+// departures whose `breakAt` their fragments and own bp contradict. A step
+// `inside` says lies in a run the unloaded cut holds as a placeholder is
+// walked as a node off the reference, and its node is listed in `inside`
+interface HeldStep {
+  id: number
+  rev: number
+  line: number
+}
+
 function linkRows(
   cut: Cut,
   { nodes, links }: GraphTables,
@@ -283,11 +288,10 @@ function linkRows(
   }
   // every link a step the cut returns walks, and how often
   const walked = new Map<number, number>()
-  // the record departures whose steps break once, with every pair linked
-  const linkedAcross: { where: string; keys: number[] }[] = []
   // the links between reference nodes that a step the cut returns walks
   const walkedOn = new Set<string>()
   const missing: string[] = []
+  const breaks: string[] = []
   const insideNodes = new Set<number>()
   // a step as its node's index and whether it counts as on the reference
   const stepOf = (id: number | undefined, name = '', at = Number.NaN) => {
@@ -307,7 +311,7 @@ function linkRows(
     aRight: boolean,
     b: Step,
     bRight: boolean,
-    where: string | undefined,
+    where: string,
   ) => {
     const key =
       a.index !== undefined && b.index !== undefined
@@ -316,9 +320,7 @@ function linkRows(
     if (key !== undefined && a.index !== undefined && b.index !== undefined) {
       walked.set(key, (walked.get(key) ?? 0) + 1)
       if (!held.has(key)) {
-        if (where !== undefined) {
-          missing.push(where)
-        }
+        missing.push(where)
       } else if (a.on !== b.on) {
         add(
           rows,
@@ -331,15 +333,14 @@ function linkRows(
         walkedOn.add(from < to ? `${from} ${to}` : `${to} ${from}`)
       }
     }
-    return key === undefined ? undefined : { key, held: held.has(key) }
   }
   // each walk's steps on the reference that its fragments hold, by where
   // on its contig the step ends and by where it starts
-  const endingAt = new Map<string, { id: number; rev: number }>()
-  const startingAt = new Map<string, { id: number; rev: number }>()
+  const endingAt = new Map<string, HeldStep>()
+  const startingAt = new Map<string, HeldStep>()
   const hold = (f: WalkFragment, i: number, start: number) => {
     if (!Number.isNaN(f.refStarts[i])) {
-      const step = { id: f.ids[i]!, rev: f.rev[i]! }
+      const step = { id: f.ids[i]!, rev: f.rev[i]!, line: f.fragStart }
       const from = `${f.name}\t${start}`
       if (!startingAt.has(from)) {
         startingAt.set(from, step)
@@ -373,42 +374,59 @@ function linkRows(
       const name = `${d.name} departure at ${d.hapStart}`
       const leave = endingAt.get(`${d.name}\t${d.hapStart}`)
       const rejoin = startingAt.get(`${d.name}\t${d.hapStart + d.ownBp}`)
+      const { breakAt } = d
+      const from = breakAt ?? ids.length
+      const lengths = Array.from(ids, length)
+      const heldBp = lengths.reduce((sum, bp) => sum + bp, 0)
+      const trailingBp = lengths.slice(from).reduce((sum, bp) => sum + bp, 0)
       const own: Step[] = []
       let at = d.hapStart
-      for (const id of ids) {
+      ids.forEach((id, i) => {
+        at = i === breakAt ? d.hapStart + d.ownBp - trailingBp : at
         own.push(stepOf(id, d.name, at))
-        at += length(id)
-      }
-      const whole = d.fromSteps || at - d.hapStart === d.ownBp
-      const where = whole ? name : undefined
-      const pairs = [
-        walk(stepOf(leave?.id), leave?.rev === 0, own[0]!, rev[0] !== 0, where),
-      ]
-      for (let i = 1; i < ids.length; i++) {
-        pairs.push(
-          walk(own[i - 1]!, rev[i - 1] === 0, own[i]!, rev[i] !== 0, where),
+        at += lengths[i]!
+      })
+      if (breakAt === undefined) {
+        if (
+          !d.fromSteps &&
+          (heldBp !== d.ownBp ||
+            (leave !== undefined &&
+              rejoin !== undefined &&
+              leave.line !== rejoin.line))
+        ) {
+          breaks.push(
+            `${name}: states no break in its steps, which hold ${heldBp} of its ${d.ownBp} own bp${leave && rejoin ? `, with its end steps in fragments of lines ${leave.line} and ${rejoin.line}` : ''}`,
+          )
+        }
+      } else if (
+        breakAt < 0 ||
+        breakAt > ids.length ||
+        d.fromSteps ||
+        (leave !== undefined &&
+          rejoin !== undefined &&
+          leave.line === rejoin.line &&
+          heldBp === d.ownBp)
+      ) {
+        breaks.push(
+          `${name}: states a break at ${breakAt} of its ${ids.length} steps${d.fromSteps ? ', computed from one piece' : `, which hold ${heldBp} of its ${d.ownBp} own bp${leave && rejoin ? ` with both its end steps in fragments of lines ${leave.line} and ${rejoin.line}` : ''}`}`,
         )
       }
-      pairs.push(
+      if (breakAt !== 0) {
+        walk(stepOf(leave?.id), leave?.rev === 0, own[0]!, rev[0] !== 0, name)
+      }
+      for (let i = 1; i < ids.length; i++) {
+        if (i !== breakAt) {
+          walk(own[i - 1]!, rev[i - 1] === 0, own[i]!, rev[i] !== 0, name)
+        }
+      }
+      if (breakAt !== ids.length) {
         walk(
           own.at(-1)!,
           rev.at(-1) === 0,
           stepOf(rejoin?.id),
           rejoin?.rev !== 0,
-          where,
-        ),
-      )
-      if (!whole) {
-        const known = pairs.flatMap(p => (p ? [p] : []))
-        const unlinked = known.filter(p => !p.held).length
-        if (unlinked > 1) {
-          missing.push(
-            `${name}: ${unlinked} pairs of its steps with no link, where the steps it holds break once`,
-          )
-        }
-        if (known.length === pairs.length && unlinked === 0) {
-          linkedAcross.push({ where: name, keys: known.map(p => p.key) })
-        }
+          name,
+        )
       }
     }
   }
@@ -423,17 +441,11 @@ function linkRows(
       unwalked.push(`${end(from, fromRight)} ${end(to, toRight)}`)
     }
   }
-  for (const { where, keys } of linkedAcross) {
-    if (keys.every(key => walked.get(key) === 1)) {
-      unwalked.push(
-        `${where}: every pair of its steps linked, across the break in the steps it holds, by no other step`,
-      )
-    }
-  }
   return {
     rows,
     missing,
     unwalked,
+    breaks,
     walkedOn,
     insideNodes,
     placeholderNames: nodes.names.filter(
@@ -863,17 +875,21 @@ function summary(cut: Cut, window: Window, unloaded?: Unloaded) {
     held.push(fragmentOf(cut, f))
   }
   const departures: Rows = new Map()
+  const bpOf = (ids: Int32Array) =>
+    ids.reduce((sum, id) => {
+      const node = cut.graph.nodes.get(id)
+      return sum + (node ? node.end - node.start : 0)
+    }, 0)
   for (const d of cut.departures) {
-    const steps = d.steps
-      ? d.steps.ids.reduce((sum, id) => {
-          const node = cut.graph.nodes.get(id)
-          return sum + (node ? node.end - node.start : 0)
-        }, 0)
-      : 'none'
+    const steps = d.steps ? bpOf(d.steps.ids) : 'none'
+    const broken =
+      d.steps && d.breakAt !== undefined
+        ? ` breaking after ${bpOf(d.steps.ids.subarray(0, d.breakAt))}`
+        : ''
     add(
       departures,
       `${d.name} at ${d.hapStart}`,
-      `own ${d.ownBp} missing ${d.missingBp} leave ${d.leavePos}${strand(d.leaveReversed)}x${d.leavePasses} rejoin ${d.rejoinPos}${strand(d.rejoinReversed)}x${d.rejoinPasses} ${d.fromSteps ? 'steps' : 'record'} holding ${steps}`,
+      `own ${d.ownBp} missing ${d.missingBp} leave ${d.leavePos}${strand(d.leaveReversed)}x${d.leavePasses} rejoin ${d.rejoinPos}${strand(d.rejoinReversed)}x${d.rejoinPasses} ${d.fromSteps ? 'steps' : 'record'} holding ${steps}${broken}`,
     )
   }
   const gaps = new Map<string, WalkGap[]>()
@@ -936,6 +952,7 @@ function summary(cut: Cut, window: Window, unloaded?: Unloaded) {
     links: links.rows,
     linksMissing: links.missing,
     linksUnwalked: links.unwalked,
+    breaks: links.breaks,
     linksWalked: links.walkedOn,
     offReference,
     placeholdersHeld: placeholdersIn(cut),
@@ -1392,6 +1409,8 @@ async function compare(
   report('link-no-step-walks-loaded', where, loaded.linksUnwalked)
   report('link-missing-unloaded', where, unloaded.linksMissing)
   report('link-missing-loaded', where, loaded.linksMissing)
+  report('steps-break-unloaded', where, unloaded.breaks)
+  report('steps-break-loaded', where, loaded.breaks)
   report('placeholder-in-loaded-cut', where, loaded.placeholdersHeld)
   report('unloaded-steps', where, [
     ...unloaded.unloadedStepsOff,

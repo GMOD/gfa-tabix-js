@@ -95,3 +95,18 @@ test.each([
     expect(run.status).toBe(0)
   },
 )
+
+// abut.R: ABUT is two W lines, the second starting where the first ends, and
+// ONE the same steps as one line, so their departure records are the same
+test('the equality harness finds no link across two W lines of abut.R that abut, and the one line linked', () => {
+  const run = harness(
+    'abut.R',
+    '--at',
+    'R#0#c:10-40,R#0#c:10-20,R#0#c:30-40,R#0#c:0-60',
+    '--context',
+    '0',
+  )
+  expect(run.stdout).toContain('compared: 4 windows, 12 pairs of cuts')
+  expect(run.stdout).toContain('differences from the loaded cut: 0 in 0')
+  expect(run.status).toBe(0)
+})
