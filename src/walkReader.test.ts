@@ -1,6 +1,12 @@
 import { BlobFile, LocalFile } from 'generic-filehandle2'
 
-import { bgzf, digestOf, graphTablesGFA, walkFileOf } from './testing.ts'
+import {
+  bgzf,
+  digestOf,
+  graphTablesGFA,
+  walkFileOf,
+  walkPlaces,
+} from './testing.ts'
 import { RegionTooLargeError, panSNHaplotype } from './util.ts'
 import { WalkRowError, canonicalLink } from './walkChunk.ts'
 import { departureKind, placementChoice } from './walkDeparture.ts'
@@ -2336,6 +2342,18 @@ test("a cut's tables state the pass each step takes, NaN for a step off R", asyn
   ])
 })
 
+// hairpin.R.gfa: R over six 6 bp nodes, and W H 1 c
+// >12>1>2<2<1>11>5>6>3>13>14, which steps on 2 and back over the window's 1
+test('a step between two on the window states its pass, off the window', async () => {
+  const { graph, kept, fragments, departures } = await reader(
+    'hairpin.R',
+  ).cut('R#0#c', { start: 0, end: 6 }, { context: 0, expand: () => true })
+  expect(walkPlaces(graph.tables(kept, fragments, departures))).toEqual([
+    'R#0#c 1@0',
+    'H#1#c 1@0 2@6 2@6 1@0',
+  ])
+})
+
 async function copiesPlaced(
   name: string,
   edit: (f: WalkFragment) => WalkFragment,
@@ -2345,17 +2363,12 @@ async function copiesPlaced(
     { start: 0, end: 36 },
     { context: 0 },
   )
-  const { walks, nodes } = graph.tables(
+  const tables = graph.tables(
     kept,
     fragments.map(f => (f.name === name ? edit({ ...f }) : f)),
     departures,
   )
-  const p = walks.names.indexOf(name)
-  const from = walks.offsets[p]!
-  return Array.from(
-    walks.steps.subarray(from, walks.offsets[p + 1]),
-    (node, k) => `${nodes.names[node]}@${walks.refStarts![from + k]}`,
-  ).join(' ')
+  return walkPlaces(tables).find(line => line.startsWith(`${name} `))
 }
 
 test("a host's fragment with no refStarts gives its steps NaN places", async () => {
@@ -2364,7 +2377,7 @@ test("a host's fragment with no refStarts gives its steps NaN places", async () 
       Reflect.deleteProperty(f, 'refStarts')
       return f
     }),
-  ).toBe('1@NaN 2@NaN 3@NaN 2@NaN 8@NaN 3@NaN 4@NaN')
+  ).toBe('F#1#f 1@NaN 2@NaN 3@NaN 2@NaN 8@NaN 3@NaN 4@NaN')
 })
 
 test("a host's fragment with ids trimmed and refStarts not gives the places of the steps it keeps", async () => {
@@ -2374,7 +2387,7 @@ test("a host's fragment with ids trimmed and refStarts not gives the places of t
       ids: f.ids.subarray(0, 3),
       rev: f.rev.subarray(0, 3),
     })),
-  ).toBe('1@0 9@NaN 3@24')
+  ).toBe('U#1#u 1@0 9@NaN 3@24')
 })
 
 test("a host's fragment with fewer refStarts than steps gives the rest NaN places, not 0", async () => {
@@ -2383,7 +2396,7 @@ test("a host's fragment with fewer refStarts than steps gives the rest NaN place
       ...f,
       refStarts: f.refStarts.subarray(0, 2),
     })),
-  ).toBe('2@18 3@24 4@NaN')
+  ).toBe('S#1#s 2@18 3@24 4@NaN')
 })
 
 // copies.R's header states revisited:i:2, skip.GRCh38's revisited:i:0, and

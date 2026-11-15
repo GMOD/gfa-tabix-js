@@ -123,6 +123,18 @@ export function digestOf(value: unknown) {
   return hash.digest('hex')
 }
 
+// Each walk of a cut's tables, its name and then each step as its node's name
+// and where the step lies on the reference
+export const walkPlaces = ({ nodes, walks }: GraphTables) =>
+  walks.names.map((name, p) => {
+    const from = walks.offsets[p]!
+    const steps = Array.from(
+      walks.steps.subarray(from, walks.offsets[p + 1]),
+      (node, k) => `${nodes.names[node]}@${walks.refStarts![from + k]}`,
+    )
+    return `${name} ${steps.join(' ')}`
+  })
+
 // The GFA a cut's tables stand for, as @jbrowse/bandage-core writes it
 export function graphTablesGFA({ nodes, links, walks }: GraphTables) {
   const { names } = nodes

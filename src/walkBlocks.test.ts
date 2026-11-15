@@ -1,6 +1,6 @@
 import { LocalFile } from 'generic-filehandle2'
 
-import { walkFileOf } from './testing.ts'
+import { walkFileOf, walkPlaces } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import {
   RefPath,
@@ -392,6 +392,18 @@ test('a piece that turns back, runs off R and jumps back is its list in path ord
     expect.arrayContaining(['2] 2]', '3[ 6]', '1[ off', '5[ off']),
   )
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
+})
+
+test('a placeholder step is off the reference, and the steps a blocks row gives state their passes', async () => {
+  const { graph, kept, fragments, departures } = await reader('hairpin.R').cut(
+    R,
+    { start: 0, end: 36 },
+    { context: 0 },
+  )
+  expect(walkPlaces(graph.tables(kept, fragments, departures))).toEqual([
+    'R#0#c 1@0 2@6 3@12 4@18 5@24 6@30',
+    'H#1#c 1@0 2@6 2@6 1@0 H#1#c:31-41@NaN 5@24 6@30 3@12',
+  ])
 })
 
 // W TAIL 1 c >5>6>26>7>8: its piece in the tile at 0 ends with 4 bp of its

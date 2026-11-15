@@ -275,6 +275,14 @@ test("a walk file's header states its graph and the lines it leaves out, by name
   expect({ ...unstated, graph: stated.graph, leftout: 2 }).toEqual(stated)
 })
 
+test('graph is the tag of that name, among other Z tags and names ending in it', () => {
+  expect(
+    walkHeader([
+      '#walks\tformat:i:8\ttile:i:10\tzz:Z:other\tsubgraph:Z:nope\tgraph:Z:6f8a0816aa66e2d6',
+    ]).graph,
+  ).toBe('6f8a0816aa66e2d6')
+})
+
 describe('the byte budget', () => {
   const tile = 100
   // bytes a read from the window's first base to `end` fetches, 10 per tile
