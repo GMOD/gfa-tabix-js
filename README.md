@@ -569,6 +569,24 @@ for (const d of departures) {
   it, and of those no walk holds as `departures.abridgedSteps`, each on the
   first departure holding it, NaN for a walk or departure with none. A walk's
   unloaded steps are the two together
+- `abridgedWalks(tables)` lists each walk with steps the cut did not load, by
+  its full name, in the tables' order. Its `steps` are the walk's
+  `walks.abridgedSteps` and its departures' `abridgedSteps` together, so each
+  unloaded piece counts once, on that walk; its `bp` are the lengths of the
+  placeholders its walks and departures step on, each once: its runs off the
+  reference that the cut did not load. A walk the cut loaded whole is not
+  listed, and a reader that lists haplotypes adds up their walks
+- `abridgedText(walk, label)` says it in words, `label` the walk's name by
+  default, with bp under a kilobase and kb above as bandage-core's walk row
+  readouts write them, and no bp where the cut holds no placeholder of the walk:
+
+```ts
+abridgedWalks(tables).map(walk => abridgedText(walk))
+// ownends.R over R#0#c:0-30 with no context, among others:
+// 'S#1#c: 6 steps not loaded, 70 kb off the reference'
+// 'V#1#c: 7 steps not loaded, 20 bp off the reference'
+```
+
 - The cut builds whole only what it draws of an unloaded piece: from the first
   block over the drawn stretch to the last, the piece's end steps, and each
   departure that can lie over the stretch. What lies between counts in bp
