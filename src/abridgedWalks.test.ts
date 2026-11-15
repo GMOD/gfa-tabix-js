@@ -7,7 +7,6 @@ import { abridgedText, abridgedWalks } from './abridgedWalks.ts'
 import { WalkReader } from './walkReader.ts'
 
 import type { WalkCutOptions } from './walkReader.ts'
-import type { Abridged } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 const README = new URL('../README.md', import.meta.url).pathname
@@ -31,15 +30,8 @@ async function cutOf(
   return { cut, tables: graph.tables(kept, fragments, departures) }
 }
 
-// Each walk's unloaded pieces as the cut returns them, each piece once, and
-// the placeholders it keeps on the walk's contig
-function piecesByWalk(cut: Awaited<ReturnType<WalkReader['cut']>>) {
-  const pieces = new Map<string, Set<Abridged>>()
-  for (const { name, abridged } of [...cut.fragments, ...cut.departures]) {
-    for (const piece of abridged ?? []) {
-      pieces.set(name, (pieces.get(name) ?? new Set()).add(piece))
-    }
-  }
+// The bp of each walk's placeholders the cut keeps, by the walk each lies on
+function placeholderBp(cut: Awaited<ReturnType<WalkReader['cut']>>) {
   const bp = new Map<string, number>()
   for (const id of cut.kept) {
     const node = cut.graph.nodes.get(id)
@@ -47,25 +39,19 @@ function piecesByWalk(cut: Awaited<ReturnType<WalkReader['cut']>>) {
       bp.set(node.refName, (bp.get(node.refName) ?? 0) + node.end - node.start)
     }
   }
-  return Array.from(pieces, ([name, held]) => {
-    let steps = 0
-    for (const piece of held) {
-      steps += piece.steps
-    }
-    return { name, steps, bp: bp.get(name) ?? 0 }
-  }).sort((a, b) => a.name.localeCompare(b.name))
+  return Array.from(bp, ([name, total]) => ({ name, bp: total })).sort(
+    (a, b) => a.name.localeCompare(b.name),
+  )
 }
 
-test('each abridged walk of abridged.R, its steps on its walk and departures and its placeholders by their bp', async () => {
+test('each walk of abridged.R with a stretch off the reference the cut did not load, by its bp, and none it draws exactly', async () => {
   const { tables } = await cutOf('abridged.R', 'R#0#chr', {
     start: 0,
     end: 100,
   })
   expect(abridgedWalks(tables)).toEqual([
-    { name: 'D#1#d', steps: 9, bp: 0 },
-    { name: 'H#1#h', steps: 6, bp: 3 },
-    { name: 'I#1#i', steps: 5, bp: 0 },
-    { name: 'Q#0#chr', steps: 5, bp: 6 },
+    { name: 'H#1#h', bp: 3 },
+    { name: 'Q#0#chr', bp: 6 },
   ])
 })
 
@@ -91,17 +77,17 @@ test('a walk counts the placeholders only its departure steps on', async () => {
     }
   })
   expect(onWalks.size).toBe(0)
-  expect(v).toEqual({ name: 'V#1#c', steps: 7, bp: 20 })
+  expect(v).toEqual({ name: 'V#1#c', bp: 20 })
 })
 
 const SWEPT = [
-  { fixture: 'blocks.R', refName: 'R#0#c' },
-  { fixture: 'between.R', refName: 'R#0#c' },
-  { fixture: 'unbuilt.R', refName: 'R#0#c' },
-  { fixture: 'ownends.R', refName: 'R#0#c' },
-  { fixture: 'hairpin.R', refName: 'R#0#c' },
-  { fixture: 'adv.R', refName: 'R#0#c1' },
-  { fixture: 'abridged.R', refName: 'R#0#chr' },
+  { fixture: 'blocks.R', refName: 'R#0#c', lists: true },
+  { fixture: 'between.R', refName: 'R#0#c', lists: true },
+  { fixture: 'unbuilt.R', refName: 'R#0#c', lists: false },
+  { fixture: 'ownends.R', refName: 'R#0#c', lists: true },
+  { fixture: 'hairpin.R', refName: 'R#0#c', lists: true },
+  { fixture: 'adv.R', refName: 'R#0#c1', lists: true },
+  { fixture: 'abridged.R', refName: 'R#0#chr', lists: true },
 ]
 
 const OPTIONS: WalkCutOptions[] = [
@@ -113,8 +99,8 @@ const OPTIONS: WalkCutOptions[] = [
 ]
 
 test.each(SWEPT)(
-  'over windows of $fixture, a walk counts each unloaded piece the cut returns of it once, and the bp of its placeholders',
-  async ({ fixture, refName }) => {
+  'over windows of $fixture, a walk counts the bp of each placeholder the cut keeps on its contig once',
+  async ({ fixture, refName, lists }) => {
     const reader = open(fixture)
     const length = await reader.sequenceLength(refName)
     let listed = 0
@@ -125,11 +111,11 @@ test.each(SWEPT)(
         const found = abridgedWalks(tables)
         listed += found.length
         expect(found.toSorted((a, b) => a.name.localeCompare(b.name))).toEqual(
-          piecesByWalk(cut),
+          placeholderBp(cut),
         )
       }
     }
-    expect(listed).toBeGreaterThan(0)
+    expect(listed > 0).toBe(lists)
   },
 )
 
@@ -143,24 +129,35 @@ test('a cut of the unabridged twin, or one that expands every walk, lists none',
   expect(abridgedWalks(expanded.tables)).toEqual([])
 })
 
-test('abridgedText says the steps and the bp off the reference in plain words', () => {
-  expect(abridgedText({ name: 'HG00097#1#chr6', steps: 1, bp: 0 })).toBe(
-    'HG00097#1#chr6: 1 step not loaded',
+test('ownends.R lists the walks with a stretch off the reference not loaded on the window, and not those it draws exactly or whose run off it lies past the window, as its twin draws none of them', async () => {
+  const window = { start: 0, end: 30 }
+  const { tables } = await cutOf('ownends.R', 'R#0#c', window, { context: 0 })
+  const twin = await cutOf('ownendswhole.R', 'R#0#c', window, { context: 0 })
+  expect(abridgedWalks(tables)).toEqual([
+    { name: 'S#1#c', bp: 70_010 },
+    { name: 'V#1#c', bp: 20 },
+    { name: 'X#1#c', bp: 30 },
+    { name: 'Y#1#c', bp: 40 },
+    { name: 'Z#1#c', bp: 10 },
+  ])
+  expect(abridgedWalks(twin.tables)).toEqual([])
+})
+
+test('abridgedText says the bp off the reference not loaded in plain words', () => {
+  expect(abridgedText({ name: 'HG00097#1#chr6', bp: 1 })).toBe(
+    'HG00097#1#chr6: 1 bp off the reference not loaded',
   )
-  expect(
-    abridgedText(
-      { name: 'HG00097#1#chr6', steps: 140_212, bp: 999 },
-      'HG00097#1',
-    ),
-  ).toBe('HG00097#1: 140,212 steps not loaded, 999 bp off the reference')
-  expect(abridgedText({ name: 'a', steps: 2, bp: 1000 })).toBe(
-    'a: 2 steps not loaded, 1.0 kb off the reference',
+  expect(abridgedText({ name: 'HG00097#1#chr6', bp: 999 }, 'HG00097#1')).toBe(
+    'HG00097#1: 999 bp off the reference not loaded',
   )
-  expect(abridgedText({ name: 'a', steps: 2, bp: 9_949 })).toBe(
-    'a: 2 steps not loaded, 9.9 kb off the reference',
+  expect(abridgedText({ name: 'a', bp: 1000 })).toBe(
+    'a: 1.0 kb off the reference not loaded',
   )
-  expect(abridgedText({ name: 'a', steps: 2, bp: 2_100_000 })).toBe(
-    'a: 2 steps not loaded, 2100 kb off the reference',
+  expect(abridgedText({ name: 'a', bp: 9_949 })).toBe(
+    'a: 9.9 kb off the reference not loaded',
+  )
+  expect(abridgedText({ name: 'a', bp: 2_100_000 })).toBe(
+    'a: 2100 kb off the reference not loaded',
   )
 })
 

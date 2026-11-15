@@ -231,7 +231,9 @@ record's own steps in a tile fetched to attach them.
   run as another placeholder outside it
 - New: `isPlaceholder`, the `Abridged` type, `WalkNode.placeholder`,
   `WalkFragment.unloadedSteps`, `WalkDeparture.abridged`,
-  `departures.abridgedSteps` and `placeholders` on a cut
+  `departures.abridgedSteps`, `placeholders` on a cut, and `abridgedWalks`,
+  `abridgedText` and the `AbridgedWalk` type, which say a cut's runs off the
+  reference not loaded by their bp ([Abridged walks](#abridged-walks))
 
 ## A region by contig
 
@@ -576,22 +578,25 @@ for (const d of departures) {
   it, and of those no walk holds as `departures.abridgedSteps`, each on the
   first departure holding it, NaN for a walk or departure with none. A walk's
   unloaded steps are the two together
-- `abridgedWalks(tables)` lists each walk with steps the cut did not load, by
-  its full name, in the tables' order. Its `steps` are the walk's
-  `walks.abridgedSteps` and its departures' `abridgedSteps` together, so each
-  unloaded piece counts once, on that walk; its `bp` are the lengths of the
-  placeholders its walks and departures step on, each once: its runs off the
-  reference that the cut did not load. A walk the cut loaded whole is not
-  listed, and a reader that lists haplotypes adds up their walks
+- `abridgedWalks(tables)` lists, as an `AbridgedWalk` `{ name, bp }` each, the
+  walks with a run off the reference that the cut did not load, by full name, in
+  the tables' order. `bp` is the lengths of the placeholders the walk's
+  fragments and departures step on, each once: what the cut draws in place of
+  sequence it did not load, which expanding the walk would draw as its steps. A
+  walk the cut draws exactly is not listed, though pieces of it were not loaded,
+  nor is one whose only run off the reference lies past the window, so a cut of
+  the twin lists none. It counts no steps: a `blocks` row gives a run's bp and
+  not its steps, and `walks.abridgedSteps` is what expanding would decode. A
+  reader that lists haplotypes adds up their walks
 - `abridgedText(walk, label)` says it in words, `label` the walk's name by
   default, with bp under a kilobase and kb above as bandage-core's walk row
-  readouts write them, and no bp where the cut holds no placeholder of the walk:
+  readouts write them:
 
 ```ts
 abridgedWalks(tables).map(walk => abridgedText(walk))
 // ownends.R over R#0#c:0-30 with no context, among others:
-// 'S#1#c: 6 steps not loaded, 70 kb off the reference'
-// 'V#1#c: 7 steps not loaded, 20 bp off the reference'
+// 'S#1#c: 70 kb off the reference not loaded'
+// 'V#1#c: 20 bp off the reference not loaded'
 ```
 
 - The cut builds whole only what it draws of an unloaded piece: from the first
