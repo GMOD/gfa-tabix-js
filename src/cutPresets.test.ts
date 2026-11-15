@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs'
 import { LocalFile } from 'generic-filehandle2'
 import { expect, test } from 'vitest'
 
-import { CUT_PRESETS, WALK_CONTEXT, WalkReader } from './walkReader.ts'
+import {
+  CUT_PRESETS,
+  WALK_BUDGETS,
+  WALK_CONTEXT,
+  WalkReader,
+} from './walkReader.ts'
 
 import type { WalkCutOptions } from './walkReader.ts'
 
@@ -88,17 +93,16 @@ test('the presets keep WALK_CONTEXT and differ only in their budgets', () => {
   expect(CUT_PRESETS.figure.context).toBe(WALK_CONTEXT)
 })
 
-test.each(CUTS)(
-  'a cut of $fixture with a preset is the cut with its options spelled out',
-  async cut => {
-    expect(await tablesOf(cut, CUT_PRESETS.browser)).toEqual(
-      await tablesOf(cut, BROWSER),
-    )
-    expect(await tablesOf(cut, CUT_PRESETS.figure)).toEqual(
-      await tablesOf(cut, FIGURE),
-    )
-  },
-)
+test('the presets, each preset and the budgets are frozen, so no caller changes them for another', () => {
+  for (const shared of [
+    CUT_PRESETS,
+    CUT_PRESETS.browser,
+    CUT_PRESETS.figure,
+    WALK_BUDGETS,
+  ]) {
+    expect(Object.isFrozen(shared)).toBe(true)
+  }
+})
 
 test.each(CUTS)(
   'a cut of $fixture with the browser preset is a cut with no options, and the figure preset draws the same graph',

@@ -66,32 +66,32 @@ const DETAIL_READS = 16
 
 // The budgets a cut keeps to unless its caller passes others: what a browser
 // window can hold. Infinity lifts one
-export const WALK_BUDGETS = {
+export const WALK_BUDGETS = Object.freeze({
   stepBudget: 4_000_000,
   byteBudget: 8_000_000,
   departureByteBudget: 2_000_000,
   attachBp: ATTACH_BP,
-}
+})
 
 // The same cut rules in both; a figure has no window to protect
-export const CUT_PRESETS = {
-  browser: {
+export const CUT_PRESETS = Object.freeze({
+  browser: Object.freeze({
     context: WALK_CONTEXT,
     contained: false,
     attachBp: ATTACH_BP,
     stepBudget: WALK_BUDGETS.stepBudget,
     byteBudget: WALK_BUDGETS.byteBudget,
     departureByteBudget: WALK_BUDGETS.departureByteBudget,
-  },
-  figure: {
+  }),
+  figure: Object.freeze({
     context: WALK_CONTEXT,
     contained: false,
     attachBp: ATTACH_BP,
     stepBudget: Infinity,
     byteBudget: Infinity,
     departureByteBudget: Infinity,
-  },
-} satisfies Record<string, WalkCutOptions>
+  }),
+}) satisfies Record<string, WalkCutOptions>
 
 /**
  * A window whose departure read would fetch more than its budget. Zooming in

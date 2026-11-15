@@ -221,6 +221,8 @@ record's own steps in a tile fetched to attach them.
   it does not know. A column after a row's fixed columns that is no tag is
   refused, as is any column more on a `#unit`, `#entry` or directory sequence
   line
+- **`WALK_BUDGETS`** is frozen, as `CUT_PRESETS` is
+  ([Cut presets](#cut-presets))
 - **Budgets:** a step built for an unloaded piece counts toward `stepBudget` as
   any step does. A placeholder does not count toward `nodeLimit`, which bounds
   the nodes a layout places; a cut's `placeholders` says how many it returned,
@@ -324,6 +326,8 @@ const cut = await reader.cut(refName, region, {
   departure past it would bring nodes into the figure that the browser leaves
   out
 - `WALK_CONTEXT` is the context both keep
+- `CUT_PRESETS`, each preset and `WALK_BUDGETS` are frozen: a reader spreads
+  one into its options, as above, so no reader changes them for another
 - `keep`, `expand`, `nodeLimit`, `links` and `sequences` stay each reader's own:
   which walks it shows, which it reads in full, how many nodes its layout
   places, and what it draws
