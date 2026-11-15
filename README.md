@@ -246,7 +246,7 @@ const { tables, refName, sample } = await reader.cutRegion(
 | Option                | Effect                                                                                                |
 | --------------------- | ----------------------------------------------------------------------------------------------------- |
 | `keep`                | Which walks to decode, the reference's among them, by `sample#haplotype#contig`; every one by default |
-| `context`             | bp of reference kept past each end of the region; default 1000                                        |
+| `context`             | bp of reference kept past each end of the region; default 1000, `WALK_CONTEXT`                        |
 | `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default                      |
 | `byteBudget`          | The most compressed bytes the walk and attach reads fetch; 8 MB by default                            |
 | `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default                                 |
@@ -291,6 +291,42 @@ const { tables, refName, sample } = await reader.cutRegion(
   counting a quarter; past that the cut throws a `RegionTooLargeError` before it
   cuts. The rows of tiles fetched for records' own steps are not counted there,
   and the own steps they give count against `stepBudget` with the rest
+
+## Cut presets
+
+```ts
+import { CUT_PRESETS } from '@jbrowse/graph-walks'
+
+const cut = await reader.cut(refName, region, {
+  ...CUT_PRESETS.browser,
+  keep: walksKept(['HG00097'], refName),
+})
+```
+
+- `CUT_PRESETS.browser` is for a browser track at a window: the JBrowse graph
+  plugin, BandageJS, jb2hubs and the sequenceTubeMap fork. It is what a cut does
+  with no options
+- `CUT_PRESETS.figure` is for a static figure of one region: ggbandage and
+  ggtubemap. A figure waits for its one region and has no window to protect, so
+  it lifts the step and byte budgets
+- The cut rules, `context`, `contained` and `attachBp`, are the same in both, so
+  one region draws one graph in every reader: a cut within the browser's budgets
+  gives the same tables with either. A figure keeps `attachBp`, since a
+  departure past it would bring nodes into the figure that the browser leaves
+  out
+- `WALK_CONTEXT` is the context both keep
+- `keep`, `expand`, `nodeLimit`, `links` and `sequences` stay each reader's own:
+  which walks it shows, which it reads in full, how many nodes its layout
+  places, and what it draws
+
+| Option                | `browser` | `figure` |
+| --------------------- | --------- | -------- |
+| `context`             | 1000      | 1000     |
+| `contained`           | false     | false    |
+| `attachBp`            | 65,536    | 65,536   |
+| `stepBudget`          | 4,000,000 | Infinity |
+| `byteBudget`          | 8,000,000 | Infinity |
+| `departureByteBudget` | 2,000,000 | Infinity |
 
 ## Fragments
 

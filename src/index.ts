@@ -38,7 +38,13 @@ export type {
   Hole,
   WalkDeparture,
 } from './walkDeparture.ts'
-export { DepartureReadError, WALK_BUDGETS, WalkReader } from './walkReader.ts'
+export {
+  CUT_PRESETS,
+  DepartureReadError,
+  WALK_BUDGETS,
+  WALK_CONTEXT,
+  WalkReader,
+} from './walkReader.ts'
 export { WALK_FORMAT, WalkFile, WalkFormatError } from './walkFile.ts'
 export type { WalkFilehandle, WalkUnit } from './walkFile.ts'
 export { checkRange } from './tabixSource.ts'

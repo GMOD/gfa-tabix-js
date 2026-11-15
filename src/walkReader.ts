@@ -59,7 +59,7 @@ import type { BudgetNames, WalkHeader, WalkRow } from './walkRows.ts'
 const READ_STEPS_PER_KEPT = 8
 
 // bp of reference a cut keeps past each end of the window
-const WALK_CONTEXT = 1000
+export const WALK_CONTEXT = 1000
 
 // detail records an expanding cut reads at once
 const DETAIL_READS = 16
@@ -72,6 +72,26 @@ export const WALK_BUDGETS = {
   departureByteBudget: 2_000_000,
   attachBp: ATTACH_BP,
 }
+
+// The same cut rules in both; a figure has no window to protect
+export const CUT_PRESETS = {
+  browser: {
+    context: WALK_CONTEXT,
+    contained: false,
+    attachBp: ATTACH_BP,
+    stepBudget: WALK_BUDGETS.stepBudget,
+    byteBudget: WALK_BUDGETS.byteBudget,
+    departureByteBudget: WALK_BUDGETS.departureByteBudget,
+  },
+  figure: {
+    context: WALK_CONTEXT,
+    contained: false,
+    attachBp: ATTACH_BP,
+    stepBudget: Infinity,
+    byteBudget: Infinity,
+    departureByteBudget: Infinity,
+  },
+} satisfies Record<string, WalkCutOptions>
 
 /**
  * A window whose departure read would fetch more than its budget. Zooming in
