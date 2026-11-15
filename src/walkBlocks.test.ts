@@ -395,12 +395,16 @@ test('a piece that turns back, runs off R and jumps back is its list in path ord
 })
 
 test('a placeholder step is off the reference, and the steps a blocks row gives state their passes', async () => {
-  const { graph, kept, fragments, departures } = await reader('hairpin.R').cut(
+  const cut = await reader('hairpin.R').cut(
     R,
     { start: 0, end: 36 },
-    { context: 0 },
+    {
+      context: 0,
+    },
   )
-  expect(walkPlaces(graph.tables(kept, fragments, departures))).toEqual([
+  expect(
+    walkPlaces(cut.graph.tables(cut.kept, cut.fragments, cut.departures)),
+  ).toEqual([
     'R#0#c 1@0 2@6 3@12 4@18 5@24 6@30',
     'H#1#c 1@0 2@6 2@6 1@0 H#1#c:31-41@NaN 5@24 6@30 3@12',
   ])

@@ -151,9 +151,9 @@ export function walkHeader(lines: string[]): WalkHeader {
       header.holes.push({ refName: value, start: +start, end: +end })
     } else if (key === '#walks') {
       for (const tag of INTEGER_TAGS) {
-        const value = integerTag(line, tag)
-        if (value !== undefined) {
-          header[tag] ??= value
+        const stated = integerTag(line, tag)
+        if (stated !== undefined) {
+          header[tag] ??= stated
         }
       }
       const graph = stringTag(line, 'graph')

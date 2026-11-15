@@ -39,8 +39,8 @@ function placeholderBp(cut: Awaited<ReturnType<WalkReader['cut']>>) {
       bp.set(node.refName, (bp.get(node.refName) ?? 0) + node.end - node.start)
     }
   }
-  return Array.from(bp, ([name, total]) => ({ name, bp: total })).sort(
-    (a, b) => a.name.localeCompare(b.name),
+  return Array.from(bp, ([name, total]) => ({ name, bp: total })).sort((a, b) =>
+    a.name.localeCompare(b.name),
   )
 }
 

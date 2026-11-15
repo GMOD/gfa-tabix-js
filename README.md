@@ -187,8 +187,8 @@ record's own steps in a tile fetched to attach them.
   the constructor's second argument, `new WalkGraph(window, revisited)`, and
   without it the tables' `revisited` is NaN
 - **`walks.refStarts`** is each fragment's `refStarts`, step for step, as
-  `graph.tables` reads them: NaN for a step of a fragment with no `refStarts`
-  or with fewer than its `ids`, and none past its `ids` from one with more
+  `graph.tables` reads them: NaN for a step of a fragment with no `refStarts` or
+  with fewer than its `ids`, and none past its `ids` from one with more
 - **Gaps:** `GapKind` and `GAP_KINDS` lose `abridged`, so `own` is kind 2 and
   `unread` kind 3 in a gap table, and a segment has no `abridged` flag. An
   unloaded piece's steps outside a fragment are `read`, as a loaded piece's are
@@ -329,8 +329,8 @@ const cut = await reader.cut(refName, region, {
   departure past it would bring nodes into the figure that the browser leaves
   out
 - `WALK_CONTEXT` is the context both keep
-- `CUT_PRESETS`, each preset and `WALK_BUDGETS` are frozen: a reader spreads
-  one into its options, as above, so no reader changes them for another
+- `CUT_PRESETS`, each preset and `WALK_BUDGETS` are frozen: a reader spreads one
+  into its options, as above, so no reader changes them for another
 - `keep`, `expand`, `nodeLimit`, `links` and `sequences` stay each reader's own:
   which walks it shows, which it reads in full, how many nodes its layout
   places, and what it draws

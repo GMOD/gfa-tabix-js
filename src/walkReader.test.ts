@@ -898,26 +898,21 @@ test("a departure computed from steps takes its ends' pass counts from the ref r
   expect([...tables.departures.leavePasses]).toEqual([2])
 })
 
-test('a cut keeps to WALK_BUDGETS unless its caller lifts them', async () => {
+test('a cut with no budgets is the cut with WALK_BUDGETS spelled out, and refuses a window past one its caller lowers', async () => {
   const window = { start: 16, end: 32 }
-  const defaults = { ...WALK_BUDGETS }
-  try {
-    WALK_BUDGETS.departureByteBudget = 1
-    await expect(
-      inline(copyJump).cut('R#0#chr', window),
-    ).rejects.toBeInstanceOf(DepartureReadError)
-    const lifted = await inline(copyJump).cut('R#0#chr', window, {
-      departureByteBudget: Infinity,
-    })
-    expect(lifted.departures).toHaveLength(2)
-    WALK_BUDGETS.departureByteBudget = defaults.departureByteBudget
-    WALK_BUDGETS.byteBudget = 1
-    await expect(
-      inline(copyJump).cut('R#0#chr', window),
-    ).rejects.toBeInstanceOf(RegionTooLargeError)
-  } finally {
-    Object.assign(WALK_BUDGETS, defaults)
-  }
+  const cut = await inline(copyJump).cut('R#0#chr', window)
+  const spelled = await inline(copyJump).cut('R#0#chr', window, {
+    ...WALK_BUDGETS,
+  })
+  expect(cut.departures).toHaveLength(2)
+  expect(cut.departures).toEqual(spelled.departures)
+  expect(cut.fragments).toEqual(spelled.fragments)
+  await expect(
+    inline(copyJump).cut('R#0#chr', window, { departureByteBudget: 1 }),
+  ).rejects.toBeInstanceOf(DepartureReadError)
+  await expect(
+    inline(copyJump).cut('R#0#chr', window, { byteBudget: 1 }),
+  ).rejects.toBeInstanceOf(RegionTooLargeError)
 })
 
 test('a ref row whose passes do not count its steps is refused', async () => {
@@ -2345,9 +2340,11 @@ test("a cut's tables state the pass each step takes, NaN for a step off R", asyn
 // hairpin.R.gfa: R over six 6 bp nodes, and W H 1 c
 // >12>1>2<2<1>11>5>6>3>13>14, which steps on 2 and back over the window's 1
 test('a step between two on the window states its pass, off the window', async () => {
-  const { graph, kept, fragments, departures } = await reader(
-    'hairpin.R',
-  ).cut('R#0#c', { start: 0, end: 6 }, { context: 0, expand: () => true })
+  const { graph, kept, fragments, departures } = await reader('hairpin.R').cut(
+    'R#0#c',
+    { start: 0, end: 6 },
+    { context: 0, expand: () => true },
+  )
   expect(walkPlaces(graph.tables(kept, fragments, departures))).toEqual([
     'R#0#c 1@0',
     'H#1#c 1@0 2@6 2@6 1@0',
