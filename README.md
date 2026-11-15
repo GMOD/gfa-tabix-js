@@ -85,7 +85,9 @@ const tables = graph.tables(kept, fragments, departures)
   keeps it
 - A node the reference passes more than once, as in a collapsed repeat, takes
   the position of its pass over the window, and each walk's step on it the pass
-  its row names
+  its row names: `tables.walks.refStarts` gives every step's position on the
+  reference, NaN for a step off it, so a reader of the tables never picks a pass
+  itself
 - A node off the reference lies on the walk whose name sorts first among the
   fragments and departures with a step on it, at the first such step. Like the
   links, it follows from what the cut returns, however the file is tiled or

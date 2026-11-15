@@ -32,6 +32,9 @@ export interface GraphTables {
     offsets: Int32Array
     steps: Int32Array
     reversed: Uint8Array
+    // where each step lies on the reference at the pass its row names, NaN
+    // off R; absent from tables another source builds
+    refStarts?: Float64Array
     // bp of each walk the cut read but kept out, before and after it; absent
     // from tables another source builds
     trimmedBefore?: Float64Array

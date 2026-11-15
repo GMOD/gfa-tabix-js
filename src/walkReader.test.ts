@@ -2170,6 +2170,30 @@ test('a walk row takes the passes its :k, @k and start@k name, and the defaults 
   ])
 })
 
+test("a cut's tables state the pass each step takes, NaN for a step off R", async () => {
+  const { graph, kept, fragments, departures } = await reader('copies.R').cut(
+    'R#0#chr',
+    { start: 0, end: 36 },
+    { context: 0 },
+  )
+  const { walks, nodes } = graph.tables(kept, fragments, departures)
+  expect(
+    walks.names.map((name, p) => {
+      const from = walks.offsets[p]!
+      const placed = Array.from(
+        walks.steps.subarray(from, walks.offsets[p + 1]),
+        (node, k) => `${nodes.names[node]}@${walks.refStarts![from + k]}`,
+      )
+      return `${name} ${placed.join(' ')}`
+    }),
+  ).toEqual([
+    'R#0#chr 1@0 2@6 3@12 2@18 3@24 4@30',
+    'F#1#f 1@0 2@6 3@12 2@18 8@NaN 3@24 4@30',
+    'S#1#s 2@18 3@24 4@30',
+    'U#1#u 1@0 9@NaN 3@24 4@30',
+  ])
+})
+
 // The reference passes 2 and 3 twice, 6 bp nodes in one tile (early.R.gfa).
 // E's route to 8 names no `:k`, so it leaves from the first pass of 2 its walk
 // reaches, not the last:

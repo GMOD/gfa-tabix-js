@@ -1168,12 +1168,14 @@ export class WalkGraph {
     })
     const steps = new Int32Array(offsets[walks.length]!)
     const reversed = new Uint8Array(steps.length)
-    walks.forEach(({ ids, rev }, p) => {
+    const refStarts = new Float64Array(steps.length)
+    walks.forEach(({ ids, rev, refStarts: placed }, p) => {
       const at = offsets[p]!
       for (let j = 0; j < ids.length; j++) {
         steps[at + j] = nodeIndex(ids[j]!)
       }
       reversed.set(rev, at)
+      refStarts.set(placed, at)
     })
     return {
       nodes: {
@@ -1194,6 +1196,7 @@ export class WalkGraph {
         offsets,
         steps,
         reversed,
+        refStarts,
         trimmedBefore: Float64Array.from(walks, f => f.trimmedBefore),
         trimmedAfter: Float64Array.from(walks, f => f.trimmedAfter),
         abridgedSteps,
