@@ -13,12 +13,26 @@ import {
 } from './walkReader.ts'
 import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
+import type { AbridgedPiece } from './walkChunk.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
 import type { WalkGap } from './walkGaps.ts'
 import type { WalkFragment } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
+
+// the abridged pieces a cut makes a bp row of, those it did not build
+const unbuilt = vi.hoisted(() => new Set<AbridgedPiece>())
+vi.mock(import('./walkChunk.ts'), async importOriginal => {
+  const chunk = await importOriginal()
+  return {
+    ...chunk,
+    bpRow: (piece: AbridgedPiece) => {
+      unbuilt.add(piece)
+      return chunk.bpRow(piece)
+    },
+  }
+})
 
 function reader(name: string) {
   const path = `${DATA}${name}.walks.gz`
@@ -1190,24 +1204,46 @@ function expandedFacts(
 }
 
 // The README's exception to an abridged file cutting as its twin: an unread
-// segment's breakpoint beside an abridged piece the cut did not build is NaN
-// where the twin states one
-function twinBreakpointsForNaN(gaps: WalkGap[], twin: WalkGap[]) {
-  return gaps.map((gap, g) => ({
-    ...gap,
-    segments: gap.segments.map((segment, s) => {
-      const other = twin[g]?.segments[s]
-      return segment.kind === 'unread' && other?.kind === 'unread'
-        ? {
-            ...segment,
-            before: Number.isNaN(segment.before)
-              ? other.before
-              : segment.before,
-            after: Number.isNaN(segment.after) ? other.after : segment.after,
-          }
-        : segment
-    }),
-  }))
+// segment's `before` or `after` beside an abridged piece the cut did not
+// build, one ending where the segment starts or starting where it ends, is
+// NaN where the twin states the breakpoint
+function twinBreakpointsForNaN(
+  gaps: WalkGap[],
+  twin: WalkGap[],
+  skipped: AbridgedPiece[],
+) {
+  const ending = new Set(
+    skipped.map(p => `${p.name}\t${p.hapOffset + p.hapBp}`),
+  )
+  const starting = new Set(skipped.map(p => `${p.name}\t${p.hapOffset}`))
+  return gaps.map((gap, g) => {
+    const starts = gap.segments.map((_, s) =>
+      gap.segments.slice(0, s).reduce((at, x) => at + x.bp, gap.start),
+    )
+    return {
+      ...gap,
+      segments: gap.segments.map((segment, s) => {
+        const other = twin[g]?.segments[s]
+        const start = starts[s]!
+        const end = start + segment.bp
+        return segment.kind === 'unread' && other?.kind === 'unread'
+          ? {
+              ...segment,
+              before:
+                Number.isNaN(segment.before) &&
+                ending.has(`${gap.name}\t${start}`)
+                  ? other.before
+                  : segment.before,
+              after:
+                Number.isNaN(segment.after) &&
+                starting.has(`${gap.name}\t${end}`)
+                  ? other.after
+                  : segment.after,
+            }
+          : segment
+      }),
+    }
+  })
 }
 
 // Every window of a grid over each of `name`'s sequences, plain and
@@ -1257,13 +1293,16 @@ test.each([
     const differ: string[] = []
     for await (const at of gridOf(abridged)) {
       const { refName, span, mode } = at
+      unbuilt.clear()
       const [a, b] = await Promise.all([
         gridCut(abridged, refName, span, mode),
         gridCut(whole, refName, span, mode),
       ])
+      const skipped = [...unbuilt]
       if (
-        digestOf(expandedFacts(a, twinBreakpointsForNaN(a.gaps, b.gaps))) !==
-        digestOf(expandedFacts(b, b.gaps))
+        digestOf(
+          expandedFacts(a, twinBreakpointsForNaN(a.gaps, b.gaps, skipped)),
+        ) !== digestOf(expandedFacts(b, b.gaps))
       ) {
         differ.push(where(at))
       }
