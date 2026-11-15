@@ -225,7 +225,7 @@ describe('the step budget', () => {
 })
 
 test("a walk file's header states its format, tile, references, haplotypes and holes", () => {
-  expect(walkHeader(['#walks\ttile:i:65536'])).toEqual({
+  expect(walkHeader(['#walks\ttile:i:65536'])).toStrictEqual({
     tile: 65_536,
     references: [],
     haplotypes: [],

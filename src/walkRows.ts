@@ -117,6 +117,13 @@ function integerTag(line: string, tag: string) {
   return match ? +match[1]! : undefined
 }
 
+const INTEGER_TAGS: ('format' | 'tile' | 'revisited' | 'leftout')[] = [
+  'format',
+  'tile',
+  'revisited',
+  'leftout',
+]
+
 function stringTag(line: string, tag: string) {
   return new RegExp(`(?:^|\\t)${tag}:Z:([^\\t]+)`).exec(line)?.[1]
 }
@@ -143,11 +150,16 @@ export function walkHeader(lines: string[]): WalkHeader {
     } else if (key === '#hole') {
       header.holes.push({ refName: value, start: +start, end: +end })
     } else if (key === '#walks') {
-      header.format ??= integerTag(line, 'format')
-      header.tile ??= integerTag(line, 'tile')
-      header.revisited ??= integerTag(line, 'revisited')
-      header.graph ??= stringTag(line, 'graph')
-      header.leftout ??= integerTag(line, 'leftout')
+      for (const tag of INTEGER_TAGS) {
+        const value = integerTag(line, tag)
+        if (value !== undefined) {
+          header[tag] ??= value
+        }
+      }
+      const graph = stringTag(line, 'graph')
+      if (graph !== undefined) {
+        header.graph ??= graph
+      }
     }
   }
   return header

@@ -141,6 +141,23 @@ test('the header names the format, the reference, the haplotypes, the tile size,
   }
 })
 
+test('the header has no graph or lines left out where the walk file states neither', async () => {
+  const header = await inline([
+    '#walks format:i:8 tile:i:16',
+    '#reference R',
+    'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4 .',
+  ]).header()
+  expect('graph' in header).toBe(false)
+  expect('leftout' in header).toBe(false)
+  expect(header).toStrictEqual({
+    format: 8,
+    tile: 16,
+    references: ['R'],
+    haplotypes: [],
+    holes: [],
+  })
+})
+
 // A walk file whose directory's first line is `walks`, with its header
 // unit and data as walkFileOf writes them unless `data` is given
 function directoryOf(walks: string, data = new Uint8Array()) {
