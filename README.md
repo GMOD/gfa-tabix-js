@@ -183,6 +183,9 @@ record's own steps in a tile fetched to attach them.
   tables is optional, so a host that builds its own tables now has to pass it:
   how many nodes its reference passes more than once, or NaN where it states
   none ([Usage](#usage))
+- **`walks.refStarts`** is each fragment's `refStarts`, step for step, as
+  `graph.tables` reads them: NaN for a step of a fragment with no `refStarts`
+  or with fewer than its `ids`, and none past its `ids` from one with more
 - **Gaps:** `GapKind` and `GAP_KINDS` lose `abridged`, so `own` is kind 2 and
   `unread` kind 3 in a gap table, and a segment has no `abridged` flag. An
   unloaded piece's steps outside a fragment are `read`, as a loaded piece's are

@@ -999,6 +999,12 @@ export function surelyKept(
 export const runName = (name: string, start: number, end: number) =>
   `${name}:${start}-${end}`
 
+// The places of a fragment's `n` steps it states: none from a host's fragment
+// without `refStarts`, and none past its steps from one whose `refStarts` runs
+// on
+const statedPlaces = (placed: Float64Array | undefined, n: number) =>
+  placed?.subarray(0, n) ?? new Float64Array()
+
 // A node's name in the tables: its id, or for a placeholder its run's name
 const nodeName = (id: number, node?: WalkNode) =>
   node?.placeholder ? runName(node.refName, node.start, node.end) : String(id)
@@ -1178,14 +1184,14 @@ export class WalkGraph {
     })
     const steps = new Int32Array(offsets[walks.length]!)
     const reversed = new Uint8Array(steps.length)
-    const refStarts = new Float64Array(steps.length)
+    const refStarts = new Float64Array(steps.length).fill(Number.NaN)
     walks.forEach(({ ids, rev, refStarts: placed }, p) => {
       const at = offsets[p]!
       for (let j = 0; j < ids.length; j++) {
         steps[at + j] = nodeIndex(ids[j]!)
       }
       reversed.set(rev, at)
-      refStarts.set(placed, at)
+      refStarts.set(statedPlaces(placed, ids.length), at)
     })
     return {
       nodes: {

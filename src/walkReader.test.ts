@@ -2319,6 +2319,56 @@ test("a cut's tables state the pass each step takes, NaN for a step off R", asyn
   ])
 })
 
+async function copiesPlaced(
+  name: string,
+  edit: (f: WalkFragment) => WalkFragment,
+) {
+  const { graph, kept, fragments, departures } = await reader('copies.R').cut(
+    'R#0#chr',
+    { start: 0, end: 36 },
+    { context: 0 },
+  )
+  const { walks, nodes } = graph.tables(
+    kept,
+    fragments.map(f => (f.name === name ? edit({ ...f }) : f)),
+    departures,
+  )
+  const p = walks.names.indexOf(name)
+  const from = walks.offsets[p]!
+  return Array.from(
+    walks.steps.subarray(from, walks.offsets[p + 1]),
+    (node, k) => `${nodes.names[node]}@${walks.refStarts![from + k]}`,
+  ).join(' ')
+}
+
+test("a host's fragment with no refStarts gives its steps NaN places", async () => {
+  expect(
+    await copiesPlaced('F#1#f', f => {
+      Reflect.deleteProperty(f, 'refStarts')
+      return f
+    }),
+  ).toBe('1@NaN 2@NaN 3@NaN 2@NaN 8@NaN 3@NaN 4@NaN')
+})
+
+test("a host's fragment with ids trimmed and refStarts not gives the places of the steps it keeps", async () => {
+  expect(
+    await copiesPlaced('U#1#u', f => ({
+      ...f,
+      ids: f.ids.subarray(0, 3),
+      rev: f.rev.subarray(0, 3),
+    })),
+  ).toBe('1@0 9@NaN 3@24')
+})
+
+test("a host's fragment with fewer refStarts than steps gives the rest NaN places, not 0", async () => {
+  expect(
+    await copiesPlaced('S#1#s', f => ({
+      ...f,
+      refStarts: f.refStarts.subarray(0, 2),
+    })),
+  ).toBe('2@18 3@24 4@NaN')
+})
+
 // copies.R's header states revisited:i:2, skip.GRCh38's revisited:i:0, and
 // the inline file's none
 test("a cut's tables carry the header's revisited count, NaN where it states none", async () => {
