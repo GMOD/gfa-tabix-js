@@ -21,8 +21,9 @@
   index through any object with
   [@gmod/tabix](https://github.com/GMOD/tabix-js)'s `TabixIndexedFile` methods
 
-The JBrowse graph plugin, BandageJS, ggbandage and the sequenceTubeMap fork read
-through it.
+The JBrowse graph plugin, BandageJS, jb2hubs and the sequenceTubeMap fork read
+through it for a browser track, and ggbandage and ggtubemap for a static figure
+([Cut presets](#cut-presets)).
 
 ## Install
 
@@ -182,7 +183,9 @@ record's own steps in a tile fetched to attach them.
 - **`GraphTables.revisited`** is required, where every other addition to the
   tables is optional, so a host that builds its own tables now has to pass it:
   how many nodes its reference passes more than once, or NaN where it states
-  none ([Usage](#usage))
+  none ([Usage](#usage)). A host that builds its own `WalkGraph` passes it as
+  the constructor's second argument, `new WalkGraph(window, revisited)`, and
+  without it the tables' `revisited` is NaN
 - **`walks.refStarts`** is each fragment's `refStarts`, step for step, as
   `graph.tables` reads them: NaN for a step of a fragment with no `refStarts`
   or with fewer than its `ids`, and none past its `ids` from one with more

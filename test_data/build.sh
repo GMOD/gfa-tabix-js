@@ -61,6 +61,9 @@ build adv adv.R.gfa --refs R --tile 60 --abridge-bytes 1
 build edge edge.R.gfa --refs R --tile 60 --abridge-bytes 1
 build farrejoin farrejoin.R.gfa --refs R --tile 10
 build detailtwice detailtwice.R.gfa --refs R --tile 40 --abridge-bytes 1
+# The older twins, unabridged and the *whole files without --abridge-steps 0
+# --abridge-bytes 0, keep the default abridge budgets, which abridge no tile of
+# a graph this small, so each holds every walk as one built with both 0 does
 build detailtwicewhole detailtwice.R.gfa --refs R --tile 40
 build sortsfirst sortsfirst.R.gfa --refs R --tile 40 --abridge-bytes 1
 build sortsfirstwhole sortsfirst.R.gfa --refs R --tile 40
