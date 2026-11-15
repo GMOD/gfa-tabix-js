@@ -91,7 +91,10 @@ const tables = graph.tables(kept, fragments, departures)
 - A node off the reference lies on the walk whose name sorts first among the
   fragments and departures with a step on it, at the first such step. Like the
   links, it follows from what the cut returns, however the file is tiled or
-  abridged and whichever tiles the cut read
+  abridged and whichever tiles the cut read. So its place moves with the window
+  and the walks kept: a wider window can return an earlier step on it or a walk
+  whose name sorts first, and a `keep` that leaves that walk out places it on
+  another. A host should not hold a node's place fixed from one cut to the next
 - `reader.header()` lists the reference sample and every haplotype with rows,
   and the tile size, `tile`, read from the walk file's header unit
   - `graph` is the hash of the GFA's segments, as its node and link index states
@@ -303,6 +306,8 @@ does not build counts there by its `abridged` row's `hapBp`.
   departure records say where it leaves and rejoins
 - A walk's fragments therefore depend on the window, its context and the file
   alone, not on which other walks the cut keeps
+- `fragments` come in no stated order. `graph.tables` orders its `walks` itself:
+  the reference first, then by name and `hapStart`
 - `graph.tables(kept, fragments, departures)` keeps `trimmedBefore` and
   `trimmedAfter` as columns of `walks`
 
@@ -478,6 +483,16 @@ for (const d of departures) {
 - With `expand` naming the walk, the cut reads those pieces from their detail
   units and cuts them in full, as a file without abridging would. Otherwise it
   builds them from the tile's `blocks` unit
+- **An abridged file, expanding every walk a cut keeps, cuts as its twin:** the
+  file gfa-to-tabix writes from the same graph with the same `--refs`, `--tile`
+  and `--stay`, and `--abridge-steps 0 --abridge-bytes 0`. Over any window both
+  files cut within their budgets, the two give the same fragments, links, node
+  places, departures with their steps and `breakAt`, and gaps, except:
+  - an `unread` gap segment's `before` or `after` beside an abridged piece the
+    cut did not build is NaN, where the twin states the breakpoint
+    ([Gaps](#gaps))
+  - `fragments` come in no stated order, so the two can list them differently;
+    `graph.tables` orders the walks of both alike
 - Every other piece of a tile under the window is its bp alone, from its
   `abridged` row's `hapBp`: it counts in the `trimmedBefore` or `trimmedAfter`
   of the fragment beside it and as `read` in a gap, and the cut states no step
