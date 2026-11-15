@@ -15,6 +15,7 @@ import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
+import type { WalkGap } from './walkGaps.ts'
 import type { WalkFragment } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
@@ -1160,34 +1161,53 @@ test('an expanded walk is read from its detail records as the unabridged file cu
   ])
 })
 
-async function expandedFacts(
+function gridCut(
   name: string,
   refName: string,
   span: { start: number; end: number },
   mode: { contained: boolean; context: number },
 ) {
-  const cut = await reader(name).cut(refName, span, {
-    ...mode,
-    expand: () => true,
-  })
-  const tables = cut.graph.tables(
-    cut.kept,
-    cut.fragments,
-    cut.departures,
-    cut.gaps,
-  )
+  return reader(name).cut(refName, span, { ...mode, expand: () => true })
+}
+
+function expandedFacts(
+  { graph, kept, fragments, departures }: Awaited<ReturnType<typeof gridCut>>,
+  gaps: WalkGap[],
+) {
+  const tables = graph.tables(kept, fragments, departures, gaps)
   return {
     gfa: graphTablesGFA(tables),
     tables,
-    fragments: cut.fragments.toSorted(
+    fragments: fragments.toSorted(
       (a, b) =>
         (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
         a.fragStart - b.fragStart ||
         a.hapStart - b.hapStart,
     ),
-    departures: cut.departures,
-    gaps: cut.gaps,
+    departures,
+    gaps,
   }
+}
+
+// The README's exception to an abridged file cutting as its twin: an unread
+// segment's breakpoint beside an abridged piece the cut did not build is NaN
+// where the twin states one
+function twinBreakpointsForNaN(gaps: WalkGap[], twin: WalkGap[]) {
+  return gaps.map((gap, g) => ({
+    ...gap,
+    segments: gap.segments.map((segment, s) => {
+      const other = twin[g]?.segments[s]
+      return segment.kind === 'unread' && other?.kind === 'unread'
+        ? {
+            ...segment,
+            before: Number.isNaN(segment.before)
+              ? other.before
+              : segment.before,
+            after: Number.isNaN(segment.after) ? other.after : segment.after,
+          }
+        : segment
+    }),
+  }))
 }
 
 // Every window of a grid over each of `name`'s sequences, plain and
@@ -1229,6 +1249,7 @@ test.each([
   ['unbuilt.R', 'unbuiltwhole.R'],
   ['edge.R', 'edgewhole.R'],
   ['adv.R', 'advwhole.R'],
+  ['gapnan.R', 'gapnanwhole.R'],
 ])(
   'every window of %s, expanding every walk, cuts as %s, its graph built without abridging, does',
   async (abridged, whole) => {
@@ -1236,16 +1257,62 @@ test.each([
     for await (const at of gridOf(abridged)) {
       const { refName, span, mode } = at
       const [a, b] = await Promise.all([
-        expandedFacts(abridged, refName, span, mode),
-        expandedFacts(whole, refName, span, mode),
+        gridCut(abridged, refName, span, mode),
+        gridCut(whole, refName, span, mode),
       ])
-      if (digestOf(a) !== digestOf(b)) {
+      if (
+        digestOf(expandedFacts(a, twinBreakpointsForNaN(a.gaps, b.gaps))) !==
+        digestOf(expandedFacts(b, b.gaps))
+      ) {
         differ.push(where(at))
       }
     }
     expect(differ).toEqual([])
   },
 )
+
+// gapnan.R in 20 bp tiles: R walks 1 to 6 and H walks 1, 5, 2, 6 and 1 again,
+// each 10 bp, abridged to pieces of one step. A cut of 0-10 builds H's pieces
+// on 1 and leaves its piece on 2, at 10-20 in the same tile, unbuilt
+test('an unread stretch beside an abridged piece the cut did not build has no breakpoint there, where its twin built without abridging states one', async () => {
+  const gapsOf = async (name: string) => {
+    const { gaps } = await reader(name).cut(
+      'R#0#c',
+      { start: 0, end: 10 },
+      { context: 0, expand: () => true },
+    )
+    return gaps.map(gap => [
+      gap.name,
+      gap.start,
+      gap.end,
+      gap.segments.map(x => [x.kind, x.bp, x.before, x.after]),
+    ])
+  }
+  expect(await gapsOf('gapnan.R')).toEqual([
+    [
+      'H#1#h',
+      10,
+      40,
+      [
+        ['unread', 10, 10, Number.NaN],
+        ['read', 10, Number.NaN, Number.NaN],
+        ['unread', 10, Number.NaN, 0],
+      ],
+    ],
+  ])
+  expect(await gapsOf('gapnanwhole.R')).toEqual([
+    [
+      'H#1#h',
+      10,
+      40,
+      [
+        ['unread', 10, 10, 10],
+        ['read', 10, Number.NaN, Number.NaN],
+        ['unread', 10, 20, 0],
+      ],
+    ],
+  ])
+})
 
 // edge.R in 60 bp tiles: TRAIL walks 7 and 8, its own 28, then 1 and 2. A
 // cut of 20-80 reads tile 0 and one of 60-80 does not; neither returns
