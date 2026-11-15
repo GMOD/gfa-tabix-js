@@ -865,19 +865,19 @@ export function walkCut(
           held.push(piece)
         }
       }
-      const consecutive =
+      const oneRun =
         leave !== undefined &&
         rejoin !== undefined &&
         leave[0].fragStart === rejoin[0].fragStart &&
-        pieceOf(leave[0], leave[1]) + 1 === pieceOf(rejoin[0], rejoin[1])
-      if (leave && rejoin && consecutive && ids.length > 0) {
-        const [left, leaveStep, end] = leave
-        const [right, rejoinStep, start] = rejoin
+        pieceOf(leave[0], leave[1]) + 1 === pieceOf(rejoin[0], rejoin[1]) &&
+        (leave[2] - 1 > leave[1] || returned(leave[0], leave[1])) &&
+        (rejoin[2] < rejoin[1] || returned(rejoin[0], rejoin[1]))
+      if (leave && rejoin && oneRun && ids.length > 0) {
+        const [left, , end] = leave
+        const [right, , start] = rejoin
         const last = left.ids[end - 1]
         const next = right.ids[start]
         if (
-          (end - 1 > leaveStep || returned(left, leaveStep)) &&
-          (start < rejoinStep || returned(right, rejoinStep)) &&
           last !== undefined &&
           next !== undefined &&
           last !== SKIPPED &&
@@ -888,7 +888,7 @@ export function walkCut(
       }
       if (ids.length > 0) {
         d.steps = { ids: Int32Array.from(ids), rev: Uint8Array.from(rev) }
-        if (!consecutive) {
+        if (!oneRun) {
           d.breakAt = leave ? leave[2] - leave[1] - 1 : 0
         }
         if (held.length > 0) {

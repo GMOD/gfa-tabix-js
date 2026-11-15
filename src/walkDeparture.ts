@@ -32,8 +32,8 @@ export interface WalkDeparture {
   // attachBp; fewer bp than ownBp less missingBp where some lie on other
   // reference sequences, or in pieces the cut did not read
   steps?: { ids: Int32Array; rev: Uint8Array }
-  // set where the cut does not hold `steps` as one run from the leave step to
-  // the rejoin step: those before this index follow the leave step, those
+  // set where the cut does not return `steps` as one run from the leave step
+  // to the rejoin step: those before this index follow the leave step, those
   // from it lead to the rejoin step
   breakAt?: number
   // the pieces the cut did not load with a step among `steps`, in the path's

@@ -1188,36 +1188,100 @@ async function expandedFacts(
   }
 }
 
+// Every window of a grid over each of `name`'s sequences, plain and
+// contained, with and without context
+async function* gridOf(name: string) {
+  const walks = reader(name)
+  for (const refName of await walks.referenceSequences()) {
+    const length = await walks.sequenceLength(refName)
+    const step = Math.ceil(length / 12)
+    for (const mode of [
+      { contained: false, context: 0 },
+      { contained: true, context: 0 },
+      { contained: false, context: step },
+      { contained: true, context: step },
+    ]) {
+      for (let start = 0; start < length; start += step) {
+        for (let end = start + step; end < length + step; end += step) {
+          yield { refName, span: { start, end: Math.min(end, length) }, mode }
+        }
+      }
+    }
+  }
+}
+
+const where = ({
+  refName,
+  span,
+  mode,
+}: {
+  refName: string
+  span: { start: number; end: number }
+  mode: { contained: boolean; context: number }
+}) => `${refName}:${span.start}-${span.end} ${JSON.stringify(mode)}`
+
 test.each([
   ['detailtwice.R', 'detailtwicewhole.R'],
   ['sortsfirst.R', 'sortsfirstwhole.R'],
   ['ownends.R', 'ownendswhole.R'],
   ['unbuilt.R', 'unbuiltwhole.R'],
+  ['edge.R', 'edgewhole.R'],
+  ['adv.R', 'advwhole.R'],
 ])(
   'every window of %s, expanding every walk, cuts as %s, its graph built without abridging, does',
   async (abridged, whole) => {
     const differ: string[] = []
-    for (const refName of await reader(abridged).referenceSequences()) {
-      const length = await reader(abridged).sequenceLength(refName)
-      const step = Math.ceil(length / 12)
-      for (const mode of [
-        { contained: false, context: 0 },
-        { contained: true, context: 0 },
-        { contained: false, context: step },
-        { contained: true, context: step },
-      ]) {
-        for (let start = 0; start < length; start += step) {
-          for (let end = start + step; end < length + step; end += step) {
-            const span = { start, end: Math.min(end, length) }
-            const [a, b] = await Promise.all([
-              expandedFacts(abridged, refName, span, mode),
-              expandedFacts(whole, refName, span, mode),
+    for await (const at of gridOf(abridged)) {
+      const { refName, span, mode } = at
+      const [a, b] = await Promise.all([
+        expandedFacts(abridged, refName, span, mode),
+        expandedFacts(whole, refName, span, mode),
+      ])
+      if (digestOf(a) !== digestOf(b)) {
+        differ.push(where(at))
+      }
+    }
+    expect(differ).toEqual([])
+  },
+)
+
+// edge.R in 60 bp tiles: TRAIL walks 7 and 8, its own 28, then 1 and 2. A
+// cut of 20-80 reads tile 0 and one of 60-80 does not; neither returns
+// TRAIL's step on 1
+test.each([
+  ['edge.R', 'edgewhole.R'],
+  ['adv.R', 'advwhole.R'],
+  ['abut.R'],
+  ['farrejoin.R'],
+])(
+  "every window of %s that returns a walk's same steps states the same break in each of its records",
+  async (...names) => {
+    const differ: string[] = []
+    for (const name of names) {
+      const breaks = new Map<string, number | undefined>()
+      for await (const at of gridOf(name)) {
+        const { fragments, departures } = await reader(name).cut(
+          at.refName,
+          at.span,
+          { ...at.mode, expand: () => true },
+        )
+        for (const d of departures) {
+          if (d.steps) {
+            const key = JSON.stringify([
+              d.name,
+              d.hapStart,
+              [...d.steps.ids],
+              fragments
+                .filter(f => f.name === d.name)
+                .toSorted((a, b) => a.hapStart - b.hapStart)
+                .map(f => [f.hapStart, [...f.ids], [...f.refStarts]]),
             ])
-            if (digestOf(a) !== digestOf(b)) {
+            if (breaks.has(key) && breaks.get(key) !== d.breakAt) {
               differ.push(
-                `${refName}:${span.start}-${span.end} ${JSON.stringify(mode)}`,
+                `${name} ${d.name} at ${d.hapStart}: ${breaks.get(key)} and ${d.breakAt} at ${where(at)}`,
               )
             }
+            breaks.set(key, d.breakAt)
           }
         }
       }
@@ -2417,8 +2481,8 @@ describe('a record between two W lines that abut', () => {
 // farrejoin.R in 10 bp tiles: X walks 1, 2, its own 50, then 8, its own 51,
 // then 3 and 4. A cut of [0, 30) reads the piece leaving 2 and fetches tile
 // 70 for the own steps of the record rejoining at 3, and that tile holds the
-// piece rejoining at 8 too
-test('a record whose rejoin piece comes in a fetch for another record states no break', async () => {
+// piece rejoining at 8 too. The cut returns no step on 8
+test('a record whose rejoin piece comes in a fetch for another record breaks where the cut returns no step beside its own', async () => {
   const cut = await reader('farrejoin.R').cut(
     'R#0#c',
     { start: 0, end: 30 },
@@ -2427,7 +2491,7 @@ test('a record whose rejoin piece comes in a fetch for another record states no 
   expect(
     cut.departures.map(d => [d.hapStart, [...(d.steps?.ids ?? [])], d.breakAt]),
   ).toEqual([
-    [20, [50], undefined],
+    [20, [50], 1],
     [35, [51], undefined],
   ])
 })

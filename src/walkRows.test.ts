@@ -732,17 +732,17 @@ describe('the links of a record’s own steps at its ends', () => {
   ]
 
   test.each([
-    { name: 'the piece it leaves', pieces: trailing },
-    { name: 'the piece that rejoins', pieces: leading },
+    { name: 'the piece it leaves', pieces: trailing, breakAt: 1 },
+    { name: 'the piece that rejoins', pieces: leading, breakAt: undefined },
   ])(
-    'own steps in $name are not linked to a rejoin step off the fragment, though the cut read its piece',
-    ({ pieces }) => {
+    'own steps in $name are not linked to a rejoin step off the fragment, though the cut read its piece, and break at $breakAt',
+    ({ pieces, breakAt }) => {
       expect(linksOf(pieces, record(200, 200, 300))).toEqual({
         links: ['2 5'],
         fragment: [[2]],
         own: [[5]],
-        breakAt: [undefined],
-        table: [-1],
+        breakAt: [breakAt],
+        table: [breakAt ?? -1],
       })
     },
   )
@@ -764,20 +764,22 @@ describe('the links of a record’s own steps at its ends', () => {
     {
       name: 'the piece that rejoins',
       pieces: (g: WalkGraph) => [piece(g, 0, [1], 0), piece(g, 100, [5, 3], 1)],
+      breakAt: 0,
     },
     {
       name: 'the piece it leaves',
       pieces: (g: WalkGraph) => [piece(g, 0, [1, 5], 0), piece(g, 200, [3], 1)],
+      breakAt: undefined,
     },
   ])(
-    'own steps in $name are not linked to a leave step off the fragment, though the cut read its piece',
-    ({ pieces }) => {
+    'own steps in $name are not linked to a leave step off the fragment, though the cut read its piece, and break at $breakAt',
+    ({ pieces, breakAt }) => {
       expect(linksOf(pieces, record(100, 100, 200))).toEqual({
         links: ['5 3'],
         fragment: [[3]],
         own: [[5]],
-        breakAt: [undefined],
-        table: [-1],
+        breakAt: [breakAt],
+        table: [breakAt ?? -1],
       })
     },
   )

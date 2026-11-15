@@ -399,13 +399,19 @@ for (const d of departures) {
   the leave piece and the start of the rejoin piece. A step of 0 bp is an own
   step, so a record with `ownBp` 0, or no more than its `missingBp`, can carry
   one; own sequence between the contig's W lines has no steps
-- `breakAt` is set where the cut does not hold `steps` as one run from the leave
-  step to the rejoin step: the steps before that index follow the leave step and
-  those from it lead to the rejoin step, so it is 0 where the cut holds the
-  rejoin piece's alone and their count where it holds the leave piece's alone. A
-  record's steps are one run where the cut holds its leave and rejoin pieces and
-  they are consecutive on one W line, and a computed departure's always. The
-  `departures` table has it as `breakAt`, -1 where not set
+- `breakAt` is set where the cut does not return `steps` as one run from the
+  leave step to the rejoin step: the steps before that index follow the leave
+  step and those from it lead to the rejoin step, and the cut's links do not
+  take the walk from one to the other. A record's steps are one run where its
+  leave and rejoin pieces are consecutive pieces of one W line and the cut
+  returns, at each end, the end step in a fragment of its walk or an own step
+  beside it; a computed departure's steps always are. So it is 0 where the cut
+  returns neither the leave step nor an own step after it, and their count where
+  it returns neither the rejoin step nor an own step before it. Like the links,
+  it follows from the steps the cut returns and not from the tiles it read, so
+  an abridged file cuts as the file built without abridging, and the same steps
+  of a walk come back with the same break whatever the window. The `departures`
+  table has it as `breakAt`, -1 where not set
 - **A departure that jumps over the window and its context** comes back with
   everything its row states and no `steps`: its walk, `hapStart`, `ownBp`,
   `missingBp`, both breakpoints with their strands and passes, and so its
