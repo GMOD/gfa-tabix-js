@@ -38,7 +38,7 @@ A segment index also needs `@gmod/tabix`.
 import { WalkReader, walksKept } from '@jbrowse/graph-walks'
 
 const reader = WalkReader.open(
-  'https://example.org/hprc-v2.1-mc-grch38.GRCh38.walks.gz',
+  'https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38-f8.GRCh38.walks.gz',
 )
 
 const refName = 'GRCh38#0#chr6'
@@ -58,9 +58,10 @@ const tables = graph.tables(kept, fragments, departures)
   already open: `data` the `.walks.gz`, `directory` its `.idx`. Any object with
   a generic-filehandle2 handle's `read`, `readFile`, `stat` and `source` will do
 - A file gfa-to-tabix 5.0 or later wrote, in walk format 8; the reader refuses
-  any other format and says to rebuild the file. jbrowse.org's hosted HPRC
-  release 2.1 walk file is format 7, which graph-walks 6 reads, until it is
-  rebuilt, `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38.GRCh38.walks.gz`
+  any other format and says to rebuild the file. jbrowse.org hosts the HPRC
+  release 2.1 walk files in format 8, each with its `.idx`:
+  `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38-f8.GRCh38.walks.gz` and
+  `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-chm13-f8.CHM13.walks.gz`
 - `tables` lists the nodes with their lengths and reference positions, the links
   the cut's steps walk, each walk's steps, and every departure from the
   reference over the window ([Departures](#departures)). `graphTablesGFA` in
