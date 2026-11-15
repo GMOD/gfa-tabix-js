@@ -1025,9 +1025,11 @@ export class WalkGraph {
   private links: number[] = []
 
   private readonly window: WalkWindow
+  private readonly revisited: number
 
-  constructor(window: WalkWindow) {
+  constructor(window: WalkWindow, revisited = Number.NaN) {
     this.window = window
+    this.revisited = revisited
   }
 
   // A node with its position, unless the cut already holds it at one that
@@ -1211,6 +1213,7 @@ export class WalkGraph {
       },
       departures: departureTable(departures, nodeIndex, stepsOf),
       gaps: gapTable(gaps, new Map(walks.map((f, p) => [f, p])), nodeIndex),
+      revisited: this.revisited,
     }
   }
 

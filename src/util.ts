@@ -46,6 +46,10 @@ export interface GraphTables {
   }
   // every departure from the reference over the cut, each once
   departures: DepartureTable
+  // how many nodes the reference's paths pass more than once, the walk file
+  // header's `revisited`, NaN where it states none: above 0, a run off R may
+  // be a copy of reference sequence the reference passes elsewhere
+  revisited: number
   // what lies between each walk's fragments, past its ends and in its
   // departures outside them, as docs/adr/0001 decides; absent from tables
   // another source builds

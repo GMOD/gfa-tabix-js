@@ -2319,6 +2319,32 @@ test("a cut's tables state the pass each step takes, NaN for a step off R", asyn
   ])
 })
 
+// copies.R's header states revisited:i:2, skip.GRCh38's revisited:i:0, and
+// the inline file's none
+test("a cut's tables carry the header's revisited count, NaN where it states none", async () => {
+  const revisited = async (walks: WalkReader, refName: string, end: number) => {
+    const { graph, kept, fragments, departures } = await walks.cut(
+      refName,
+      { start: 0, end },
+      { context: 0 },
+    )
+    return graph.tables(kept, fragments, departures).revisited
+  }
+  expect(await revisited(reader('copies.R'), 'R#0#chr', 36)).toBe(2)
+  expect(await revisited(reader('skip.GRCh38'), 'GRCh38#0#chr1', 100)).toBe(0)
+  expect(
+    await revisited(
+      inline([
+        '#walks format:i:8 tile:i:16',
+        '#reference R',
+        'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4 .',
+      ]),
+      'R#0#chr',
+      16,
+    ),
+  ).toBeNaN()
+})
+
 // The reference passes 2 and 3 twice, 6 bp nodes in one tile (early.R.gfa).
 // E's route to 8 names no `:k`, so it leaves from the first pass of 2 its walk
 // reaches, not the last:

@@ -89,6 +89,11 @@ const tables = graph.tables(kept, fragments, departures)
   its row names: `tables.walks.refStarts` gives every step's position on the
   reference, NaN for a step off it, so a reader of the tables never picks a pass
   itself
+- `tables.revisited` is the walk file header's `revisited`, how many nodes the
+  reference passes more than once, NaN where the header states none. Unless it
+  is 0, a run of steps off the reference may be a copy of reference sequence the
+  reference passes elsewhere, not sequence the reference lacks, so a reader of
+  the tables calls such a run the haplotype's own only where it is 0
 - A node off the reference lies on the walk whose name sorts first among the
   fragments and departures with a step on it, at the first such step. Like the
   links, it follows from what the cut returns, however the file is tiled or

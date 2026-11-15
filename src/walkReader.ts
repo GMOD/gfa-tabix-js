@@ -597,13 +597,16 @@ export class WalkReader {
     // the rows of tiles fetched to attach, which give records their own steps
     // and nothing else
     const attachRows: WalkRow[] = []
-    const graph = new WalkGraph({
-      refName,
-      start: region.start,
-      end: region.end,
-      context,
-      sequences: opts.sequences,
-    })
+    const graph = new WalkGraph(
+      {
+        refName,
+        start: region.start,
+        end: region.end,
+        context,
+        sequences: opts.sequences,
+      },
+      header.revisited,
+    )
     // the name filters each tile was decoded under, by its offset
     const decodedBy = new Map<number, ((name: string) => boolean)[]>()
     const decodedFor = (unit: WalkUnit, name: string) =>
