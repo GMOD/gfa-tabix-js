@@ -68,6 +68,10 @@ build ownendswhole ownends.R.gfa --refs R --tile 10
 build unbuiltwhole unbuilt.R.gfa --refs R --tile 60
 build edgewhole edge.R.gfa --refs R --tile 60
 build advwhole adv.R.gfa --refs R --tile 60
+build gapnan gapnan.R.gfa --refs R --tile 20 --abridge-bytes 1
+build gapnanwhole gapnan.R.gfa --refs R --tile 20 --abridge-steps 0 --abridge-bytes 0
+build secondline secondline.R.gfa --refs R --tile 20 --abridge-bytes 1
+build secondlinewhole secondline.R.gfa --refs R --tile 20 --abridge-steps 0 --abridge-bytes 0
 build extension/plain extension/follow.R.gfa --refs R --tile 100 --sequences --abridge-bytes 1
 addition() {
   local name=$1; shift
