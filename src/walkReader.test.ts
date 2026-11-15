@@ -104,7 +104,7 @@ const departure = (d: WalkDeparture) => [
 //   W HG002   1 chr1 >1>2>7>4>5>6   7 replaces 3
 //   W HG002   2 chr1 >1>2>3>4>8>6   8 replaces 5
 //   W HG00097 1 chr1 >1>2>3>4>5>6
-test('the header names the format, the reference, the haplotypes and the tile size, read from byte 0 and no tile', async () => {
+test('the header names the format, the reference, the haplotypes, the tile size, the graph and the lines left out, read from byte 0 and no tile', async () => {
   const read = vi.spyOn(LocalFile.prototype, 'read')
   try {
     const header = await reader('header.GRCh38').header()
@@ -114,6 +114,8 @@ test('the header names the format, the reference, the haplotypes and the tile si
       references: ['GRCh38'],
       haplotypes: ['HG00097#1', 'HG002#1', 'HG002#2'],
       holes: [],
+      graph: '84388ad9f4ab9098',
+      leftout: 0,
     })
     expect(read).toHaveBeenCalled()
     expect(read.mock.calls.map(([, position = 0]) => position)).toEqual(
@@ -2875,6 +2877,31 @@ test('tags a reader does not know are ignored on any row and header line', async
     return [fragments.map(fragment), departures.map(departure)]
   }
   expect(await attached(tagged(farAttach))).toEqual(await attached(farAttach))
+})
+
+// `stays` with the #walks line's graph:Z: and leftout:i: and without: the
+// header returns them where the file states them, and both cut alike
+test('a file that states its graph and the lines it leaves out cuts as one that does not', async () => {
+  const stated = stays.map(line =>
+    line.startsWith('#walks')
+      ? `${line} graph:Z:6f8a0816aa66e2d6 leftout:i:1`
+      : line,
+  )
+  const cut = async (lines: string[]) => {
+    const { graph, kept, fragments, departures } = await inline(lines).cut(
+      'R#0#chr',
+      { start: 4, end: 20 },
+      { context: 0 },
+    )
+    return graphTablesGFA(graph.tables(kept, fragments, departures))
+  }
+  const header = await inline(stated).header()
+  expect(header).toMatchObject({ graph: '6f8a0816aa66e2d6', leftout: 1 })
+  const plain = await inline(stays).header()
+  expect(plain.graph).toBeUndefined()
+  expect(plain.leftout).toBeUndefined()
+  expect({ ...plain, graph: header.graph, leftout: 1 }).toEqual(header)
+  expect(await cut(stated)).toEqual(await cut(stays))
 })
 
 // test_data/extension: one tile whose two walks the writer abridged, B#1#c

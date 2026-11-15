@@ -94,6 +94,9 @@ const tables = graph.tables(kept, fragments, departures)
   abridged and whichever tiles the cut read
 - `reader.header()` lists the reference sample and every haplotype with rows,
   and the tile size, `tile`, read from the walk file's header unit
+  - `graph` is the hash of the GFA's segments, as its node and link index states
+    it, and `leftout` how many of its lines have no rows in the file; each is
+    absent where the file doesn't state it
 - `reader.referenceSequences()` lists the sequences a region can be on, in full
   PanSN: `GRCh38#0#chr6`
 - `reader.units(refName)` is a sequence's unit table,

@@ -108,11 +108,17 @@ export interface WalkHeader {
   // how many nodes the reference's paths pass more than once: 0 states
   // every position and departure in the file as a fact of the graph
   revisited?: number
+  graph?: string
+  leftout?: number
 }
 
 function integerTag(line: string, tag: string) {
   const match = new RegExp(`(?:^|\\t)${tag}:i:(\\d+)`).exec(line)
   return match ? +match[1]! : undefined
+}
+
+function stringTag(line: string, tag: string) {
+  return new RegExp(`(?:^|\\t)${tag}:Z:([^\\t]+)`).exec(line)?.[1]
 }
 
 /**
@@ -140,6 +146,8 @@ export function walkHeader(lines: string[]): WalkHeader {
       header.format ??= integerTag(line, 'format')
       header.tile ??= integerTag(line, 'tile')
       header.revisited ??= integerTag(line, 'revisited')
+      header.graph ??= stringTag(line, 'graph')
+      header.leftout ??= integerTag(line, 'leftout')
     }
   }
   return header

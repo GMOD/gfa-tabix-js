@@ -250,6 +250,31 @@ test("a walk file's header states its format, tile, references, haplotypes and h
   })
 })
 
+test("a walk file's header states its graph and the lines it leaves out, by name in any order, and a file without them is read alike", () => {
+  const options =
+    'format:i:8\ttile:i:1000\trevisited:i:0\tstay:i:311\tabridge:i:1000000\tabridgebytes:i:3000000'
+  const stated = walkHeader([
+    `#walks\t${options}\tgraph:Z:6f8a0816aa66e2d6\tleftout:i:2`,
+    '#reference\tGRCh38',
+  ])
+  expect(stated).toMatchObject({
+    format: 8,
+    tile: 1000,
+    graph: '6f8a0816aa66e2d6',
+    leftout: 2,
+  })
+  expect(
+    walkHeader([
+      `#walks\tleftout:i:2\tgraph:Z:6f8a0816aa66e2d6\tzz:i:1\t${options.split('\t').toReversed().join('\t')}`,
+      '#reference\tGRCh38',
+    ]),
+  ).toEqual(stated)
+  const unstated = walkHeader([`#walks\t${options}`, '#reference\tGRCh38'])
+  expect(unstated.graph).toBeUndefined()
+  expect(unstated.leftout).toBeUndefined()
+  expect({ ...unstated, graph: stated.graph, leftout: 2 }).toEqual(stated)
+})
+
 describe('the byte budget', () => {
   const tile = 100
   // bytes a read from the window's first base to `end` fetches, 10 per tile
