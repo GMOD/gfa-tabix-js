@@ -469,18 +469,6 @@ function decodeWalk(
   return { ids, rev, refStarts, against, bp }
 }
 
-// A chunk as decoded, kept until the cut knows its nodes: tables() then
-// places the cut's nodes off R
-export interface Chunk {
-  path: RefPath
-  routes: Route[]
-  // walk rows in path-name order, choices parsed
-  walks: { cols: string[]; choices: number[] }[]
-  lengths: Map<number, number>
-  // for a detail record, the node lengths of its chunk's R, which it shares
-  refLengths?: Map<number, number>
-}
-
 export interface DecodedChunk {
   // node bases from the rows' SQ:Z: tags, when asked for
   sequences: Map<number, string>
@@ -490,11 +478,11 @@ export interface DecodedChunk {
   // gives
   abridged: AbridgedPiece[]
   // R's nodes with their positions, and the kept walks' nodes off R with
-  // their lengths, placed by placeOffR
+  // their lengths, which the cut's tables place
   nodes: Map<number, PlacedNode>
   // R's later passes over a node in `nodes`
   revisits: (PlacedNode & { id: number })[]
-  chunk: Chunk
+  path: RefPath
 }
 
 // The bases an SQ:Z: tag at or after column `from` joins, one node's per
@@ -999,7 +987,7 @@ export function decodeChunk(
     abridged: [],
     nodes: new Map(),
     revisits: [],
-    chunk: { path, routes, walks: [], lengths, refLengths: ref?.lengths },
+    path,
   }
   const placed = (id: number) =>
     out.nodes.has(id) || ref?.lengths.has(id) === true
@@ -1089,12 +1077,11 @@ export function decodeChunk(
     if (cols[3] !== 'walk') {
       continue
     }
-    const choices = parseChoices(cols[10]!)
-    out.chunk.walks.push({ cols, choices })
     const name = cols[4]!
     if (keep === undefined || keep(name)) {
+      const choices = parseChoices(cols[10]!)
       let interior = 0
-      // the walk's nodes off R, by length; placeOffR gives their position
+      // the walk's nodes off R, by length; the cut's tables place them
       for (let k = 0; k < choices.length; k += 4) {
         interior += routeOf(choices[k]!).interior.length
         for (const h of routeOf(choices[k]!).interior) {
@@ -1133,107 +1120,6 @@ export function decodeChunk(
     }
   }
   return out
-}
-
-/**
- * The positions of the cut's nodes off R, from the chunks a cut read: `kept`
- * holds the node ids the cut draws. A node off R takes its position from the
- * path whose name sorts first among those visiting it in the chunks read, at
- * its earliest offset, as format 1's node rows had it. A node on any read
- * chunk's R keeps its reference position, even where another chunk's route
- * steps on it.
- */
-export function placeOffR(
-  chunks: Chunk[],
-  kept: Set<number>,
-  place: (id: number, node: PlacedNode) => void,
-) {
-  const offR = new Set<number>()
-  for (const id of kept) {
-    if (!chunks.some(({ path }) => path.occurrences.has(id))) {
-      offR.add(id)
-    }
-  }
-  const best = new Map<number, PlacedNode>()
-  for (const { path, routes, walks, lengths, refLengths } of chunks) {
-    // routes holding a node of the cut off R
-    const wanted = Uint8Array.from(routes, ({ interior }) =>
-      interior.some(h => offR.has(idOf(h))) ? 1 : 0,
-    )
-    const lengthOf = (h: number) =>
-      lengths.get(idOf(h)) ?? refLengths?.get(idOf(h)) ?? 0
-    const bp = new Float64Array(routes.length).fill(-1)
-    const routeBp = (index: number) => {
-      if (bp[index]! < 0) {
-        bp[index] = routes[index]!.interior.reduce((s, h) => s + lengthOf(h), 0)
-      }
-      return bp[index]!
-    }
-    // Walk rows run in path-name order, so a route's first taker is the
-    // first-named path to reach its nodes here; each row is followed only as
-    // far as the last route it is first to take
-    const taken = new Uint8Array(routes.length)
-    for (const { cols, choices } of walks) {
-      let remaining = 0
-      for (let k = 0; k < choices.length; k += 4) {
-        const index = choices[k]!
-        if (wanted[index]! !== 0 && taken[index] === 0) {
-          remaining++
-        }
-      }
-      if (remaining === 0) {
-        continue
-      }
-      const name = cols[4]!
-      let offset = +cols[6]!
-      const [start, startCopy] = parseCopy(cols[9]!)
-      traverse(path, routes, start, startCopy, choices, +cols[8]!, {
-        step(h) {
-          offset += lengthOf(h)
-        },
-        stretch(from, to, forward) {
-          offset += forward
-            ? path.bp(to + 1) - path.bp(from + 1)
-            : path.bp(from) - path.bp(to)
-        },
-        route(index, flip) {
-          if (wanted[index] === 0 || taken[index]! !== 0) {
-            offset += routeBp(index)
-            return true
-          }
-          taken[index] = 1
-          const route = routes[index]!
-          for (let k = 0; k < route.interior.length; k++) {
-            const h = interiorAt(route, flip, k)
-            const id = idOf(h)
-            const length = lengthOf(h)
-            if (offR.has(id)) {
-              const held = best.get(id)
-              if (
-                !held ||
-                name < held.refName ||
-                (name === held.refName && offset < held.start)
-              ) {
-                best.set(id, {
-                  refName: name,
-                  start: offset,
-                  end: offset + length,
-                  rank: 1,
-                  passes: 0,
-                })
-              }
-            }
-            offset += length
-          }
-          remaining--
-          return remaining > 0
-        },
-      })
-    }
-  }
-  for (const [id, node] of best) {
-    place(id, node)
-  }
 }
 
 // The reference's nodes in a chunk's ref rows, with their positions

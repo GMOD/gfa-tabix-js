@@ -1,6 +1,6 @@
 import { BlobFile, LocalFile } from 'generic-filehandle2'
 
-import { bgzf, graphTablesGFA, walkFileOf } from './testing.ts'
+import { bgzf, digestOf, graphTablesGFA, walkFileOf } from './testing.ts'
 import { RegionTooLargeError, panSNHaplotype } from './util.ts'
 import { WalkRowError, canonicalLink } from './walkChunk.ts'
 import { departureKind, placementChoice } from './walkDeparture.ts'
@@ -1158,20 +1158,102 @@ test('an expanded walk is read from its detail records as the unabridged file cu
   ])
 })
 
+async function expandedFacts(
+  name: string,
+  refName: string,
+  span: { start: number; end: number },
+  mode: { contained: boolean; context: number },
+) {
+  const cut = await reader(name).cut(refName, span, {
+    ...mode,
+    expand: () => true,
+  })
+  const tables = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+    cut.gaps,
+  )
+  return {
+    gfa: graphTablesGFA(tables),
+    tables,
+    fragments: cut.fragments.toSorted(
+      (a, b) =>
+        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
+        a.fragStart - b.fragStart ||
+        a.hapStart - b.hapStart,
+    ),
+    departures: cut.departures,
+    gaps: cut.gaps,
+  }
+}
+
+test.each([
+  ['detailtwice.R', 'detailtwicewhole.R'],
+  ['sortsfirst.R', 'sortsfirstwhole.R'],
+  ['ownends.R', 'ownendswhole.R'],
+  ['unbuilt.R', 'unbuiltwhole.R'],
+])(
+  'every window of %s, expanding every walk, cuts as %s, its graph built without abridging, does',
+  async (abridged, whole) => {
+    const differ: string[] = []
+    for (const refName of await reader(abridged).referenceSequences()) {
+      const length = await reader(abridged).sequenceLength(refName)
+      const step = Math.ceil(length / 12)
+      for (const mode of [
+        { contained: false, context: 0 },
+        { contained: true, context: 0 },
+        { contained: false, context: step },
+        { contained: true, context: step },
+      ]) {
+        for (let start = 0; start < length; start += step) {
+          for (let end = start + step; end < length + step; end += step) {
+            const span = { start, end: Math.min(end, length) }
+            const [a, b] = await Promise.all([
+              expandedFacts(abridged, refName, span, mode),
+              expandedFacts(whole, refName, span, mode),
+            ])
+            if (digestOf(a) !== digestOf(b)) {
+              differ.push(
+                `${refName}:${span.start}-${span.end} ${JSON.stringify(mode)}`,
+              )
+            }
+          }
+        }
+      }
+    }
+    expect(differ).toEqual([])
+  },
+)
+
+async function placedOf20(name: string, start: number, end: number) {
+  const { graph, kept, fragments, departures } = await reader(name).cut(
+    'R#0#c',
+    { start, end },
+    { context: 0, expand: () => true },
+  )
+  const { nodes } = graph.tables(kept, fragments, departures)
+  const k = nodes.names.indexOf('20')
+  return [nodes.refNames[nodes.refs[k]!], nodes.starts[k]]
+}
+
 // detailtwice.R in 40 bp tiles: H walks 1, its own 20, 2, then 9 and 10 in
 // tile 80, then 3, its own 20 again, and 4. Its two pieces in tile 0 are one
 // detail unit
-test('a node off the reference takes its offset from the detail rows a cut builds, not from another piece of their unit', async () => {
-  const placed = async (start: number, end: number) => {
-    const { graph, kept, fragments, departures } = await reader(
-      'detailtwice.R',
-    ).cut('R#0#c', { start, end }, { context: 0, expand: () => true })
-    const { nodes } = graph.tables(kept, fragments, departures)
-    const k = nodes.names.indexOf('20')
-    return [nodes.refNames[nodes.refs[k]!], nodes.starts[k]]
+test('a node off the reference lies at the first step on it that the cut returns, as the file built without abridging has it', async () => {
+  for (const name of ['detailtwice.R', 'detailtwicewhole.R']) {
+    expect(await placedOf20(name, 20, 40)).toEqual(['H#1#h', 55])
+    expect(await placedOf20(name, 0, 40)).toEqual(['H#1#h', 10])
   }
-  expect(await placed(20, 40)).toEqual(['H#1#h', 55])
-  expect(await placed(0, 40)).toEqual(['H#1#h', 10])
+})
+
+// sortsfirst.R in one 40 bp tile: A walks 1, its own 20 and 2, Z walks 3, its
+// own 20 and 4, each abridged to a detail unit of its own
+test('a node off the reference takes no place from a walk the cut returns no step of', async () => {
+  for (const name of ['sortsfirst.R', 'sortsfirstwhole.R']) {
+    expect(await placedOf20(name, 20, 40)).toEqual(['Z#1#z', 10])
+    expect(await placedOf20(name, 0, 40)).toEqual(['A#1#a', 10])
+  }
 })
 
 test('the reference sequences leave out detail records and departures', async () => {

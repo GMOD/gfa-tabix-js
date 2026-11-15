@@ -86,6 +86,10 @@ const tables = graph.tables(kept, fragments, departures)
 - A node the reference passes more than once, as in a collapsed repeat, takes
   the position of its pass over the window, and each walk's step on it the pass
   its row names
+- A node off the reference lies on the walk whose name sorts first among the
+  fragments and departures with a step on it, at the first such step. Like the
+  links, it follows from what the cut returns, however the file is tiled or
+  abridged and whichever tiles the cut read
 - `reader.header()` lists the reference sample and every haplotype with rows,
   and the tile size, `tile`, read from the walk file's header unit
 - `reader.referenceSequences()` lists the sequences a region can be on, in full
@@ -129,6 +133,10 @@ record's own steps in a tile fetched to attach them.
   where the file kept their rows in a tile, and a link between the reference's
   neighbouring rows of a tile, which the graph may not have. A cut of a few
   haplotypes so lists fewer links than it did
+- **Nodes off the reference:** each lies at a step the cut returns
+  ([Usage](#usage)). graph-walks 6 placed one by every walk row of the tiles a
+  cut read, so a walk the cut left out, or a piece of an abridged walk it did
+  not build, could place it
 - **`WalkFragment.abridged`** is a list, one `{ steps, detail }` per piece of
   the fragment the cut did not load, in the walk's order, and `unloadedSteps`
   counts the fragment's steps that are theirs. The fragment is an ordinary one:

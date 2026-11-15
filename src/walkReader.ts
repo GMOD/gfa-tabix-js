@@ -682,7 +682,6 @@ export class WalkReader {
         graph.placeNode(id, node)
       }
       graph.addSequences(tileCut.sequences)
-      graph.addChunk(tileCut.chunk)
       checkNodes(tileCut, readTo)
     }
     // a tile is decoded into `into`, with its nodes and the links between
@@ -705,7 +704,7 @@ export class WalkReader {
         name => wanted(name) && !earlier.some(took => took(name)),
         opts.sequences,
       )
-      const { path } = tileCut.chunk
+      const { path } = tileCut
       const hull = into === rows ? path.hull(drawn) : undefined
       over.start = Math.min(over.start, hull?.start ?? over.start)
       over.end = Math.max(over.end, hull?.end ?? over.end)
@@ -749,19 +748,7 @@ export class WalkReader {
         }
         into.push(row)
       }
-      place(
-        {
-          ...tileCut,
-          rows: taken,
-          chunk: {
-            ...tileCut.chunk,
-            walks: tileCut.chunk.walks.filter(({ cols }) =>
-              pieces.has(pieceKey(cols[4] ?? '', cols[5] ?? '', cols[7] ?? '')),
-            ),
-          },
-        },
-        piece.chunkStart + tile,
-      )
+      place({ ...tileCut, rows: taken }, piece.chunkStart + tile)
     }
     const onDrawn = (span: { start: number; end: number }) =>
       span.start < over.end && span.end > over.start

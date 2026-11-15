@@ -1252,7 +1252,7 @@ test('own steps beside a leave or rejoin that is no edge of a node of the tileâ€
 // own, then 2, 9 and 3, a block of which a cut over 1 keeps the end steps.
 // The format does not refuse a 0 bp step, though gfa-to-tabix writes none
 test('the steps an unloaded piece leaves out of a block stand as a skipped step, though they hold 0 bp', () => {
-  const { abridged, chunk } = decodeChunk(
+  const { abridged, path } = decodeChunk(
     [
       'R#0#c\t0\t30\tref\tR#0#c\t0\t0\t0\t4\t2,2,14,-12\t10,10,0,10\t.',
       'R#0#c\t0\t30\tabridged\tW#1#c\t0\t0\t0\t5\t38\t0',
@@ -1263,7 +1263,7 @@ test('the steps an unloaded piece leaves out of a block stand as a skipped step,
   const { row } = unloadedRow(
     abridged[0]!,
     parseBlocks('R#0#c\t0\t30\tblocks\tW#1#c\t0\t0\t0+10,8,0+20'.split('\t')),
-    chunk.path,
+    path,
     { start: 0, end: 10 },
     [0, 0],
     () => -1,

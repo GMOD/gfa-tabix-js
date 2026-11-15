@@ -4,7 +4,7 @@ import {
   panSNHaplotypeOrSample,
   panSNMatchesPrefix,
 } from './util.ts'
-import { SKIPPED, placeOffR } from './walkChunk.ts'
+import { SKIPPED } from './walkChunk.ts'
 import {
   ATTACH_BP,
   adjacentSteps,
@@ -14,7 +14,6 @@ import {
 import { GAP_KINDS, walkGaps } from './walkGaps.ts'
 
 import type { DepartureTable, GapTable, GraphTables } from './util.ts'
-import type { Chunk } from './walkChunk.ts'
 import type {
   DepartureEnds,
   DepartureRecord,
@@ -1016,8 +1015,6 @@ export class WalkGraph {
   readonly nodes = new Map<number, WalkNode>()
   readonly sequences = new Map<number, string>()
   private links: number[] = []
-  // the chunks read, whose nodes off R tables() places
-  private readonly chunks: Chunk[] = []
 
   private readonly window: WalkWindow
 
@@ -1048,10 +1045,6 @@ export class WalkGraph {
     this.links.push(source, target)
   }
 
-  addChunk(chunk: Chunk) {
-    this.chunks.push(chunk)
-  }
-
   // Bases of nodes a chunk's rows give, for a window that asks for them
   addSequences(sequences: Map<number, string>) {
     if (this.window.sequences === true) {
@@ -1074,14 +1067,7 @@ export class WalkGraph {
     departures: WalkDeparture[],
     gaps: WalkGap[] = [],
   ): GraphTables {
-    if (this.chunks.length > 0) {
-      placeOffR(this.chunks, kept, (id, node) => {
-        const held = this.nodes.get(id)
-        if (held) {
-          this.nodes.set(id, { ...held, ...node })
-        }
-      })
-    }
+    this.placeOffReference(kept, fragments, departures)
     const held: (WalkNode & { id: number })[] = []
     for (const id of kept) {
       const node = this.nodes.get(id)
@@ -1214,6 +1200,59 @@ export class WalkGraph {
       },
       departures: departureTable(departures, nodeIndex, stepsOf),
       gaps: gapTable(gaps, new Map(walks.map((f, p) => [f, p])), nodeIndex),
+    }
+  }
+
+  private placeOffReference(
+    kept: Set<number>,
+    fragments: WalkFragment[],
+    departures: WalkDeparture[],
+  ) {
+    const lengthOf = (id: number) => {
+      const node = this.nodes.get(id)
+      return node ? node.end - node.start : 0
+    }
+    const placed = new Map<number, WalkNode>()
+    const visit = (name: string, ids: Int32Array, start: number) => {
+      let at = start
+      for (const id of ids) {
+        const node = this.nodes.get(id)
+        const length = lengthOf(id)
+        const held = placed.get(id)
+        if (
+          node &&
+          node.rank !== 0 &&
+          !node.placeholder &&
+          kept.has(id) &&
+          (!held ||
+            name < held.refName ||
+            (name === held.refName && at < held.start))
+        ) {
+          placed.set(id, {
+            ...node,
+            refName: name,
+            start: at,
+            end: at + length,
+          })
+        }
+        at += length
+      }
+    }
+    for (const f of fragments) {
+      visit(f.name, f.ids, f.hapStart)
+    }
+    for (const d of departures) {
+      if (d.steps) {
+        const { ids } = d.steps
+        const leaving = ids.subarray(0, d.breakAt ?? ids.length)
+        const rejoining = ids.subarray(leaving.length)
+        const rejoiningBp = rejoining.reduce((sum, id) => sum + lengthOf(id), 0)
+        visit(d.name, leaving, d.hapStart)
+        visit(d.name, rejoining, d.hapStart + d.ownBp - rejoiningBp)
+      }
+    }
+    for (const [id, node] of placed) {
+      this.nodes.set(id, node)
     }
   }
 

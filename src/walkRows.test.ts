@@ -514,7 +514,7 @@ test('a cut is written as the GFA its tables stand for, with the departures over
     'H\tVN:Z:1.1',
     'S\t2\t*\tLN:i:100\tSN:Z:GRCh38#0#chr1\tSO:i:100\tSR:i:0',
     'S\t3\t*\tLN:i:100\tSN:Z:GRCh38#0#chr1\tSO:i:200\tSR:i:0',
-    'S\t5\t*\tLN:i:100\tSN:Z:HG002#1#chr1\tSO:i:1000\tSR:i:1',
+    'S\t5\t*\tLN:i:100\tSN:Z:HG002#1#chr1\tSO:i:100\tSR:i:1',
     'L\t2\t+\t3\t+\t0M',
     'L\t2\t+\t5\t+\t0M',
     'L\t5\t+\t3\t+\t0M',
