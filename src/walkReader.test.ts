@@ -1250,6 +1250,7 @@ test.each([
   ['edge.R', 'edgewhole.R'],
   ['adv.R', 'advwhole.R'],
   ['gapnan.R', 'gapnanwhole.R'],
+  ['secondline.R', 'secondlinewhole.R'],
 ])(
   'every window of %s, expanding every walk, cuts as %s, its graph built without abridging, does',
   async (abridged, whole) => {
@@ -1359,14 +1360,19 @@ test.each([
   },
 )
 
-async function placedOf20(name: string, start: number, end: number) {
+async function placedOf(
+  name: string,
+  node: string,
+  start: number,
+  end: number,
+) {
   const { graph, kept, fragments, departures } = await reader(name).cut(
     'R#0#c',
     { start, end },
     { context: 0, expand: () => true },
   )
   const { nodes } = graph.tables(kept, fragments, departures)
-  const k = nodes.names.indexOf('20')
+  const k = nodes.names.indexOf(node)
   return [nodes.refNames[nodes.refs[k]!], nodes.starts[k]]
 }
 
@@ -1375,8 +1381,8 @@ async function placedOf20(name: string, start: number, end: number) {
 // detail unit
 test('a node off the reference lies at the first step on it that the cut returns, as the file built without abridging has it', async () => {
   for (const name of ['detailtwice.R', 'detailtwicewhole.R']) {
-    expect(await placedOf20(name, 20, 40)).toEqual(['H#1#h', 55])
-    expect(await placedOf20(name, 0, 40)).toEqual(['H#1#h', 10])
+    expect(await placedOf(name, '20', 20, 40)).toEqual(['H#1#h', 55])
+    expect(await placedOf(name, '20', 0, 40)).toEqual(['H#1#h', 10])
   }
 })
 
@@ -1384,8 +1390,19 @@ test('a node off the reference lies at the first step on it that the cut returns
 // own 20 and 4, each abridged to a detail unit of its own
 test('a node off the reference takes no place from a walk the cut returns no step of', async () => {
   for (const name of ['sortsfirst.R', 'sortsfirstwhole.R']) {
-    expect(await placedOf20(name, 20, 40)).toEqual(['Z#1#z', 10])
-    expect(await placedOf20(name, 0, 40)).toEqual(['A#1#a', 10])
+    expect(await placedOf(name, '20', 20, 40)).toEqual(['Z#1#z', 10])
+    expect(await placedOf(name, '20', 0, 40)).toEqual(['A#1#a', 10])
+  }
+})
+
+// secondline.R in 20 bp tiles: R walks 1 to 4, each 10 bp. H's first W line
+// walks 1, 2 and its own 50 of 5 bp to 25, its second starts at 40 with its
+// own 51 of 5 bp, then 3 and 4. Its record from 2 to 3 holds 50 and 51,
+// breaking between them, with the 15 bp between the lines missing
+test("a departure's steps that lead to its rejoin lie where its walk has them, past the sequence its record is missing", async () => {
+  for (const name of ['secondline.R', 'secondlinewhole.R']) {
+    expect(await placedOf(name, '50', 10, 30)).toEqual(['H#1#h', 20])
+    expect(await placedOf(name, '51', 10, 30)).toEqual(['H#1#h', 40])
   }
 })
 
