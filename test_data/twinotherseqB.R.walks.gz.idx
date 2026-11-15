@@ -1,4 +1,4 @@
-#walks	format:i:8	tile:i:12	revisited:i:0	stay:i:0	abridge:i:1000000	abridgebytes:i:1	bytes:i:1637
-#header	0	120
-R#0#chr1	1019	190
-R#0#chr2	1495	114
+#walks	format:i:8	tile:i:12	revisited:i:0	stay:i:0	abridge:i:1000000	abridgebytes:i:1	graph:Z:d668065d4e061fa2	leftout:i:0	bytes:i:1664
+#header	0	147
+R#0#chr1	1046	190
+R#0#chr2	1522	114
