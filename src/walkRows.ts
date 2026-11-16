@@ -1404,7 +1404,7 @@ export const BUDGET_NAMES: BudgetNames = {
 // the read budget counts it as a quarter
 const ALONG_R_PER_STEP = 4
 
-const readSteps = (row: WalkRow) => {
+export const readSteps = (row: Pick<WalkRow, 'n' | 'interior'>) => {
   const interior = row.interior ?? 0
   return interior + (row.n - interior) / ALONG_R_PER_STEP
 }
@@ -1420,7 +1420,7 @@ const readSteps = (row: WalkRow) => {
  * whole window.
  */
 export function stepBudgetError(
-  rows: WalkRow[],
+  rows: Pick<WalkRow, 'n' | 'interior' | 'chunkStart' | 'name'>[],
   stepBudget: number,
   readPerKept: number,
   window: { start: number; end: number },

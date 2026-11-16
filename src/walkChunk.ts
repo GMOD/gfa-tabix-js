@@ -10,7 +10,7 @@ import type { Abridged, WalkRow } from './walkRows.ts'
 // record. A `ref` row's `passes` say how many times the reference passes each
 // of its steps' nodes. A handle is 2 * id + 1 when reversed.
 
-const NONE = -1
+export const NONE = -1
 
 export interface Route {
   entry: number
@@ -31,12 +31,12 @@ export interface PlacedNode {
   placeholder?: true
 }
 
-const idOf = (handle: number) => (handle - (handle & 1)) / 2
+export const idOf = (handle: number) => (handle - (handle & 1)) / 2
 
 // so an id fits an Int32Array, clear of the negative ids placeholders take
 const ID_LIMIT = 2 ** 31
 
-function checkedId(id: number) {
+export function checkedId(id: number) {
   if (id < 0 || id >= ID_LIMIT) {
     throw new WalkRowError(
       `a row holds node id ${id}, where walk format 8 allows ids from 0 to below 2^31`,
@@ -50,7 +50,7 @@ const otherStrand = (handle: number) => (handle & 1 ? handle - 1 : handle + 1)
 
 // The handles a column of delta tokens names, each 2 * (id - previous id) +
 // reverse, from `previous.id`, which ends on the last id read
-function tokens(field: string, previous: { id: number }, out: number[]) {
+export function tokens(field: string, previous: { id: number }, out: number[]) {
   if (field === '.') {
     return out
   }
@@ -74,13 +74,13 @@ function tokens(field: string, previous: { id: number }, out: number[]) {
   return out
 }
 
-function numbers(field: string) {
+export function numbers(field: string) {
   return field === '.' ? [] : field.split(',').map(Number)
 }
 
 // A ref row's `passes`: how many times the reference's paths pass each
 // step's node, `.` when every one is 1
-function passCounts(cols: string[], n: number) {
+export function passCounts(cols: string[], n: number) {
   const field = cols[11]
   const counts =
     field === '.' ? new Array<number>(n).fill(1) : numbers(field ?? '')
@@ -103,7 +103,7 @@ export function canonicalLink(a: number, b: number): [number, number] {
 }
 
 // A handle token and the occurrence in R its `@k` names, NONE for the default
-function parseCopy(token: string): [number, number] {
+export function parseCopy(token: string): [number, number] {
   const at = token.indexOf('@')
   return at < 0 ? [+token, NONE] : [+token.slice(0, at), +token.slice(at + 1)]
 }
@@ -266,14 +266,14 @@ const orientedExit = (route: Route, flip: boolean) =>
   flip ? (route.entry === NONE ? NONE : otherStrand(route.entry)) : route.exit
 
 // A route's interior handle k, taken the way round `flip` says
-const interiorAt = (route: Route, flip: boolean, k: number) =>
+export const interiorAt = (route: Route, flip: boolean, k: number) =>
   flip
     ? otherStrand(route.interior[route.interior.length - 1 - k]!)
     : route.interior[k]!
 
 // A walk row's choices, four numbers each: route index, flip, and the
 // occurrences its `:k` and `@k` name, NONE for the defaults
-function parseChoices(field: string) {
+export function parseChoices(field: string) {
   const choices: number[] = []
   if (field !== '.') {
     let previous = 0
@@ -315,7 +315,7 @@ function parseChoices(field: string) {
 }
 
 // Follows a walk row of `n` steps as docs/walks-format.md decodes it
-function traverse(
+export function traverse(
   path: RefPath,
   routes: Route[],
   start: number,
@@ -509,7 +509,7 @@ function sliceBases(
 // An `abridged` line, `path fragStart hapOffset piece nsteps hapBp detail`: a
 // piece the writer moved to a detail record, with its span on R and its bp
 // on its contig
-function abridgedPiece(cols: string[], tileStart: number) {
+export function abridgedPiece(cols: string[], tileStart: number) {
   const count = (k: number, least = 0) => {
     const n = Number(cols[k])
     if (
@@ -768,20 +768,15 @@ export function blocksOver(
   return { first, last }
 }
 
-// The walk row of an abridged piece the cut does not load: blocks `core[0]`
-// to `core[1]` whole, and of the rest its end steps and each departure that
-// can lie over `over`, a SKIPPED step for what lies between. No departure
-// across a SKIPPED step lies over `over`, so none a cut computes there is one
-// it returns
-export function unloadedRow(
+// The positions of R each block of a piece's blocks row covers, from[k] up to
+// to[k], whole steps over exactly the block's stretch, the blocks together
+// spanning what the piece's abridged row states
+export function blockPositions(
   piece: AbridgedPiece,
   blocks: PieceBlocks,
   path: RefPath,
-  over: { start: number; end: number },
-  core: [number, number] | undefined,
-  placeholder: (start: number, end: number) => number,
 ) {
-  const { name, abridged } = piece
+  const { name } = piece
   const count = blocks.begins.length
   const from = new Int32Array(count)
   const to = new Int32Array(count)
@@ -812,6 +807,25 @@ export function unloadedRow(
       `${name}'s blocks row, piece ${piece.piece}, spans [${low}, ${high}) and its abridged row [${piece.span.start}, ${piece.span.end})`,
     )
   }
+  return { from, to }
+}
+
+// The walk row of an abridged piece the cut does not load: blocks `core[0]`
+// to `core[1]` whole, and of the rest its end steps and each departure that
+// can lie over `over`, a SKIPPED step for what lies between. No departure
+// across a SKIPPED step lies over `over`, so none a cut computes there is one
+// it returns
+export function unloadedRow(
+  piece: AbridgedPiece,
+  blocks: PieceBlocks,
+  path: RefPath,
+  over: { start: number; end: number },
+  core: [number, number] | undefined,
+  placeholder: (start: number, end: number) => number,
+) {
+  const { name, abridged } = piece
+  const count = blocks.begins.length
+  const { from, to } = blockPositions(piece, blocks, path)
   const inCore = (k: number) =>
     core !== undefined && k >= core[0] && k <= core[1]
   const joined = (k: number) =>
@@ -941,7 +955,7 @@ export function unloadedRow(
   return { row, nodes }
 }
 
-const refRows = (rows: string[][]) =>
+export const refRows = (rows: string[][]) =>
   rows.filter(c => c[3] === 'ref').sort((a, b) => +a[6]! - +b[6]!)
 
 // A chunk's R and its nodes' lengths, which its detail records share
