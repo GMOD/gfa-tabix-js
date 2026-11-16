@@ -56,6 +56,8 @@ build revref revref.gfa --refs GRCh38 --abridge-bytes 1
 build cover cover.R.gfa --refs R --abridge-bytes 1
 build counts counts.R.gfa --refs R --tile 20
 build countsabridged counts.R.gfa --refs R --tile 20 --abridge-steps 4
+build twocontigs twocontigs.R.gfa --refs R --tile 20
+build contained contained.R.gfa --refs R --tile 40 --abridge-bytes 1
 for twin in twinmidlineA twinmidlineB twinotherseqA twinotherseqB twinown690 twinown700 pickwrong twopieces twopiecesonetile; do
   build "$twin" "$twin.R.gfa" --refs R --tile 12 --stay 0 --abridge-bytes 1
 done

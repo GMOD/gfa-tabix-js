@@ -228,6 +228,55 @@ test('a step budget that stops expanding leaves the rest unloaded, and says so',
   expect(fits).toEqual(twin)
 })
 
+// twocontigs.R.gfa: R walks nodes 1 to 5, 10 bp each. H#1 walks 1 to 3 on
+// contig a and 2 to 4 on contig b; H#2 takes 6 between 2 and 3 on both of
+// its contigs; G walks R
+test('a haplotype whose two contigs step a node counts once, and each step is a pass', async () => {
+  const counts = await countsOf('twocontigs', { start: 0, end: 50 })
+  expect(counts.haplotypes.file).toBe(4)
+  expect(nodeCount(counts, 2)).toEqual({
+    haplotypes: 4,
+    passes: 6,
+    haplotypeReasons: [],
+    passReasons: [],
+  })
+  expect(linkCount(counts, '>2', '>3')).toEqual([
+    { haplotypes: 3, passes: 4, haplotypeReasons: [], passReasons: [] },
+  ])
+  expect(nodeCount(counts, 6)).toEqual({
+    haplotypes: 1,
+    passes: 2,
+    haplotypeReasons: ['elsewhere'],
+    passReasons: ['elsewhere'],
+  })
+})
+
+// contained.R.gfa, a random graph of the review of counts: R walks chrA
+// twice, and H5#1 alone takes >10>13, written <13<10, off the reference
+test('a contained count with context takes the piece before the drawn stretch that a contained cut keeps', async () => {
+  const path = `${DATA}contained.R.walks.gz`
+  const reader = WalkReader.fromFilehandles({
+    data: new LocalFile(path),
+    directory: new LocalFile(`${path}.idx`),
+  })
+  const opts = { context: 3, contained: true, expand: () => true }
+  const region = { start: 44, end: 61 }
+  const cut = await reader.cut('R#0#chrA', region, opts)
+  const { nodes, links } = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+  )
+  const cutLinks = [...links.from].map((i, k) =>
+    [nodes.names[i], nodes.names[links.to[k]!]].join(' and '),
+  )
+  expect(cutLinks).toContain('10 and 13')
+  const counts = await reader.counts('R#0#chrA', region, opts)
+  expect(linkCount(counts, '>10', '>13')).toMatchObject([
+    { haplotypes: 1, passes: 1 },
+  ])
+})
+
 test('counts past the step budget say what the window holds and what to do instead, offering no choice of haplotypes', async () => {
   await expect(
     countsOf('counts', { start: 0, end: 80 }, { stepBudget: 1 }),
