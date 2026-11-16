@@ -36,6 +36,22 @@ export const unitsRead = (
 export const bytesRead = (reads: { length: number }[]) =>
   reads.reduce((sum, read) => sum + read.length, 0)
 
+// The byte ranges `reads` cover, merged where they touch or overlap
+export function rangesRead(reads: { position: number; length: number }[]) {
+  const ranges: { start: number; end: number }[] = []
+  for (const { position, length } of [...reads].sort(
+    (a, b) => a.position - b.position,
+  )) {
+    const last = ranges.at(-1)
+    if (last && position <= last.end) {
+      last.end = Math.max(last.end, position + length)
+    } else {
+      ranges.push({ start: position, end: position + length })
+    }
+  }
+  return ranges
+}
+
 // Each placeholder of a cut as its id and its run's name: a node flagged one
 // by the stretch it states, and a placeholder step of a fragment by where the
 // fragment walks it

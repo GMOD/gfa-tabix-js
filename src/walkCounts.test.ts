@@ -1,6 +1,7 @@
 import { LocalFile } from 'generic-filehandle2'
 import { expect, test } from 'vitest'
 
+import { rangesRead, readsOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import { countReasons } from './walkCounts.ts'
 import { DepartureReadError, WalkReader } from './walkReader.ts'
@@ -225,4 +226,24 @@ test('a step budget that stops expanding leaves the rest unloaded, and says so',
     stepBudget: 1000,
   })
   expect(fits).toEqual(twin)
+})
+
+// between.R.gfa: MID#1 walks 7 and 8, jumps back to 1, takes 27 and jumps on
+// to 9, each piece abridged; its two records own no steps, so the pieces
+// either side of each only touch them
+test('counts that expand every walk read the bytes an expanded cut of every walk reads, and no piece that only touches own steps', async () => {
+  const path = `${DATA}between.R.walks.gz`
+  const data = new LocalFile(path)
+  const reader = WalkReader.fromFilehandles({
+    data,
+    directory: new LocalFile(`${path}.idx`),
+  })
+  await reader.units('R#0#c')
+  const reads = readsOf(data)
+  const region = { start: 20, end: 100 }
+  const opts = { context: 0, expand: () => true }
+  await reader.counts('R#0#c', region, opts)
+  const counted = reads.splice(0)
+  await reader.cut('R#0#c', region, opts)
+  expect(rangesRead(counted)).toEqual(rangesRead(reads))
 })

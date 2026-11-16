@@ -1268,7 +1268,7 @@ export class WalkReader {
     }
     const holdsOwn = (name: string, start: number, end: number) =>
       (ownOf.get(name) ?? []).some(
-        d => start <= d.hapStart + d.ownBp && end >= d.hapStart,
+        d => start < d.hapStart + d.ownBp && end > d.hapStart,
       )
     const pieces: CountPiece[] = parsed.flatMap((unit, k) => [
       ...unit.walks.map(walk => ({ unit, tile: tiles[k]!, walk })),
