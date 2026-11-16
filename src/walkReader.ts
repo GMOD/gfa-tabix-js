@@ -2,6 +2,7 @@ import { RemoteFile } from 'generic-filehandle2'
 
 import { refNameLookup, resolveRefName } from './refNames.ts'
 import { checkRange } from './tabixSource.ts'
+import { panSNHaplotypeOrSample } from './util.ts'
 import {
   blocksOver,
   bpRow,
@@ -14,6 +15,7 @@ import {
   referenceNodes,
   unloadedRow,
 } from './walkChunk.ts'
+import { WalkTally } from './walkCounts.ts'
 import {
   ATTACH_BP,
   attachesOwnSteps,
@@ -31,6 +33,7 @@ import {
   keptNodesError,
   keptStepsError,
   megabytes,
+  readSteps,
   runName,
   stepBudgetError,
   surelyKept,
@@ -47,6 +50,7 @@ import type {
   PlacedNode,
   RefPath,
 } from './walkChunk.ts'
+import type { CountUnit, CountWalk } from './walkCounts.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkFilehandle, WalkUnit } from './walkFile.ts'
 import type { BudgetNames, WalkHeader, WalkRow } from './walkRows.ts'
@@ -184,6 +188,19 @@ export interface WalkCutOptions {
   // the records of the pieces whose steps it keeps or attaches
   expand?: (name: string) => boolean
 }
+
+export type WalkCountOptions = Pick<
+  WalkCutOptions,
+  | 'signal'
+  | 'context'
+  | 'contained'
+  | 'attachBp'
+  | 'stepBudget'
+  | 'byteBudget'
+  | 'departureByteBudget'
+  | 'expand'
+  | 'budgetNames'
+>
 
 export interface RegionCutOptions extends Omit<WalkCutOptions, 'keep'> {
   // the `sample#haplotype` walks to keep beside the reference; every walk when
@@ -336,6 +353,15 @@ function beforeDrawn<T>(lines: LinePiece<T>[][]) {
   }
   return before
 }
+
+// A piece of a window's tile the counts may read: a walk row, or an abridged
+// row
+type CountPiece = { unit: CountUnit; tile: WalkUnit } & (
+  | { walk: CountWalk; moved?: undefined }
+  | { moved: AbridgedPiece; walk?: undefined }
+)
+
+const split = (lines: string[]) => lines.map(line => line.split('\t'))
 
 const keptNodes = (kept: Set<number>) => {
   let count = 0
@@ -1129,6 +1155,398 @@ export class WalkReader {
       gaps: cut.gapsOf(),
       placeholders: kept.size - keptNodes(kept),
     }
+  }
+
+  /**
+   * How many of the file's haplotypes step each node and link over `region`,
+   * and how often, read as a cut that keeps every walk reads, with the same
+   * `context`, `contained`, `attachBp`, budgets and `expand`. It counts each
+   * piece the cut builds whole, and each piece holding the own steps of a
+   * record the cut attaches, while it decodes the rows, keeping no step and
+   * building no graph. Every count states why it may fall short, or that it
+   * is exact (README, Counts)
+   */
+  async counts(
+    refName: string,
+    region: { start: number; end: number },
+    opts: WalkCountOptions = {},
+  ) {
+    const {
+      signal,
+      context = WALK_CONTEXT,
+      contained = false,
+      stepBudget = WALK_BUDGETS.stepBudget,
+      byteBudget = WALK_BUDGETS.byteBudget,
+      departureByteBudget = WALK_BUDGETS.departureByteBudget,
+      attachBp = ATTACH_BP,
+      expand,
+    } = opts
+    checkRange(refName, region.start, region.end)
+    const [header, units, sequences] = await Promise.all([
+      this.header({ signal }),
+      this.units(refName, { signal }),
+      this.referenceSequences({ signal }),
+    ])
+    const drawn = drawnSpan(region, context)
+    const { tiles, departureBlocks } = windowUnits(units, drawn)
+    const unitsOf = (kind: string) =>
+      new Map(units.filter(u => u.kind === kind).map(u => [u.name, u]))
+    const blocksUnits = unitsOf('blocks')
+    const detailUnits = unitsOf('detail')
+    const extra: Needed[] = []
+    const checkBytes = (more: Needed[], attaching = false) => {
+      const bytesTo = (end: number) =>
+        bytesOf(tiles.filter(u => u.start < end + context)) +
+        bytesOf(extra.filter(x => x.from < end + context).map(x => x.unit)) +
+        bytesOf(more.filter(x => x.from < end + context).map(x => x.unit))
+      const tooLarge = Number.isFinite(byteBudget)
+        ? byteBudgetError(
+            bytesTo,
+            byteBudget,
+            region,
+            header.tile,
+            opts.budgetNames,
+            attaching,
+          )
+        : undefined
+      if (tooLarge) {
+        throw tooLarge
+      }
+      for (const x of more) {
+        extra.push(x)
+      }
+    }
+    const blocksOf = (tileUnits: WalkUnit[]) =>
+      tileUnits.flatMap(tileUnit => {
+        const unit = blocksUnits.get(tileUnit.name)
+        return unit ? [{ unit, from: tileUnit.start }] : []
+      })
+    const prefetched = expand === undefined ? blocksOf(tiles) : []
+    checkBytes(prefetched)
+    checkDepartureBytes(departureBlocks, departureByteBudget)
+    const read = await this.file.read(
+      [...tiles, ...departureBlocks, ...prefetched.map(x => x.unit)],
+      signal,
+    )
+    const { records, ownTiles } = departureRecords(
+      read.slice(tiles.length, tiles.length + departureBlocks.length).flat(),
+      drawn,
+      undefined,
+    )
+    const listed = new Map(
+      prefetched.map((x, k) => [
+        x.unit,
+        read[tiles.length + departureBlocks.length + k]!,
+      ]),
+    )
+    const tally = new WalkTally([
+      ...new Set([
+        ...sequences.map(panSNHaplotypeOrSample),
+        ...header.haplotypes,
+      ]),
+    ])
+    const parsed = tiles.map((unit, k) =>
+      tally.tile(split(read[k]!), Number(unit.name), true),
+    )
+    const over = { ...drawn }
+    for (const unit of parsed) {
+      const hull = unit.r.path.hull(drawn)
+      over.start = Math.min(over.start, hull?.start ?? over.start)
+      over.end = Math.max(over.end, hull?.end ?? over.end)
+    }
+    for (const unit of parsed) {
+      tally.placeReference(unit, over)
+    }
+    const onOver = (span: { start: number; end: number }) =>
+      span.start < over.end && span.end > over.start
+    const attached = records.filter(d => attachesOwnSteps(d, drawn, attachBp))
+    const ownOf = new Map<string, WalkDeparture[]>()
+    for (const d of attached) {
+      const held = ownOf.get(d.name) ?? []
+      ownOf.set(d.name, held)
+      held.push(d)
+    }
+    const holdsOwn = (name: string, start: number, end: number) =>
+      (ownOf.get(name) ?? []).some(
+        d => start <= d.hapStart + d.ownBp && end >= d.hapStart,
+      )
+    const pieces: CountPiece[] = parsed.flatMap((unit, k) => [
+      ...unit.walks.map(walk => ({ unit, tile: tiles[k]!, walk })),
+      ...unit.abridged.map(moved => ({ unit, tile: tiles[k]!, moved })),
+    ])
+    const lines = new Map<string, LinePiece<CountPiece>[]>()
+    for (const item of pieces) {
+      const { name, fragStart, piece, span } = item.walk ?? item.moved
+      const key = pieceKey(name, fragStart, '')
+      const line = lines.get(key) ?? []
+      lines.set(key, line)
+      line.push({ piece, on: onOver(span), item })
+    }
+    const inOrder = [...lines.values()].map(line =>
+      line.sort((a, b) => a.piece - b.piece),
+    )
+    const chosen = new Set(betweenDrawn(inOrder).map(held => held.item))
+    for (const item of contained && context > 0 ? beforeDrawn(inOrder) : []) {
+      chosen.add(item)
+    }
+    for (const item of pieces) {
+      const { name, hapOffset } = item.walk ?? item.moved
+      if (ownOf.has(name) && !chosen.has(item)) {
+        const bp = item.walk
+          ? tally.walk(item.unit, item.walk, false)
+          : item.moved.hapBp
+        if (holdsOwn(name, hapOffset, hapOffset + bp)) {
+          chosen.add(item)
+        }
+      }
+    }
+    const rowSteps = parsed.flatMap(unit =>
+      unit.walks.map(({ n, interior, name }) => ({
+        n,
+        interior,
+        name,
+        chunkStart: unit.start,
+      })),
+    )
+    const tooManyRead = stepBudgetError(
+      rowSteps,
+      stepBudget,
+      READ_STEPS_PER_KEPT,
+      region,
+      header.tile,
+      true,
+      opts.budgetNames,
+    )
+    if (tooManyRead) {
+      throw tooManyRead
+    }
+    let stepsRead = rowSteps.reduce((sum, row) => sum + readSteps(row), 0)
+    let stopped = false
+    // the detail units of the pieces `expand` names that fit the step budget,
+    // each with the pieces it gives; the rest stay unloaded
+    const detailsOf = (wanted: { unit: CountUnit; moved: AbridgedPiece }[]) => {
+      const details = new Map<
+        string,
+        { unit: WalkUnit; tile: CountUnit; pieces: Map<string, AbridgedPiece> }
+      >()
+      for (const { unit, moved: abridged } of wanted) {
+        const { name } = abridged.abridged.detail
+        const detail = detailUnits.get(name)
+        if (!detail) {
+          throw new WalkFormatError(
+            `${refName}'s unit table lists no detail unit ${name}, which an abridged row of ${abridged.name} names`,
+          )
+        }
+        const held = details.get(name) ?? {
+          unit: detail,
+          tile: unit,
+          pieces: new Map<string, AbridgedPiece>(),
+        }
+        details.set(name, held)
+        held.pieces.set(keyOf(abridged), abridged)
+      }
+      return [...details.values()].filter(({ pieces: given }) => {
+        const steps = [...given.values()].reduce(
+          (sum, piece) => sum + piece.abridged.steps,
+          0,
+        )
+        stopped ||= stepsRead + steps > stepBudget * READ_STEPS_PER_KEPT
+        stepsRead += stopped ? 0 : steps
+        return !stopped
+      })
+    }
+    const countDetails = (
+      details: ReturnType<typeof detailsOf>,
+      unitLines: string[][],
+    ) => {
+      details.forEach(({ unit, tile, pieces: given }, k) => {
+        const held = tally.detail(split(unitLines[k]!), tile)
+        const taken = held.walks.filter(walk => given.has(keyOf(walk)))
+        if (taken.length !== given.size) {
+          throw new WalkFormatError(
+            `${refName}'s detail unit ${unit.name} holds walk rows for ${taken.length} of the ${given.size} pieces that the counts read from it`,
+          )
+        }
+        for (const walk of taken) {
+          const bp = tally.walk(held, walk, true)
+          const hapBp = given.get(keyOf(walk))!.hapBp
+          if (bp !== hapBp) {
+            throw new WalkFormatError(
+              `${refName}'s detail unit ${unit.name} holds ${bp} bp of steps for piece ${walk.piece} of ${walk.name}, and its abridged row states a hapBp of ${hapBp}`,
+            )
+          }
+        }
+      })
+      return new Set(
+        details.flatMap(({ pieces: given }) => [...given.values()]),
+      )
+    }
+    const abridgedChosen = pieces.flatMap(item =>
+      item.moved && chosen.has(item)
+        ? [{ unit: item.unit, tile: item.tile, moved: item.moved }]
+        : [],
+    )
+    const details = detailsOf(
+      abridgedChosen.filter(item => expand?.(item.moved.name) === true),
+    )
+    const expanded = new Set(
+      details.flatMap(({ pieces: given }) => [...given.values()]),
+    )
+    const fromBlocks = abridgedChosen.filter(item => !expanded.has(item.moved))
+    const blocksWanted =
+      expand === undefined
+        ? []
+        : blocksOf([...new Set(fromBlocks.map(item => item.tile))])
+    checkBytes(blocksWanted)
+    signal?.throwIfAborted()
+    const more = await this.file.read(
+      [...details.map(d => d.unit), ...blocksWanted.map(x => x.unit)],
+      signal,
+    )
+    blocksWanted.forEach((x, k) => {
+      listed.set(x.unit, more[details.length + k]!)
+    })
+    const starts = new Map<string, number>()
+    for (const item of pieces) {
+      const held = item.walk ?? item.moved
+      starts.set(keyOf(held), held.hapOffset)
+    }
+    for (const { moved: abridged, tile } of pieces.flatMap(item =>
+      item.moved ? [{ moved: item.moved, tile: item.tile }] : [],
+    )) {
+      const next = starts.get(
+        pieceKey(abridged.name, abridged.fragStart, abridged.piece + 1),
+      )
+      const pieceEnd = abridged.hapOffset + abridged.hapBp
+      if (next !== undefined && next !== pieceEnd) {
+        throw new WalkFormatError(
+          `${refName}'s abridged row of ${abridged.name}, piece ${abridged.piece} in tile ${tile.name}, ends at ${pieceEnd} on its contig, and the line's next piece starts at ${next}`,
+        )
+      }
+    }
+    for (const unit of parsed) {
+      for (const reference of unit.references) {
+        if (
+          reference.to > reference.from &&
+          onOver({
+            start: unit.r.path.starts[reference.from]!,
+            end: unit.r.path.end(reference.to - 1),
+          })
+        ) {
+          tally.countReference(unit, reference)
+        }
+      }
+    }
+    for (const item of pieces) {
+      if (item.walk && chosen.has(item)) {
+        tally.walk(item.unit, item.walk, true)
+      }
+    }
+    countDetails(details, more)
+    const blocksRows = new Map<WalkUnit, Map<string, string[]>>()
+    for (const { moved: abridged, tile, unit } of fromBlocks) {
+      const blocksUnit = blocksUnits.get(tile.name)
+      const byPiece =
+        blocksRows.get(tile) ??
+        new Map(
+          split(blocksUnit ? (listed.get(blocksUnit) ?? []) : []).map(cols => [
+            pieceKey(cols[4] ?? '', cols[5] ?? '', cols[6] ?? ''),
+            cols,
+          ]),
+        )
+      blocksRows.set(tile, byPiece)
+      const cols = byPiece.get(keyOf(abridged))
+      if (!cols) {
+        throw new WalkFormatError(
+          `${refName}'s blocks unit ${tile.name} holds no row for piece ${abridged.piece} of ${abridged.name}, which its tile abridges`,
+        )
+      }
+      const blocks = parseBlocks(cols)
+      const listBp = blocks.before + blocks.bp + blocks.after
+      if (listBp !== abridged.hapBp) {
+        throw new WalkFormatError(
+          `${refName}'s blocks row of ${abridged.name}, piece ${abridged.piece} in tile ${tile.name}, adds up to ${listBp} bp, and its abridged row states a hapBp of ${abridged.hapBp}`,
+        )
+      }
+      tally.blocks(unit, abridged, blocks)
+    }
+    const windowTiles = new Set(tiles.map(u => u.name))
+    const tileUnits = new Map(
+      units
+        .filter(u => u.kind === 'tile' && u.length > 0)
+        .map(u => [Number(u.name), u]),
+    )
+    const fetches = new Map<WalkUnit, { names: Set<string>; from: number }>()
+    for (const d of attached) {
+      const from = Math.min(d.leavePos, d.rejoinPos, region.end + context - 1)
+      for (const unit of (ownTiles.get(d) ?? []).flatMap(start => {
+        const held = tileUnits.get(start)
+        return held ? [held] : []
+      })) {
+        if (!windowTiles.has(unit.name)) {
+          const wanting = fetches.get(unit)
+          fetches.set(unit, {
+            names: (wanting?.names ?? new Set()).add(d.name),
+            from: Math.min(wanting?.from ?? from, from),
+          })
+        }
+      }
+    }
+    const fetching = [...fetches].map(([unit, { from }]) => ({ unit, from }))
+    checkBytes(fetching, true)
+    signal?.throwIfAborted()
+    const fetched = await this.file.read(
+      fetching.map(x => x.unit),
+      signal,
+    )
+    const owned = [...fetches.values()].flatMap(({ names }, k) => {
+      const unit = tally.tile(
+        split(fetched[k]!),
+        Number(fetching[k]!.unit.name),
+        false,
+      )
+      for (const walk of unit.walks) {
+        if (
+          names.has(walk.name) &&
+          holdsOwn(
+            walk.name,
+            walk.hapOffset,
+            walk.hapOffset + tally.walk(unit, walk, false),
+          )
+        ) {
+          tally.walk(unit, walk, true)
+        }
+      }
+      return unit.abridged
+        .filter(
+          abridged =>
+            names.has(abridged.name) &&
+            holdsOwn(
+              abridged.name,
+              abridged.hapOffset,
+              abridged.hapOffset + abridged.hapBp,
+            ),
+        )
+        .map(moved => ({ unit, moved }))
+    })
+    const ownDetails = detailsOf(
+      owned.filter(item => expand?.(item.moved.name) === true),
+    )
+    signal?.throwIfAborted()
+    const loaded = countDetails(
+      ownDetails,
+      await this.file.read(
+        ownDetails.map(d => d.unit),
+        signal,
+      ),
+    )
+    for (const { moved } of owned) {
+      if (!loaded.has(moved)) {
+        tally.unread(moved)
+      }
+    }
+    tally.departures(records)
+    return tally.result()
   }
 
   /**

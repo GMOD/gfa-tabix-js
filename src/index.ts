@@ -97,9 +97,12 @@ export type {
 } from './walkDepartures.ts'
 export type {
   RegionCutOptions,
+  WalkCountOptions,
   WalkCutOptions,
   WalkReaderHeader,
 } from './walkReader.ts'
+export { COUNT_REASONS, countReasons } from './walkCounts.ts'
+export type { CountColumns, CountReason, WalkCounts } from './walkCounts.ts'
 export {
   RegionTooLargeError,
   bpString,
