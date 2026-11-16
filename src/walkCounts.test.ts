@@ -454,3 +454,50 @@ test.each([
     })
   },
 )
+
+// counts.R's tiles are 191, 239, 196 and 177 bytes; a count of 20-30 fetches
+// two more to attach own steps, 626 bytes in all
+test('counts past the byte budget say what the read would fetch and what to count instead, with no graph to see and no haplotypes to choose', async () => {
+  const refusal = (
+    region: { start: number; end: number },
+    byteBudget: number,
+  ) =>
+    countsOf('counts', region, { byteBudget }).catch((error: unknown) =>
+      error instanceof RegionTooLargeError
+        ? {
+            message: error.message,
+            fitsBp: error.fitsBp,
+            zoomHelps: error.zoomHelps,
+            bytes: error.bytes,
+          }
+        : error,
+    )
+  expect(await refusal({ start: 0, end: 80 }, 500)).toEqual({
+    message:
+      'Too many bytes to read to count this window: 0.0 MB against a byte budget of 0.0 MB. Count a window of about 40bp or less, or leave this one uncounted',
+    fitsBp: 40,
+    zoomHelps: true,
+    bytes: 803,
+  })
+  expect(await refusal({ start: 0, end: 80 }, 150)).toEqual({
+    message:
+      'Too many bytes to read to count this window: 0.0 MB for its first tile alone, against a byte budget of 0.0 MB, so leave this window uncounted',
+    fitsBp: 1,
+    zoomHelps: false,
+    bytes: 803,
+  })
+  expect(await refusal({ start: 20, end: 30 }, 300)).toEqual({
+    message:
+      "Too many bytes to read to count this window: 0.0 MB for its first tile alone with the tiles holding its departures' own steps, against a byte budget of 0.0 MB. Count with a smaller attachBp, or leave this window uncounted",
+    fitsBp: 1,
+    zoomHelps: false,
+    bytes: 626,
+  })
+  expect(await refusal({ start: 20, end: 30 }, 500)).toEqual({
+    message:
+      "Too many bytes to read to count this window: 0.0 MB with the tiles holding its departures' own steps, against a byte budget of 0.0 MB. Count with a smaller attachBp, or leave this window uncounted",
+    fitsBp: 20,
+    zoomHelps: true,
+    bytes: 626,
+  })
+})

@@ -27,6 +27,7 @@ import { WalkFile, WalkFormatError, once, raceAbort } from './walkFile.ts'
 import {
   WalkGraph,
   byteBudgetError,
+  countBytesError,
   countStepsError,
   edgeKey,
   isPlaceholder,
@@ -1201,7 +1202,7 @@ export class WalkReader {
         bytesOf(extra.filter(x => x.from < end + context).map(x => x.unit)) +
         bytesOf(more.filter(x => x.from < end + context).map(x => x.unit))
       const tooLarge = Number.isFinite(byteBudget)
-        ? byteBudgetError(
+        ? countBytesError(
             bytesTo,
             byteBudget,
             region,

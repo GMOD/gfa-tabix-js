@@ -1562,42 +1562,94 @@ export function byteBudgetError(
   names = BUDGET_NAMES,
   attaching = false,
 ) {
+  const over = bytesOver(bytesTo, budget, window, tile)
+  const windowBp = window.end - window.start
+  return over === undefined
+    ? undefined
+    : over.fitsBp > 0
+      ? new RegionTooLargeError(
+          `Zoom in to about ${bpString(over.fitsBp)} to see the graph`,
+          budget,
+          windowBp,
+          over.fitsBp,
+          { bytes: over.bytes, zoomHelps: true },
+        )
+      : new RegionTooLargeError(
+          attaching
+            ? `Too many departures here whose own steps the cut must fetch, even zoomed in (${megabytes(over.least)} against ${names.bytes} ${megabytes(budget)}); choose fewer haplotypes or a smaller attachBp`
+            : `Too much graph here to fetch, even zoomed in (${megabytes(over.least)} against ${names.bytes} ${megabytes(budget)}). A satellite or rDNA array usually causes this: the graph folds the repeat into a few nodes that each haplotype loops through many times`,
+          budget,
+          windowBp,
+          1,
+          { bytes: over.bytes },
+        )
+}
+
+/**
+ * byteBudgetError's refusal for counts, which draw nothing and choose no
+ * haplotypes: what the read would fetch, and a narrower window to count
+ * instead where one fits
+ */
+export function countBytesError(
+  bytesTo: (end: number) => number,
+  budget: number,
+  window: { start: number; end: number },
+  tile: number,
+  names = BUDGET_NAMES,
+  attaching = false,
+) {
+  const over = bytesOver(bytesTo, budget, window, tile)
+  const windowBp = window.end - window.start
+  const against = `against ${names.bytes} ${megabytes(budget)}`
+  const own = attaching
+    ? " with the tiles holding its departures' own steps"
+    : ''
+  const instead = attaching
+    ? '. Count with a smaller attachBp, or leave this window uncounted'
+    : ', so leave this window uncounted'
+  return over === undefined
+    ? undefined
+    : new RegionTooLargeError(
+        `Too many bytes to read to count this window: ${
+          over.fitsBp === 0
+            ? `${megabytes(over.least)} for its first tile alone${own}, ${against}${instead}`
+            : over.fitsBp < windowBp
+              ? `${megabytes(over.bytes)} ${against}. Count a window of about ${bpString(over.fitsBp)} or less, or leave this one uncounted`
+              : `${megabytes(over.bytes)}${own}, ${against}${instead}`
+        }`,
+        budget,
+        windowBp,
+        Math.max(over.fitsBp, 1),
+        over.fitsBp > 0
+          ? { bytes: over.bytes, zoomHelps: true }
+          : { bytes: over.bytes },
+      )
+}
+
+// What a read past `budget` would fetch: `bytes` for the window, `least` for
+// its first tile alone, and `fitsBp`, the span from the window's start whose
+// read fits, 0 where none does; undefined for a read within the budget
+function bytesOver(
+  bytesTo: (end: number) => number,
+  budget: number,
+  window: { start: number; end: number },
+  tile: number,
+) {
   const bytes = bytesTo(window.end)
-  if (bytes <= budget) {
-    return undefined
-  }
   let fitsBp = 0
   let least: number | undefined
+  let more = bytes > budget
   for (
     let cs = Math.floor(window.start / tile) * tile;
-    cs < window.end;
+    more && cs < window.end;
     cs += tile
   ) {
     const read = bytesTo(cs + 1)
     least ??= read
-    if (read > budget) {
-      break
-    }
-    fitsBp = cs + tile - window.start
+    more = read <= budget
+    fitsBp = more ? cs + tile - window.start : fitsBp
   }
-  const windowBp = window.end - window.start
-  return fitsBp > 0
-    ? new RegionTooLargeError(
-        `Zoom in to about ${bpString(fitsBp)} to see the graph`,
-        budget,
-        windowBp,
-        fitsBp,
-        { bytes, zoomHelps: true },
-      )
-    : new RegionTooLargeError(
-        attaching
-          ? `Too many departures here whose own steps the cut must fetch, even zoomed in (${megabytes(least ?? bytes)} against ${names.bytes} ${megabytes(budget)}); choose fewer haplotypes or a smaller attachBp`
-          : `Too much graph here to fetch, even zoomed in (${megabytes(least ?? bytes)} against ${names.bytes} ${megabytes(budget)}). A satellite or rDNA array usually causes this: the graph folds the repeat into a few nodes that each haplotype loops through many times`,
-        budget,
-        windowBp,
-        1,
-        { bytes },
-      )
+  return bytes > budget ? { bytes, fitsBp, least: least ?? bytes } : undefined
 }
 
 export const megabytes = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`
