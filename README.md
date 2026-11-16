@@ -291,7 +291,9 @@ const { tables, refName, sample } = await reader.cutRegion(
   as a zoom-in notice
 - Over the byte budget, the error's `bytes` is what the window would fetch, so a
   viewer with a fixed window can offer to load it anyway with `byteBudget`
-  raised to `bytes`. `zoomHelps` is false where no narrower window fits
+  raised to `bytes`. `zoomHelps` is false where no narrower window fits, and
+  `fitsBp` is otherwise narrower than the window refused, also where the tiles
+  fetched to attach are what takes the read over
 - The cut checks the node limit as it decodes each tile, against the nodes it
   keeps whatever else it reads, and stops decoding at the first tile over it
 - A window past `departureByteBudget` throws a `DepartureReadError`, which is

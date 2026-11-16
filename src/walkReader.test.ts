@@ -2292,6 +2292,25 @@ test('a node placed off the reference states no strand of the reference', async 
   ])
 })
 
+// counts.R.gfa in tiles of 20 bp: the tile of 20-30 is 239 bytes, and a cut
+// of it fetches two more tiles to attach own steps, 626 bytes in all
+test('a cut over its byte budget by the tiles it fetches to attach advises a narrower window, and that window fits', async () => {
+  const walks = reader('counts.R')
+  const opts = { context: 0, byteBudget: 500 }
+  const error: unknown = await walks
+    .cut('R#0#chr', { start: 20, end: 30 }, opts)
+    .catch((e: unknown) => e)
+  expect(error).toBeInstanceOf(RegionTooLargeError)
+  expect(error).toMatchObject({
+    message: 'Zoom in to about 9bp to see the graph',
+    windowBp: 10,
+    fitsBp: 9,
+    bytes: 626,
+  })
+  const narrower = await walks.cut('R#0#chr', { start: 20, end: 29 }, opts)
+  expect(narrower.fragments.length).toBeGreaterThan(0)
+})
+
 const linkLine = ([a, b]: [number, number]) =>
   `${a >> 1} ${a & 1 ? '-' : '+'} ${b >> 1} ${b & 1 ? '-' : '+'}`
 

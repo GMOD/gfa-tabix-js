@@ -495,8 +495,8 @@ test('counts past the byte budget say what the read would fetch and what to coun
   })
   expect(await refusal({ start: 20, end: 30 }, 500)).toEqual({
     message:
-      "Too many bytes to read to count this window: 0.0 MB with the tiles holding its departures' own steps, against a byte budget of 0.0 MB. Count with a smaller attachBp, or leave this window uncounted",
-    fitsBp: 20,
+      'Too many bytes to read to count this window: 0.0 MB against a byte budget of 0.0 MB. Count a window of about 9bp or less, or leave this one uncounted',
+    fitsBp: 9,
     zoomHelps: true,
     bytes: 626,
   })

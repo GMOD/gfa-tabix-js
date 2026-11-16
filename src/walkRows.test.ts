@@ -324,6 +324,53 @@ describe('the byte budget', () => {
     expect(error.zoomHelps).toBe(false)
     expect(error.bytes).toBe(11_000_000)
   })
+
+  // 2 MB a tile, and 4 MB of tiles fetched to attach once the window reaches
+  // past `from`
+  const attaching = (from: number) => (end: number) =>
+    2_000_000 * Math.ceil(end / tile) + (end > from ? 4_000_000 : 0)
+
+  test('advises a window narrower than the one refused where its tiles fit and the tiles fetched to attach do not', () => {
+    const error = byteBudgetError(
+      attaching(247),
+      7_000_000,
+      { start: 220, end: 260 },
+      tile,
+      undefined,
+      true,
+    )!
+    expect(error.windowBp).toBe(40)
+    expect(error.fitsBp).toBe(27)
+    expect(error.zoomHelps).toBe(true)
+    expect(error.bytes).toBe(10_000_000)
+    expect(error.message).toBe('Zoom in to about 27bp to see the graph')
+  })
+
+  test('never advises the window refused or a wider one, wherever the tiles fetched to attach start', () => {
+    const window = { start: 220, end: 260 }
+    const advised = Array.from({ length: 60 }, (_, k) => 210 + k).map(
+      from =>
+        byteBudgetError(attaching(from), 7_000_000, window, tile)?.fitsBp ?? 0,
+    )
+    expect(advised.filter(fitsBp => fitsBp >= 40)).toEqual([])
+    expect(advised.reduce((most, fitsBp) => Math.max(most, fitsBp), 0)).toBe(39)
+  })
+
+  test('says no zoom fits where a window of the first base alone fetches too much to attach', () => {
+    const error = byteBudgetError(
+      attaching(220),
+      7_000_000,
+      { start: 220, end: 260 },
+      tile,
+      undefined,
+      true,
+    )!
+    expect(error.fitsBp).toBe(1)
+    expect(error.zoomHelps).toBe(false)
+    expect(error.message).toBe(
+      'Too many departures here whose own steps the cut must fetch, even zoomed in (10.0 MB against a byte budget of 7.0 MB); choose fewer haplotypes or a smaller attachBp',
+    )
+  })
 })
 
 // Reference 1-2-3-4, 100 bp each from 0; the window is 150-250, so only 2 and

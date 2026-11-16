@@ -1620,9 +1620,7 @@ export function countBytesError(
         `Too many bytes to read to count this window: ${
           over.fitsBp === 0
             ? `${megabytes(over.least)} for its first tile alone${own}, ${against}${instead}`
-            : over.fitsBp < windowBp
-              ? `${megabytes(over.bytes)} ${against}. Count a window of about ${bpString(over.fitsBp)} or less, or leave this one uncounted`
-              : `${megabytes(over.bytes)}${own}, ${against}${instead}`
+            : `${megabytes(over.bytes)} ${against}. Count a window of about ${bpString(over.fitsBp)} or less, or leave this one uncounted`
         }`,
         budget,
         windowBp,
@@ -1633,9 +1631,33 @@ export function countBytesError(
       )
 }
 
+// The widest span from the window's start, narrower than the window, whose
+// read fits `budget`, 0 where none does; `bytesTo` never falls as its end
+// grows
+function narrowerFit(
+  bytesTo: (end: number) => number,
+  budget: number,
+  window: { start: number; end: number },
+) {
+  let fits = window.start
+  let over = window.end
+  while (over - fits > 1) {
+    const middle = Math.floor((fits + over) / 2)
+    if (bytesTo(middle) <= budget) {
+      fits = middle
+    } else {
+      over = middle
+    }
+  }
+  return fits - window.start
+}
+
 // What a read past `budget` would fetch: `bytes` for the window, `least` for
 // its first tile alone, and `fitsBp`, the span from the window's start whose
-// read fits, 0 where none does; undefined for a read within the budget
+// read fits, 0 where none does; undefined for a read within the budget. The
+// span grows a tile at a time, and where every tile fits and the window's
+// read is still over, as the tiles fetched to attach can make it, it is the
+// widest narrower one that fits, so it is never the window or more
 function bytesOver(
   bytesTo: (end: number) => number,
   budget: number,
@@ -1656,7 +1678,18 @@ function bytesOver(
     more = read <= budget
     fitsBp = more ? cs + tile - window.start : fitsBp
   }
-  return bytes > budget ? { bytes, fitsBp, least: least ?? bytes } : undefined
+  const reaches = fitsBp >= window.end - window.start
+  const narrower = reaches ? narrowerFit(bytesTo, budget, window) : fitsBp
+  return bytes > budget
+    ? {
+        bytes,
+        fitsBp: narrower,
+        least:
+          reaches && narrower === 0
+            ? bytesTo(window.start + 1)
+            : (least ?? bytes),
+      }
+    : undefined
 }
 
 export const megabytes = (bytes: number) => `${(bytes / 1e6).toFixed(1)} MB`
