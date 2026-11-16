@@ -116,6 +116,9 @@ const tables = graph.tables(kept, fragments, departures)
 - `reader.bytesFor(refName, region, { context, attachBp })` is the compressed
   bytes a cut of the region reads when it keeps every walk and expands none
   ([What a cut reads](#what-a-cut-reads))
+- `reader.counts(refName, region, opts)` is how many of the file's haplotypes
+  step each node and link over a region, and how often, with each count exact or
+  stated as a lower bound and why ([Counts](#counts))
 - Links are written the way round with more `+` ends, as a walk along the
   reference takes them, and with the smaller first handle on a tie: a walk
   `>7>3` gives `L 7 + 3 +`
@@ -669,6 +672,115 @@ cut is made:
   units, and no less than `bytesFor` without the `blocks` units. Which detail
   units it reads is in the tiles' `abridged` rows, which `bytesFor` does not
   read
+
+## Counts
+
+```ts
+import { CUT_PRESETS, countReasons } from '@jbrowse/graph-walks'
+
+const counts = await reader.counts(refName, region, CUT_PRESETS.browser)
+const k = counts.nodes.ids.indexOf(id)
+counts.nodes.haplotypes[k] // haplotypes stepping the node
+counts.nodes.passes[k] // their steps on it
+countReasons(counts.nodes.haplotypeReasons[k]) // [] where exact
+counts.haplotypes.window // haplotypes over the window
+```
+
+- `reader.counts` counts every walk of the file over a region, where a cut draws
+  the few it keeps: for each node and link the walks step, `haplotypes`, how
+  many haplotypes step it, and `passes`, how many steps all of them take on it.
+  A haplotype is what the header lists a path under, `HG002#1`, so a haplotype
+  stepping a node three times counts once in the first and three times in the
+  second, and its contigs count as one
+- A link counts however a walk takes it: `>3>4` and `<4<3` are one link, with
+  each haplotype once
+- It takes a cut's `context`, `contained`, `attachBp`, budgets and `expand`, and
+  no `keep`. Every node and link of a cut of the same region with the same
+  options, whichever walks it keeps, has a count; counts that expand every walk
+  cover a cut that expands any
+- `nodes.ids` ascend. `links.from` and `links.to` are handles, `2 × id + 1`
+  where reversed, written the way round a cut writes its links, and ascend by
+  `from`, then `to`
+- `haplotypes.file` is how many haplotypes the file holds walks of: the header's
+  and the reference's. `haplotypes.window` is how many have a piece the counts
+  read or a departure over the window and its context, the denominator of a
+  frequency there
+
+What it counts:
+
+- Each piece a cut builds, whole: those over the drawn stretch, those between
+  two such pieces of a line, and, contained with context, the one before such a
+  piece. A cut keeps a walk from its first step on the drawn stretch to its
+  last; the counts also take the rest of the piece, such as a contig's run off
+  the reference before its first step on the reference, which the cut reads as a
+  `read` gap
+- Each piece of a window's tile holding the own steps of a departure a cut
+  attaches, and of a tile fetched to attach them, whole
+- An abridged piece by its detail unit where `expand` names its walk, and else
+  by its `blocks` row: its steps on the reference exactly, its runs off it as
+  bp, which leave its haplotype's counts off the reference lower bounds
+
+### Exact and lower bound
+
+`haplotypeReasons[k]` and `passReasons[k]` are 0 where the count is exact, and
+else the `COUNT_REASONS` bits it may fall short by, which `countReasons` names:
+
+- **Exact:** a node the reference passes once, with that pass on the drawn
+  stretch, and a link between two such nodes. Every step on the node lies at its
+  pass, in the tile holding it (gfa-to-tabix's
+  [Exact and chosen](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/walks-format.md#exact-and-chosen)),
+  and the counts read every piece with a step there, an abridged one's steps on
+  the reference from its `blocks` row: the count is the whole file's. A
+  haplotype count of `haplotypes.file` is exact too
+- **`elsewhere`:** any other node, and a link with an end there. A step off the
+  reference is filed beside the step on it before it, which can lie anywhere: in
+  a stretch of a haplotype that leaves and rejoins the reference away from the
+  window, or in a W line with no step on the reference, which the file holds no
+  row of (the header's `leftout` counts them). No row over the window points to
+  either. A node on the reference off the drawn stretch is counted only from the
+  pieces read. With no other reason, the count is exact over every walk the file
+  places over the window: each piece the counts read and each departure over the
+  window, every step loaded
+- **`unloaded`:** a haplotype over the window holds a run off the reference the
+  counts did not load, an abridged piece not expanded or one the step budget
+  stopped. `haplotypes.unloaded` names them
+- **`unattached`:** a haplotype over the window holds own sequence of a
+  departure over it the counts did not read: one past `attachBp`, one that
+  neither leaves nor rejoins on the window and its context, or own sequence in a
+  W line with no step on the reference. `haplotypes.unattached` names them
+- **`revisited`:** the reference passes the node more than once, so a step on it
+  can lie at a pass, or off the reference in a tile, the counts did not read
+- A haplotype count takes `unloaded` or `unattached` only where a haplotype they
+  name does not step the node or link; a pass count takes them wherever any is
+  named
+- So `haplotypes[k] / haplotypes.window` is a frequency where the reasons are 0,
+  and a frequency among the walks over the window where they are `elsewhere`
+  alone. Expanding every walk, `expand: () => true`, leaves `elsewhere` alone
+  wherever the step budget holds
+
+### What counts cost
+
+- **Reads:** the units a cut that keeps every walk reads. Without `expand`,
+  `bytesFor`'s: the window's tiles, their `blocks` units and departure blocks in
+  one read, then the tiles fetched to attach. With it, the detail units of the
+  pieces it expands, in one read of every run of touching units, and the
+  `blocks` units of the pieces it does not
+- **Work:** each walk row it counts decoded once, with no step kept: a step
+  along the reference is an array read and two bit sets, and a route's nodes and
+  links are looked up once per tile. It grows with the steps of the pieces
+  counted, as a cut of every walk does, and builds no fragment, table or graph
+- **Memory:** per node and link a bitset of the file's haplotypes, a 32-bit word
+  per 32 haplotypes, and a pass count
+- **Budgets:** `byteBudget` over the tiles, `blocks` units and tiles fetched to
+  attach, and `departureByteBudget`, as a cut: past either the counts throw
+  before reading. The window's walk rows past `READ_STEPS_PER_KEPT` ×
+  `stepBudget` steps, a step along the reference a quarter, throw a
+  `RegionTooLargeError`. Expanding adds each detail unit's steps to them and
+  stops at the first unit that would pass the budget, leaving that piece and
+  every later one unloaded, so their haplotypes are `unloaded`
+- A row of a haplotype the header does not list throws a `WalkFormatError`, as
+  do a missing `blocks` row, and a `blocks` row, a detail row or a line's next
+  piece that does not add up to its `abridged` row
 
 ## Moved components
 
