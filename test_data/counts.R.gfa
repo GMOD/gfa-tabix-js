@@ -1,0 +1,47 @@
+H	VN:Z:1.1
+S	1	ACGTACGTAC
+S	2	ACGTACGTAC
+S	3	ACGTACGTAC
+S	4	ACGTACGTAC
+S	5	ACGTACGTAC
+S	6	ACGTACGTAC
+S	7	ACGTACGTAC
+S	8	ACGTACGTAC
+S	9	GGGGG
+S	10	TTTTTTTTTT
+S	11	CCC
+S	12	AAAAAAAAAA
+S	13	GGGGGGGGGG
+L	1	+	2	+	0M
+L	1	+	13	+	0M
+L	2	+	3	+	0M
+L	2	+	7	+	0M
+L	2	+	12	+	0M
+L	3	+	4	+	0M
+L	3	+	9	+	0M
+L	3	+	10	+	0M
+L	3	+	11	+	0M
+L	3	+	12	+	0M
+L	3	-	4	-	0M
+L	3	-	9	-	0M
+L	3	-	12	-	0M
+L	4	+	5	+	0M
+L	4	-	11	-	0M
+L	4	-	12	-	0M
+L	5	+	6	+	0M
+L	5	-	10	-	0M
+L	6	+	7	+	0M
+L	7	+	8	+	0M
+L	13	+	3	+	0M
+W	R	0	chr	0	80	>1>2>3>4>5>6>7>8
+W	A	1	a	0	95	>1>2>3>9>3>4>5>6>7>8
+W	B	1	b	0	80	<8<7<6<5<4<3<2<1
+W	C	1	c	0	80	>1>2>3>10>5>6>7>8
+W	C	2	c	0	80	>1>2>3>10>5>6>7>8
+W	D	1	d	40	80	>5>6>7>8
+W	F	1	f	0	80	<8<7<6<5<10<3<2<1
+W	G	1	g	0	40	>1>2>7>8
+W	H	1	h	0	90	>1>2>12>3>4>5>6>7>8
+W	I	1	i	0	90	>1>2>3>12>4>5>6>7>8
+W	J	1	j	0	106	>1>2>3>11>4>3>11>4>5>6>7>8
+W	K	1	k	0	80	>1>13>3>4>5>6>7>8
