@@ -701,11 +701,14 @@ counts.haplotypes.window // haplotypes over the window
 - `nodes.ids` ascend. `links.from` and `links.to` are handles, `2 × id + 1`
   where reversed, written the way round a cut writes its links, and ascend by
   `from`, then `to`
-- `haplotypes.file` is how many haplotypes the file holds walks of: the header's
-  and the reference's. `haplotypes.window` is how many have a piece the counts
-  read or a departure over the window and its context. It includes a haplotype
-  that crosses the window with no step in it, and one whose record there holds
-  sequence the graph lacks
+- `haplotypes.file` is how many haplotypes the file holds: the reference's and
+  each one a `#haplotype` line of the header lists, which are the haplotypes
+  with rows in the file. A graph can hold more, since a haplotype whose every
+  line steps no reference node has no row
+- `haplotypes.window` is how many have a piece the counts read or a departure
+  over the window and its context. It includes a haplotype that crosses the
+  window with no step in it, and one whose record there holds sequence the graph
+  lacks
 
 What it counts:
 
@@ -727,23 +730,35 @@ What it counts:
 exact, and else the `COUNT_REASONS` bits it may fall short by, which
 `countReasons` names:
 
-- **Exact:** a node the reference passes once, with that pass on the drawn
-  stretch, and a link between two such nodes. Every step on the node lies at its
-  pass, in the tile holding it, and the counts read every piece with a step
-  there, an abridged one's steps on the reference from its `blocks` row: the
-  count is the whole file's. A haplotype count of `haplotypes.file` is exact too
-- Exactness rests on one rule: no route interior holds a node the reference
-  passes once, so no step on such a node is filed off the reference, away from
-  its pass. gfa-to-tabix states it as claim C27 and checks it by check N2 of
-  `claims7.py`
-  ([claims7.md](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/departures/claims7.md);
-  the 5.0.0 runs on
-  [GRCh38](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/walks-container/accept-5.0.0/claims7/grch38/claims.txt)
-  and
-  [CHM13](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/walks-container/accept-5.0.0/claims7/chm13/claims.txt)).
-  It is a guarantee of gfa-to-tabix, not of walk format 8, whose
-  [What a reader relies on](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/walks-format.md#what-a-reader-relies-on)
-  does not list it: in a file that breaks it, an exact count can fall short
+- **Exact, in a file whose header states `revisited:i:0`:** a node the reference
+  steps on the drawn stretch, and a link between two such nodes. Every step on
+  the node lies at its pass, in the tile holding it, and the counts read every
+  piece with a step there, an abridged one's steps on the reference from its
+  `blocks` row, so the count is of every line the file holds
+- **What walk format 8 promises of a file that states `revisited:i:0`:** no
+  route interior holds a reference node, so the tiles a window's read selects
+  hold a row of every line of the file that steps a reference node over the
+  window, and a `ref` row's `passes` counts the `ref` rows of the whole file
+  ([What a reader relies on](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/walks-format.md#what-a-reader-relies-on),
+  [ADR 0016](https://github.com/GMOD/gfa-to-tabix/blob/main/docs/adr/0016-format-8-is-frozen.md)).
+  The exact counts rest on those two statements
+- **A file that states `revisited` above 0, or none:** the format promises
+  nothing about where such a file files a step on a node the reference passes
+  once, so the counts mark no node or link of it exact by its `passes`: each
+  takes `elsewhere`, and is a lower bound. gfa-to-tabix keeps the rule on every
+  file it writes, but a file names no writer, so the counts go by the header:
+  `(await reader.header()).revisited` is 0 where a count can be exact by its
+  `passes`
+- **A haplotype count of `haplotypes.file`** is exact in any file, since the
+  file holds no other haplotype. Its pass count is exact only by the rule above
+- **A file that states `revisited:i:0` and holds a reference node in a route
+  interior** is not walk format 8. The counts read a window's tiles and cannot
+  tell, so a count they mark exact there falls short by each line filed away
+  from the node's pass. gfa-to-tabix's `verify7.py` and `spec8.py` read the
+  whole file and refuse it
+- **An exact count is of the lines the file holds.** Whether the file holds
+  every line of its graph that steps the reference is checked against the GFA,
+  by gfa-to-tabix's checks, and cannot be read off the file
 - **`elsewhere`:** any other node, and a link with an end there. A step off the
   reference is filed beside the step on it before it, which can lie anywhere: in
   a stretch of a haplotype that leaves and rejoins the reference away from the
@@ -765,10 +780,11 @@ exact, and else the `COUNT_REASONS` bits it may fall short by, which
 - A haplotype count takes `unloaded` or `unattached` only where a haplotype they
   name does not step the node or link; a pass count takes them wherever any is
   named
-- With mask 0, `haplotypes[k]` haplotypes of the graph step it and no other
-  does; with any other mask, at least that many step it and no share follows.
-  Expanding every walk, `expand: () => true`, leaves no `unloaded` wherever the
-  step budget holds
+- With mask 0, `haplotypes[k]` of the `haplotypes.file` haplotypes the file
+  holds step it, each in a line the file holds, and no other of them does; with
+  any other mask, at least that many step it and no share follows. Expanding
+  every walk, `expand: () => true`, leaves no `unloaded` wherever the step
+  budget holds
 - A haplotype a cut shows can be in a node's count although its drawn fragment
   does not step the node, since a cut keeps a walk only from its first step on
   the drawn stretch and the counts take the whole piece. This never happens on a
@@ -776,8 +792,10 @@ exact, and else the `COUNT_REASONS` bits it may fall short by, which
 
 ### What the numbers support
 
-- **Mask 0:** "N of M haplotypes step this node", with M named:
-  `haplotypes.file`, every haplotype the file holds, or `haplotypes.window`
+- **Mask 0:** "N of the M haplotypes the file holds step this node", with M
+  `haplotypes.file`. M is the file's and can be fewer than the graph's.
+  `haplotypes.window` is not an M, since which haplotypes it counts follows from
+  the tiles the window reads
 - **Any other mask:** "at least N haplotypes step this node" and nothing more:
   never a ratio, a percentage or a complement such as "M − N do not", never a
   sum over nodes or a comparison of two such counts, and drawn as a different
@@ -809,6 +827,10 @@ exact, and else the `COUNT_REASONS` bits it may fall short by, which
   `RegionTooLargeError`. Expanding adds each detail unit's steps to them and
   stops at the first unit that would pass the budget, leaving that piece and
   every later one unloaded, so their haplotypes are `unloaded`
+- **A refusal is worded for counts.** Past `byteBudget` or the step budget the
+  `RegionTooLargeError` has a cut's fields and a message about counting, such as
+  "Too many bytes to read to count this window: … Count a window of about 40bp
+  or less, or leave this one uncounted"
 - A row of a haplotype the header does not list throws a `WalkFormatError`, as
   do a missing `blocks` row, and a `blocks` row, a detail row or a line's next
   piece that does not add up to its `abridged` row
