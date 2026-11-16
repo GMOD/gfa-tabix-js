@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
+
 import { LocalFile } from 'generic-filehandle2'
 import { expect, test } from 'vitest'
 
-import { rangesRead, readsOf } from './testing.ts'
+import { rangesRead, readsOf, walkFileOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import { countReasons } from './walkCounts.ts'
 import { DepartureReadError, WalkReader } from './walkReader.ts'
@@ -311,3 +313,144 @@ test('counts that expand every walk read the bytes an expanded cut of every walk
   await reader.cut('R#0#c', region, opts)
   expect(rangesRead(counted)).toEqual(rangesRead(reads))
 })
+
+// R walks nodes 1 to 4, 5 bp each, in tiles of 10 bp; A walks them all and B
+// the first two
+const underHeader = (walks: string) => [
+  walks,
+  '#reference R',
+  '#haplotype A#1',
+  '#haplotype B#1',
+  'R#0#chr 0 ref R#0#chr 0 0 0 2 2,2 5,5 .',
+  'R#0#chr 0 walk A#1#a 0 0 0 2 2 .',
+  'R#0#chr 0 walk B#1#b 0 0 0 2 2 .',
+  'R#0#chr 10 ref R#0#chr 0 10 1 2 6,2 5,5 .',
+  'R#0#chr 10 walk A#1#a 0 10 1 2 6 .',
+]
+
+test.each([
+  ['#walks format:i:8 tile:i:10 revisited:i:0', []],
+  ['#walks format:i:8 tile:i:10', ['elsewhere']],
+  ['#walks format:i:8 tile:i:10 revisited:i:1', ['elsewhere']],
+])(
+  'under %s a count on a once-passed node of the drawn stretch has reasons %j, and a haplotype count of every haplotype the file holds is exact whatever the header states',
+  async (walks, reasons) => {
+    const counts = await WalkReader.fromFilehandles(
+      walkFileOf(underHeader(walks)),
+    ).counts(R, { start: 0, end: 20 }, { context: 0 })
+    expect(counts.haplotypes.file).toBe(3)
+    expect(nodeCount(counts, 3)).toEqual({
+      haplotypes: 2,
+      passes: 2,
+      haplotypeReasons: reasons,
+      passReasons: reasons,
+    })
+    expect(linkCount(counts, '>3', '>4')).toEqual([
+      {
+        haplotypes: 2,
+        passes: 2,
+        haplotypeReasons: reasons,
+        passReasons: reasons,
+      },
+    ])
+    expect(nodeCount(counts, 1)).toEqual({
+      haplotypes: 3,
+      passes: 3,
+      haplotypeReasons: [],
+      passReasons: reasons,
+    })
+  },
+)
+
+test('a ref row that states 2 passes leaves its node revisited, though the header states revisited:i:0', async () => {
+  const lines = underHeader('#walks format:i:8 tile:i:10 revisited:i:0').map(
+    line => (line.includes(' 0 ref ') ? line.replace(/\.$/, '2,1') : line),
+  )
+  const counts = await WalkReader.fromFilehandles(walkFileOf(lines)).counts(
+    R,
+    { start: 0, end: 20 },
+    { context: 0 },
+  )
+  expect(nodeCount(counts, 1)?.passReasons).toEqual(['revisited', 'elsewhere'])
+  expect(nodeCount(counts, 2)?.passReasons).toEqual([])
+})
+
+function plantedCounts(
+  file: string,
+  refName: string,
+  region: { start: number; end: number },
+) {
+  const path = `${DATA}planted/${file}.walks.gz`
+  return WalkReader.fromFilehandles({
+    data: new LocalFile(path),
+    directory: new LocalFile(`${path}.idx`),
+  }).counts(refName, region, { context: 0 })
+}
+
+// The haplotypes of a planted GFA with a W line stepping node `id`
+const steppingIn = (gfa: string, id: number) =>
+  readFileSync(`${DATA}planted/${gfa}.gfa`, 'utf8')
+    .split('\n')
+    .filter(line => line.startsWith('W') && line.includes(`>${id}`)).length
+
+// planted/shared.gfa: R walks 1 and 2 on c1 and 2 and 3 on c2, 5 bp each, and
+// A walks 1, 2 and 3. gfa-to-tabix's broken.sh files A's step on 3 as the
+// interior of a route in c1's tile and leaves c2's tile no row of A. The file
+// states revisited:i:1, for node 2, and walk format 8 promises of such a file
+// nothing about where a step on a once-passed node is filed
+test('a file with a revisited node files a step on a once-passed node away from its pass, and the count there is a lower bound', async () => {
+  const file = 'other-sequence-as-interior-revisited'
+  expect(steppingIn('shared', 3)).toBe(2)
+  const atPass = await plantedCounts(file, 'R#0#c2', { start: 0, end: 10 })
+  expect(atPass.haplotypes.file).toBe(2)
+  expect(nodeCount(atPass, 3)).toEqual({
+    haplotypes: 1,
+    passes: 1,
+    haplotypeReasons: ['elsewhere'],
+    passReasons: ['elsewhere'],
+  })
+  expect(nodeCount(atPass, 2)).toEqual({
+    haplotypes: 1,
+    passes: 1,
+    haplotypeReasons: ['revisited', 'elsewhere'],
+    passReasons: ['revisited', 'elsewhere'],
+  })
+  const away = await plantedCounts(file, 'R#0#c1', { start: 0, end: 10 })
+  expect(nodeCount(away, 3)).toEqual({
+    haplotypes: 1,
+    passes: 1,
+    haplotypeReasons: ['elsewhere'],
+    passReasons: ['elsewhere'],
+  })
+  expect(nodeCount(away, 1)).toEqual({
+    haplotypes: 2,
+    passes: 2,
+    haplotypeReasons: [],
+    passReasons: ['elsewhere'],
+  })
+})
+
+// planted/far.gfa: R walks 1 and 2 on c1 and 3 to 6 on c2, 5 bp each, in
+// tiles of 10 bp; A and B walk all six. broken.sh files B's steps on 1 and 2
+// as the interior of a route in c2's tile 10, and in the other file A's steps
+// on 5 and 6 as one in c2's tile 0, each with no row at the nodes' own tile.
+// Both state revisited:i:0, so neither is walk format 8: gfa-to-tabix's
+// verify7.py and spec8.py refuse them, and the reader, which reads a window's
+// tiles alone, cannot
+test.each([
+  ['other-sequence-as-interior', 'R#0#c1', { start: 0, end: 10 }, 1],
+  ['other-tile-as-interior', 'R#0#c2', { start: 10, end: 20 }, 5],
+])(
+  '%s states revisited:i:0 and files a step on a reference node away from its pass, which the reader cannot tell: its count there is marked exact, one short',
+  async (file, refName, region, id) => {
+    expect(steppingIn('far', id)).toBe(3)
+    const counts = await plantedCounts(file, refName, region)
+    expect(counts.haplotypes.file).toBe(3)
+    expect(nodeCount(counts, id)).toEqual({
+      haplotypes: 2,
+      passes: 2,
+      haplotypeReasons: [],
+      passReasons: [],
+    })
+  },
+)

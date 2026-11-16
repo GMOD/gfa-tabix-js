@@ -29,7 +29,8 @@ export type CountReason = 'unloaded' | 'unattached' | 'revisited' | 'elsewhere'
  * reference the call did not load. `unattached`: one has own sequence of a
  * departure over the window the call did not read. `revisited`: the reference
  * passes the node more than once, so a step on it can lie at another pass.
- * `elsewhere`: steps on it can lie in rows filed away from the window.
+ * `elsewhere`: steps on it can lie in rows filed away from the window, as
+ * every step can in a file that does not state `revisited:i:0`.
  */
 export const COUNT_REASONS: Readonly<Record<CountReason, number>> =
   Object.freeze({
@@ -196,6 +197,7 @@ const lineKey = (name: string, fragStart: number) => `${name}\t${fragStart}`
 export class WalkTally {
   private readonly haplotypeIndex: Map<string, number>
   private readonly names: string[]
+  private readonly stepsFiledAtPass: boolean
   private readonly nodes: Tally
   private readonly links: Tally
   private readonly nodeAt = new Map<number, number>()
@@ -220,8 +222,11 @@ export class WalkTally {
     { start: number; end: number; loaded: boolean }[]
   >()
 
-  constructor(haplotypes: string[]) {
+  // `stepsFiledAtPass`: the file states `revisited:i:0`, of which walk format
+  // 8 promises that every step on a reference node is filed at its pass
+  constructor(haplotypes: string[], stepsFiledAtPass: boolean) {
     this.names = haplotypes
+    this.stepsFiledAtPass = stepsFiledAtPass
     this.haplotypeIndex = new Map(haplotypes.map((name, k) => [name, k]))
     const words = Math.max(1, Math.ceil(haplotypes.length / 32))
     this.nodes = new Tally(words)
@@ -388,7 +393,8 @@ export class WalkTally {
    * A tile's rows, split on tabs, ready to count. A tile of the window
    * states how many times the reference passes each node of its R, which
    * makes a count on that node exact where its pass lies on the drawn
-   * stretch; a tile fetched to attach states nothing of the kind
+   * stretch and the file states `revisited:i:0`; a tile fetched to attach
+   * states nothing of the kind
    */
   tile(rows: string[][], tileStart: number, ofWindow: boolean): CountUnit {
     const path = new RefPath()
@@ -688,10 +694,10 @@ export class WalkTally {
 
   // Why the count of node k, or of a link with an end there, may fall short
   // where one of `missing` does not step it: 0 on a node of a window tile's
-  // R passed once on the drawn stretch
+  // R passed once on the drawn stretch, in a file that states `revisited:i:0`
   private nodeReasons(k: number, missing: (set: Uint32Array) => boolean) {
     const passes = this.refPasses[k]!
-    return passes === 1
+    return this.stepsFiledAtPass && passes === 1
       ? this.drawn[k]!
         ? 0
         : COUNT_REASONS.elsewhere

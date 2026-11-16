@@ -1240,12 +1240,15 @@ export class WalkReader {
         read[tiles.length + departureBlocks.length + k]!,
       ]),
     )
-    const tally = new WalkTally([
-      ...new Set([
-        ...sequences.map(panSNHaplotypeOrSample),
-        ...header.haplotypes,
-      ]),
-    ])
+    const tally = new WalkTally(
+      [
+        ...new Set([
+          ...sequences.map(panSNHaplotypeOrSample),
+          ...header.haplotypes,
+        ]),
+      ],
+      header.revisited === 0,
+    )
     const parsed = tiles.map((unit, k) =>
       tally.tile(split(read[k]!), Number(unit.name), true),
     )

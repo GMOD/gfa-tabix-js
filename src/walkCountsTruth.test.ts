@@ -60,7 +60,9 @@ const overlaps = (
 
 // Each node's and each link's haplotypes, with how often each steps it, and
 // each node's passes by the reference sequences, read from the GFA's W lines
-// less their 0 bp steps, which gfa-to-tabix drops
+// less their 0 bp steps, which gfa-to-tabix drops; `revisited`, the nodes the
+// reference passes more than once, and `file`, the haplotypes with a step on a
+// node the reference passes, which are those a walk file holds rows of
 function truthOf(gfa: string, references: Set<string>) {
   const lines = gfa.split('\n').map(line => line.split('\t'))
   const lengths = new Map<number, number>()
@@ -114,8 +116,27 @@ function truthOf(gfa: string, references: Set<string>) {
       }
     }
   }
-  return { nodes, links, passes, lengths }
+  const file = new Set<string>()
+  for (const id of passes.keys()) {
+    for (const haplotype of nodes.get(id)?.keys() ?? []) {
+      file.add(haplotype)
+    }
+  }
+  return {
+    nodes,
+    links,
+    passes,
+    lengths,
+    file: file.size,
+    revisited: [...passes.values()].filter(held => held.length > 1).length,
+  }
 }
+
+// What a walk file's directory states for `revisited`, read as text
+const revisitedStated = (path: string) =>
+  /\trevisited:i:(\d+)/.exec(
+    readFileSync(`${path}.idx`, 'utf8').split('\n')[0] ?? '',
+  )?.[1]
 
 type Truth = ReturnType<typeof truthOf>
 
@@ -145,14 +166,18 @@ function windowsOf(refName: string, length: number, truth: Truth) {
 const sumOf = (held: Map<string, number> | undefined) =>
   [...(held?.values() ?? [])].reduce((sum, n) => sum + n, 0)
 
-// What is wrong with one count against its truth
+// What is wrong with one count against its truth, in a file of `file`
+// haplotypes that states `revisited:i:0` where `promised`
 function countProblems(
   columns: CountColumns,
   k: number,
   truth: Map<string, number> | undefined,
+  file: number,
+  promised: boolean,
 ) {
   const haplotypes = truth?.size ?? 0
   const passes = sumOf(truth)
+  const everyHaplotype = columns.haplotypes[k] === file
   return [
     columns.haplotypes[k]! > haplotypes ? 'haplotypes above the GFA' : '',
     columns.passes[k]! > passes ? 'passes above the GFA' : '',
@@ -162,18 +187,34 @@ function countProblems(
     columns.passReasons[k] === 0 && columns.passes[k] !== passes
       ? `passes ${columns.passes[k]} exact, the GFA's ${passes}`
       : '',
+    everyHaplotype && columns.haplotypeReasons[k] !== 0
+      ? `every haplotype of the file steps it, and its ${file} is not exact`
+      : '',
+    !promised && !everyHaplotype && columns.haplotypeReasons[k] === 0
+      ? `haplotypes ${columns.haplotypes[k]} of ${file} exact in a file that does not state revisited:i:0`
+      : '',
+    !promised && columns.passReasons[k] === 0
+      ? 'passes exact in a file that does not state revisited:i:0'
+      : '',
   ].filter(Boolean)
 }
 
-// What is wrong with counts over `drawn` against the GFA
+// What is wrong with counts over `drawn` against the GFA, of a file that
+// states `revisited:i:0` where `promised`
 function problemsOf(
   counts: WalkCounts,
   truth: Truth,
   refName: string,
   drawn: { start: number; end: number },
+  promised: boolean,
 ) {
   const { nodes, links } = counts
-  const problems: string[] = []
+  const problems: string[] =
+    counts.haplotypes.file === truth.file
+      ? []
+      : [
+          `haplotypes.file is ${counts.haplotypes.file}, and ${truth.file} haplotypes of the GFA step the reference`,
+        ]
   const passesOf = (id: number) => truth.passes.get(id) ?? []
   const onceOver = (id: number) => {
     const held = passesOf(id)
@@ -186,12 +227,27 @@ function problemsOf(
   nodes.ids.forEach((id, k) => {
     const reasons = nodes.passReasons[k]!
     const held = passesOf(id)
-    for (const problem of countProblems(nodes, k, truth.nodes.get(id))) {
+    for (const problem of countProblems(
+      nodes,
+      k,
+      truth.nodes.get(id),
+      truth.file,
+      promised,
+    )) {
       problems.push(`node ${id}: ${problem}`)
     }
     if (reasons === 0 && held.length !== 1) {
       problems.push(
         `node ${id}: passes exact, and the reference passes it ${held.length} times`,
+      )
+    }
+    if (
+      !onceOver(id) &&
+      (reasons === 0 ||
+        (nodes.haplotypeReasons[k] === 0 && nodes.haplotypes[k] !== truth.file))
+    ) {
+      problems.push(
+        `node ${id}: exact, and not passed once on the drawn stretch`,
       )
     }
     if (
@@ -215,8 +271,23 @@ function problemsOf(
     const to = links.to[k]!
     const name = linkName(from, to)
     listed.set(name, k)
-    for (const problem of countProblems(links, k, truth.links.get(name))) {
+    for (const problem of countProblems(
+      links,
+      k,
+      truth.links.get(name),
+      truth.file,
+      promised,
+    )) {
       problems.push(`link ${from},${to}: ${problem}`)
+    }
+    if (
+      !(onceOver(from >> 1) && onceOver(to >> 1)) &&
+      (links.passReasons[k] === 0 ||
+        (links.haplotypeReasons[k] === 0 && links.haplotypes[k] !== truth.file))
+    ) {
+      problems.push(
+        `link ${from},${to}: exact, and not between two nodes passed once on the drawn stretch`,
+      )
     }
     const [lastFrom, lastTo] = [links.from[k - 1], links.to[k - 1]]
     if (
@@ -231,10 +302,16 @@ function problemsOf(
     k !== undefined &&
     columns.haplotypeReasons[k] === 0 &&
     columns.passReasons[k] === 0
+  const elsewhere = (columns: CountColumns, k: number | undefined) =>
+    k !== undefined && (columns.passReasons[k]! & COUNT_REASONS.elsewhere) !== 0
+  const stated = promised ? exact : elsewhere
+  const wanted = promised ? 'exact' : 'elsewhere'
   for (const id of truth.passes.keys()) {
     const k = nodes.ids.indexOf(id)
-    if (onceOver(id) && !exact(nodes, k < 0 ? undefined : k)) {
-      problems.push(`node ${id}: passed once on the drawn stretch, not exact`)
+    if (onceOver(id) && !stated(nodes, k < 0 ? undefined : k)) {
+      problems.push(
+        `node ${id}: passed once on the drawn stretch, not ${wanted}`,
+      )
     }
   }
   for (const name of truth.links.keys()) {
@@ -242,10 +319,10 @@ function problemsOf(
     if (
       onceOver(a! >> 1) &&
       onceOver(b! >> 1) &&
-      !exact(links, listed.get(name))
+      !stated(links, listed.get(name))
     ) {
       problems.push(
-        `link ${name}: between two nodes passed once on the drawn stretch, not exact`,
+        `link ${name}: between two nodes passed once on the drawn stretch, not ${wanted}`,
       )
     }
   }
@@ -289,7 +366,7 @@ async function uncounted(
 }
 
 test.each(FIXTURES)(
-  '%s: no count is above its GFA, an exact one equals it, the reasons say why, every node and link of a cut has one, and expanded they read what an expanded cut reads',
+  '%s: no count is above its GFA, an exact one equals it, none but every haplotype of the file is exact unless the file states revisited:i:0, the reasons say why, every node and link of a cut has one, and expanded they read what an expanded cut reads',
   async fixture => {
     const path = `${DATA}${fixture}.R.walks.gz`
     const data = new LocalFile(path)
@@ -303,6 +380,8 @@ test.each(FIXTURES)(
       readFileSync(`${DATA}${gfaOf(fixture)}.R.gfa`, 'utf8'),
       new Set(sequences),
     )
+    const stated = revisitedStated(path)
+    const promised = stated === '0'
     const problems: string[] = []
     for (const refName of sequences) {
       const length = await reader.sequenceLength(refName)
@@ -320,7 +399,13 @@ test.each(FIXTURES)(
                 reads.splice(0)
                 const counts = await reader.counts(refName, region, opts)
                 const counted = reads.splice(0)
-                const found = problemsOf(counts, truth, refName, drawn)
+                const found = problemsOf(
+                  counts,
+                  truth,
+                  refName,
+                  drawn,
+                  promised,
+                )
                 if (more.stepBudget === undefined) {
                   for (const problem of await uncounted(
                     reader,
@@ -359,7 +444,12 @@ test.each(FIXTURES)(
         }
       }
     }
-    expect({ problems: problems.length, first: problems.slice(0, 8) }).toEqual({
+    expect({
+      revisited: stated,
+      problems: problems.length,
+      first: problems.slice(0, 8),
+    }).toEqual({
+      revisited: String(truth.revisited),
       problems: 0,
       first: [],
     })
