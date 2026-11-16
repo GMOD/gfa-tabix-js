@@ -15,6 +15,11 @@ export interface GraphTables {
     // 0 for a node placed off R, which may lie on the reference outside the
     // rows read; absent from tables another source builds
     passes?: Int32Array
+    // 1 where the reference steps the node reversed at `starts`, whether or
+    // not the cut's reference walk reaches it; 0 where it steps it forward,
+    // and for a node placed off the reference, whose strand its walk's steps
+    // state; absent from tables another source builds
+    reversed?: Uint8Array
     // 1 for a placeholder, as WalkNode's `placeholder`: a run of steps off R
     // the cut did not load, named for its walk and its stretch of the contig;
     // absent from tables another source builds

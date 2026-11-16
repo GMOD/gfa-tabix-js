@@ -65,6 +65,7 @@ done
 build adv adv.R.gfa --refs R --tile 60 --abridge-bytes 1
 build edge edge.R.gfa --refs R --tile 60 --abridge-bytes 1
 build farrejoin farrejoin.R.gfa --refs R --tile 10
+build strand strand.R.gfa --refs R --tile 1000
 build detailtwice detailtwice.R.gfa --refs R --tile 40 --abridge-bytes 1
 # The older twins, unabridged and the *whole files without --abridge-steps 0
 # --abridge-bytes 0, keep the default abridge budgets, which abridge no tile of

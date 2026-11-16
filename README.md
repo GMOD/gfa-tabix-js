@@ -90,6 +90,15 @@ const tables = graph.tables(kept, fragments, departures)
   its row names: `tables.walks.refStarts` gives every step's position on the
   reference, NaN for a step off it, so a reader of the tables never picks a pass
   itself
+- A node on the reference states the strand the reference steps it on:
+  `tables.nodes.reversed` is 1 where the `ref` row that places the node steps it
+  reversed, at the pass `nodes.starts` gives, and a node's `reversed` in
+  `graph.nodes` and in `reader.referenceNodes` says the same. A cut's reference
+  walk covers the drawn stretch, and a haplotype's walk can bring in a node the
+  reference steps elsewhere in the tiles read, which no step of that walk gives
+  the reference's strand of; the column gives it for every node with rank 0. It
+  is 0 for a node placed off the reference, whose strand along its walk the
+  walk's steps give
 - `tables.revisited` is the walk file header's `revisited`, how many nodes the
   reference passes more than once, NaN where the header states none. Unless it
   is 0, a run of steps off the reference may be a copy of reference sequence the

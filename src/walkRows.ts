@@ -81,6 +81,9 @@ export interface WalkNode {
   // cut read; 0 for a node it places off R, whether off the reference or on
   // it only where no ref row it read holds the node
   passes: number
+  // the reference steps the node reversed at `start`, from the ref row that
+  // places it; absent off the reference
+  reversed?: boolean
   // on the reference inside the window plus the cut's context
   onWindow: boolean
   // no node of the graph: a run of an unloaded piece's steps off R, on
@@ -1122,6 +1125,9 @@ export class WalkGraph {
     const placeholders = Uint8Array.from(held, node =>
       node.placeholder ? 1 : 0,
     )
+    const reversedOnReference = Uint8Array.from(held, node =>
+      node.reversed === true ? 1 : 0,
+    )
     held.forEach((node, i) => {
       const { id, refName, start, end, rank, passes: n } = node
       index.set(id, i)
@@ -1214,6 +1220,7 @@ export class WalkGraph {
         ranks,
         refNames,
         passes,
+        reversed: reversedOnReference,
         placeholders,
       },
       links: { from, to, strands },

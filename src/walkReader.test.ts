@@ -19,6 +19,7 @@ import {
 } from './walkReader.ts'
 import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
+import type { GraphTables } from './util.ts'
 import type { AbridgedPiece } from './walkChunk.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
@@ -2238,6 +2239,56 @@ test('referenceNodes gives every pass of the reference over the region', async (
     '2@18-24',
     '3@24-30',
     '4@30-45',
+  ])
+})
+
+// Each node of a cut's tables as the strand the reference steps it on, its
+// name, its position and its rank
+const nodeStrands = ({ nodes }: GraphTables) =>
+  nodes.names.map(
+    (name, i) =>
+      `${nodes.reversed?.[i] === 1 ? '<' : '>'}${name}@${nodes.starts[i]} rank ${nodes.ranks[i]}`,
+  )
+
+// strand.R.gfa: R walks >1<2<3>4, 10 bp each, in one tile, and A walks
+// >1>3>2>1. A cut of the first 10 bp keeps R's step on 1 alone, and A brings
+// in 3 and 2, each walked against the strand R steps it on
+test('a node on the reference states the strand the reference steps it on, though the cut keeps no step of the reference there', async () => {
+  const walks = reader('strand.R')
+  const { graph, kept, fragments, departures } = await walks.cut(
+    'R#0#chr',
+    { start: 0, end: 10 },
+    { context: 0 },
+  )
+  const tables = graph.tables(kept, fragments, departures)
+  expect(
+    graphTablesGFA(tables)
+      .split('\n')
+      .filter(l => l.startsWith('W')),
+  ).toEqual(['W\tR\t0\tchr\t0\t10\t>1', 'W\tA\t1\ta\t0\t40\t>1>3>2>1'])
+  expect(nodeStrands(tables)).toEqual([
+    '>1@0 rank 0',
+    '<2@10 rank 0',
+    '<3@20 rank 0',
+  ])
+  expect(
+    (await walks.referenceNodes('R#0#chr', { start: 0, end: 40 })).map(
+      n => `${n.reversed === true ? '<' : '>'}${n.id}`,
+    ),
+  ).toEqual(['>1', '<2', '<3', '>4'])
+})
+
+// revref.gfa: the reference walks 1-,2-,4- and H#1 walks 1-,3-,4-
+test('a node placed off the reference states no strand of the reference', async () => {
+  const { tables } = await reader('revref.GRCh38').cutRegion(
+    { refName: 'chr', start: 0, end: 9 },
+    { context: 0, expand: () => true },
+  )
+  expect(nodeStrands(tables)).toEqual([
+    '<1@0 rank 0',
+    '<2@4 rank 0',
+    '<4@5 rank 0',
+    '>3@4 rank 1',
   ])
 })
 

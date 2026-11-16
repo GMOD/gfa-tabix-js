@@ -27,6 +27,9 @@ export interface PlacedNode {
   // rows; 0 for a node off its R, whether off the reference or on it only
   // where these rows do not hold it
   passes: number
+  // the reference steps the node reversed at `start`, from the ref row that
+  // places it; absent off the reference
+  reversed?: boolean
   // a run of a piece's steps off R the cut did not load, placed on its contig
   placeholder?: true
 }
@@ -1027,6 +1030,7 @@ export function decodeChunk(
         end: start + length,
         rank: 0,
         passes: passes[k]!,
+        reversed: (handles[k]! & 1) === 1,
       }
       if (out.nodes.has(id)) {
         out.revisits.push({ id, ...node })
@@ -1156,6 +1160,7 @@ export function referenceNodes(rows: string[][]) {
         end: start + length,
         rank: 0,
         passes: passes[k]!,
+        reversed: (handles[k]! & 1) === 1,
       })
       start += length
     }
