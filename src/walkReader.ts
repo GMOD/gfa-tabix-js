@@ -27,6 +27,7 @@ import { WalkFile, WalkFormatError, once, raceAbort } from './walkFile.ts'
 import {
   WalkGraph,
   byteBudgetError,
+  countStepsError,
   edgeKey,
   isPlaceholder,
   joinPieces,
@@ -1308,13 +1309,12 @@ export class WalkReader {
         chunkStart: unit.start,
       })),
     )
-    const tooManyRead = stepBudgetError(
+    const tooManyRead = countStepsError(
       rowSteps,
       stepBudget,
       READ_STEPS_PER_KEPT,
       region,
       header.tile,
-      true,
       opts.budgetNames,
     )
     if (tooManyRead) {

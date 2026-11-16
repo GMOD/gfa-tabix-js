@@ -228,6 +228,21 @@ test('a step budget that stops expanding leaves the rest unloaded, and says so',
   expect(fits).toEqual(twin)
 })
 
+test('counts past the step budget say what the window holds and what to do instead, offering no choice of haplotypes', async () => {
+  await expect(
+    countsOf('counts', { start: 0, end: 80 }, { stepBudget: 1 }),
+  ).rejects.toMatchObject({
+    message:
+      'Too many haplotype steps in this window to count: its walk rows hold 29 steps, a step along the reference counting a quarter, over 8 × the step budget of 1. Count a window of about 20bp or less, or leave this one uncounted',
+  })
+  await expect(
+    countsOf('counts', { start: 0, end: 80 }, { stepBudget: 0.5 }),
+  ).rejects.toMatchObject({
+    message:
+      'Too many haplotype steps in this window to count: its walk rows hold 29 steps, a step along the reference counting a quarter, over 8 × the step budget of 0.5. Its first tile alone is over, so leave this window uncounted or raise the step budget',
+  })
+})
+
 // between.R.gfa: MID#1 walks 7 and 8, jumps back to 1, takes 27 and jumps on
 // to 9, each piece abridged; its two records own no steps, so the pieces
 // either side of each only touch them

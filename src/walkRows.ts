@@ -1428,6 +1428,50 @@ export function stepBudgetError(
   filtered: boolean,
   names = BUDGET_NAMES,
 ) {
+  const budget = stepBudget * readPerKept
+  const over = readStepsOver(rows, budget, window, tile)
+  const fewerFit =
+    over !== undefined &&
+    !filtered &&
+    over.walks > 2 &&
+    (2 * over.total) / over.walks <= budget
+  return over
+    ? new RegionTooLargeError(
+        over.fitsBp > 0
+          ? `Zoom in to about ${bpString(over.fitsBp)}${fewerFit ? ', or choose fewer haplotypes,' : ''} to see the graph`
+          : `Too many haplotype steps here to draw ${filtered ? 'these haplotypes' : 'every haplotype'} (${Math.round(over.read).toLocaleString()} steps read, a step along the reference counting a quarter, over ${readPerKept} × ${names.steps} of ${stepBudget.toLocaleString()}); choose fewer haplotypes`,
+        budget,
+        window.end - window.start,
+        Math.max(over.fitsBp, 1),
+      )
+    : undefined
+}
+
+export function countStepsError(
+  rows: Pick<WalkRow, 'n' | 'interior' | 'chunkStart' | 'name'>[],
+  stepBudget: number,
+  readPerKept: number,
+  window: { start: number; end: number },
+  tile: number,
+  names = BUDGET_NAMES,
+) {
+  const over = readStepsOver(rows, stepBudget * readPerKept, window, tile)
+  return over
+    ? new RegionTooLargeError(
+        `Too many haplotype steps in this window to count: its walk rows hold ${Math.round(over.total).toLocaleString()} steps, a step along the reference counting a quarter, over ${readPerKept} × ${names.steps} of ${stepBudget.toLocaleString()}. ${over.fitsBp > 0 ? `Count a window of about ${bpString(over.fitsBp)} or less, or leave this one uncounted` : `Its first tile alone is over, so leave this window uncounted or raise ${names.steps}`}`,
+        stepBudget * readPerKept,
+        window.end - window.start,
+        Math.max(over.fitsBp, 1),
+      )
+    : undefined
+}
+
+function readStepsOver(
+  rows: Pick<WalkRow, 'n' | 'interior' | 'chunkStart' | 'name'>[],
+  budget: number,
+  window: { start: number; end: number },
+  tile: number,
+) {
   let total = 0
   const perChunk = new Map<number, number>()
   const walks = new Set<string>()
@@ -1437,11 +1481,6 @@ export function stepBudgetError(
     perChunk.set(row.chunkStart, (perChunk.get(row.chunkStart) ?? 0) + steps)
     walks.add(row.name)
   }
-  const budget = stepBudget * readPerKept
-  if (total <= budget) {
-    return undefined
-  }
-  const windowBp = window.end - window.start
   let read = 0
   let fitsBp = 0
   for (const cs of [...perChunk.keys()].sort((a, b) => a - b)) {
@@ -1451,16 +1490,7 @@ export function stepBudgetError(
     }
     fitsBp = Math.max(fitsBp, cs + tile - window.start)
   }
-  const fewerFit =
-    !filtered && walks.size > 2 && (2 * total) / walks.size <= budget
-  return new RegionTooLargeError(
-    fitsBp > 0
-      ? `Zoom in to about ${bpString(fitsBp)}${fewerFit ? ', or choose fewer haplotypes,' : ''} to see the graph`
-      : `Too many haplotype steps here to draw ${filtered ? 'these haplotypes' : 'every haplotype'} (${Math.round(read).toLocaleString()} steps read, a step along the reference counting a quarter, over ${readPerKept} × ${names.steps} of ${stepBudget.toLocaleString()}); choose fewer haplotypes`,
-    budget,
-    windowBp,
-    Math.max(fitsBp, 1),
-  )
+  return total > budget ? { total, read, fitsBp, walks: walks.size } : undefined
 }
 
 /**
