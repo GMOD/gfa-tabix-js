@@ -2616,6 +2616,21 @@ test('steps either side of a hole in the reference depart nowhere', async () => 
   ])
 })
 
+// hole.R.gfa in 16 bp tiles, where H's jump from 1 to 4 lies between two
+// pieces and is a record, and in one 64 bp tile, where it lies in one piece
+test('a window inside a hole in the reference returns the jump across it, whether or not the writer cut the walk there', async () => {
+  const across = async (name: string) =>
+    (
+      await reader(name).cut('R#0#chr', { start: 20, end: 24 }, { context: 0 })
+    ).departures.map(d => departure(d).slice(0, 6))
+  expect(await across('hole.R')).toEqual([
+    ['H#1#h', 4, 0, 0, '4+', '44+'],
+  ])
+  expect(await across('holetile.R')).toEqual([
+    ['H#1#h', 4, 0, 0, '4+', '44+'],
+  ])
+})
+
 // Each link of a cut's tables, as its two nodes and their strands
 function linkNames(cut: Awaited<ReturnType<WalkReader['cut']>>) {
   const { nodes, links } = cut.graph.tables(

@@ -415,9 +415,10 @@ export function walkCut(
     links: linked = true,
   }: WalkCutOptions = {},
 ) {
-  // the window and its context, as the reference nodes on it span them
-  let windowStart = Infinity
-  let windowEnd = -Infinity
+  // the drawn stretch: the window and its context, widened to the reference
+  // nodes on it, so a window inside a hole in the reference has one
+  let windowStart = drawn?.start ?? Infinity
+  let windowEnd = drawn?.end ?? -Infinity
   for (const node of nodes.values()) {
     if (node.onWindow) {
       windowStart = Math.min(windowStart, node.start)
