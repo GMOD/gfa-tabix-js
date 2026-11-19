@@ -1,5 +1,6 @@
 import { BlobFile, LocalFile } from 'generic-filehandle2'
 
+import { AmbiguousSequenceError } from './refNames.ts'
 import {
   bgzf,
   digestOf,
@@ -716,6 +717,47 @@ test("a region cut names the file's sequence for a contig, and keeps the haploty
   expect(graphTablesGFA(whole.tables)).toBe(
     await gfa(reader('header.GRCh38'), 1000, 2600),
   )
+})
+
+const dipShared =
+  'chr1 on HG002 is 2 sequences of the file, HG002#1#chr1, HG002#2#chr1; name one of them, or its haplotype: HG002#1, HG002#2'
+
+test('a contig on both haplotypes of a diploid reference sample names its sequence by haplotype or full name', async () => {
+  const walks = reader('dip.HG002')
+  expect(await walks.referenceSequences()).toEqual([
+    'HG002#1#chr1',
+    'HG002#2#chr1',
+  ])
+  await expect(walks.sequenceFor('HG002', 'chr1')).rejects.toThrow(
+    AmbiguousSequenceError,
+  )
+  await expect(walks.sequenceFor('HG002', 'chr1')).rejects.toMatchObject({
+    message: dipShared,
+    sequences: ['HG002#1#chr1', 'HG002#2#chr1'],
+  })
+  expect(await walks.sequenceFor('HG002#1', 'chr1')).toBe('HG002#1#chr1')
+  expect(await walks.sequenceFor('HG002#2', 'chr1')).toBe('HG002#2#chr1')
+  expect(await walks.sequenceFor('HG002', 'HG002#2#chr1')).toBe('HG002#2#chr1')
+})
+
+test('a region cut by a contig on both haplotypes of a diploid reference sample throws until one is named', async () => {
+  const walks = reader('dip.HG002')
+  const byContig = { refName: 'chr1', start: 0, end: 40 }
+  await expect(walks.cutRegion(byContig)).rejects.toThrow(dipShared)
+  const one = await walks.cutRegion(byContig, { referenceSample: 'HG002#1' })
+  expect(one.refName).toBe('HG002#1#chr1')
+  expect(one.sample).toBe('HG002#1')
+  expect(walkNames(graphTablesGFA(one.tables))).toEqual([
+    'HG002#1#chr1',
+    'HG00097#1#chr1',
+  ])
+  const two = await walks.cutRegion(
+    { ...byContig, refName: 'HG002#2#chr1' },
+    { context: 0 },
+  )
+  expect(two.refName).toBe('HG002#2#chr1')
+  expect(two.sample).toBe('HG002')
+  expect(walkNames(graphTablesGFA(two.tables))).toEqual(['HG002#2#chr1'])
 })
 
 test('a region cut on a sequence the file lacks names the ones it holds', async () => {

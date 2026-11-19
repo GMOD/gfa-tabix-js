@@ -49,7 +49,11 @@ export { WALK_FORMAT, WalkFile, WalkFormatError } from './walkFile.ts'
 export type { WalkFilehandle, WalkUnit } from './walkFile.ts'
 export { checkRange } from './tabixSource.ts'
 export type { TabixSource } from './tabixSource.ts'
-export { refNameLookup, resolveRefName } from './refNames.ts'
+export {
+  AmbiguousSequenceError,
+  refNameLookup,
+  resolveRefName,
+} from './refNames.ts'
 export { WalkRowError, referenceNodes } from './walkChunk.ts'
 export {
   FLOOR_PRESETS,

@@ -192,6 +192,12 @@ record's own steps in a tile fetched to attach them.
   holds. A gap's steps are its walk's departures' steps, so a walk's unloaded
   steps are its walks' `abridgedSteps` and its departures' together.
   `walks.abridgedBp` is gone: the placeholders' lengths are the bp not loaded
+- **A contig on two reference haplotypes:** `refNameLookup` maps each spelling
+  to every name it fits, a `Map<string, string[]>`, and `resolveRefName`,
+  `sequenceFor`, `cutRegion` and `formsCut` throw an `AmbiguousSequenceError`
+  where it fits more than one. graph-walks 6 resolved `chr1` on `HG002` to the
+  last of `HG002#1#chr1` and `HG002#2#chr1` without a word
+  ([A region by contig](#a-region-by-contig))
 - **`GraphTables.revisited`** is required, where every other addition to the
   tables is optional, so a host that builds its own tables now has to pass it:
   how many nodes its reference passes more than once, or NaN where it states
@@ -265,6 +271,13 @@ const { tables, refName, sample } = await reader.cutRegion(
   `GRCh38#0#chr6`, and keeps the haplotypes named, every one when none are
 - `referenceSample` names another sample than the header's first reference. A
   sequence the file lacks throws, naming the ones it holds
+- A contig on more than one haplotype of the reference sample throws an
+  `AmbiguousSequenceError` naming them: `chr1` in a file built with
+  `--refs HG002`, which holds `HG002#1#chr1` and `HG002#2#chr1`.
+  `referenceSample: 'HG002#1'`, or the full name `HG002#1#chr1`, picks one
+- Such a file is two coordinate systems, one per reference haplotype. Where both
+  pass a node, another haplotype's step there may be filed under either, so its
+  walk can lie wholly under one and show in no window of the other
 - The cut options below apply too, with `haplotypes` in place of `keep`
 
 ## Cut options
@@ -968,6 +981,10 @@ result.forms.map(f => formTag(f, result))
   haplotypes named
 - `refNameLookup` and `resolveRefName` resolve a contig the same way against any
   file's sequence names
+- Where a contig is on more than one haplotype of the sample, `sequenceFor` and
+  `resolveRefName` throw an `AmbiguousSequenceError` with the names in
+  `sequences`: `chr1` on `HG002` where the file holds `HG002#1#chr1` and
+  `HG002#2#chr1`. `chr1` on `HG002#1`, or the full name, resolves
 
 ## Segment indexes
 

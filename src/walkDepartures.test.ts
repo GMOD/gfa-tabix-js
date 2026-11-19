@@ -1,5 +1,6 @@
 import { LocalFile } from 'generic-filehandle2'
 
+import { AmbiguousSequenceError } from './refNames.ts'
 import { walkFileOf } from './testing.ts'
 import { RegionTooLargeError, panSNHaplotypeOrSample } from './util.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
@@ -517,6 +518,18 @@ describe('a forms cut', () => {
     expect(
       await formsCut(reader('abridged.R'), region, { byteBudget: 1e9 }),
     ).toEqual(await formsCut(reader('abridged.R'), region))
+  })
+
+  test('throws on a contig both haplotypes of a diploid reference sample hold', async () => {
+    const window = { refName: 'chr1', start: 0, end: 40 }
+    await expect(formsCut(reader('dip.HG002'), window)).rejects.toThrow(
+      AmbiguousSequenceError,
+    )
+    const named = await formsCut(reader('dip.HG002'), {
+      ...window,
+      refName: 'HG002#1#chr1',
+    })
+    expect(named.map(h => h.haplotype)).toEqual(['HG00097#1'])
   })
 
   test('throws DepartureReadError past its departure byte budget', async () => {
