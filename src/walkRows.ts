@@ -372,9 +372,9 @@ export const edgeKey = (
 /**
  * The cut a window draws from its walks: the reference inside the window plus
  * its context, the drawn stretch, and each run from its first step on that
- * stretch to its last. The drawn stretch is the reference nodes over the
- * window and its context, whole, widened by every pass of a run's step over
- * them. Nothing is followed past the drawn stretch and no fragment runs on
+ * stretch to its last. The drawn stretch is the window and its context,
+ * widened to the reference nodes over them, whole, and to every pass of a
+ * run's step over them. Nothing is followed past the drawn stretch and no fragment runs on
  * through nodes other walks kept, so a haplotype's fragment does not depend on
  * which others are cut.
  *
