@@ -96,10 +96,13 @@ const tables = graph.tables(kept, fragments, departures)
   holds, or only a tile the cut does not read, is missing, so counts, which
   fetch every record's own steps, can find one it lacks
 - A node the reference passes more than once, as in a collapsed repeat, takes
-  the position of its pass over the window, and each walk's step on it the pass
-  its row names: `tables.walks.refStarts` gives every step's position on the
-  reference, NaN for a step off it, so a reader of the tables never picks a pass
-  itself
+  the position of its pass over the window and its context, the earliest where
+  several are, else its earliest pass in the tiles the cut reads; and each
+  walk's step on it the pass its row names: `tables.walks.refStarts` gives every
+  step's position on the reference, NaN for a step off it, so a reader of the
+  tables never picks a pass itself. A node with no pass in those tiles takes the
+  first place a fragment or a departure's own steps hold it, by walk name and
+  then position on the contig
 - A node on the reference states the strand the reference steps it on:
   `tables.nodes.reversed` is 1 where the `ref` row that places the node steps it
   reversed, at the pass `nodes.starts` gives, and a node's `reversed` in
