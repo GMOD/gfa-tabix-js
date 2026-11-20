@@ -119,6 +119,29 @@ export class RefPath {
   readonly before: number[] = [0]
   readonly starts: number[] = []
   readonly occurrences = new Map<number, number[]>()
+  private held?: ReturnType<RefPath['typed']>
+
+  private typed() {
+    const n = this.handles.length
+    const ids = new Int32Array(n)
+    const rev = new Uint8Array(n)
+    const bp = new Int32Array(n)
+    for (let i = 0; i < n; i++) {
+      const h = this.handles[i]!
+      ids[i] = idOf(h)
+      rev[i] = h & 1
+      bp[i] = this.before[i + 1]! - this.before[i]!
+    }
+    return { ids, rev, bp, starts: Float64Array.from(this.starts) }
+  }
+
+  // R's node ids, strands, step lengths and starts by position
+  columns() {
+    if (this.held?.ids.length !== this.handles.length) {
+      this.held = this.typed()
+    }
+    return this.held
+  }
 
   add(handles: number[], lengths: number[], start: number) {
     for (let k = 0; k < handles.length; k++) {
@@ -445,16 +468,29 @@ function decodeWalk(
     rev[at++] = h & 1
   }
   const [start, startCopy] = parseCopy(cols[9]!)
+  const along = path.columns()
   traverse(path, routes, start, startCopy, choices, n, {
     step: push,
     stretch(from, to, forward) {
+      if (at + Math.abs(to - from) > n) {
+        throw new WalkRowError(
+          'a walk row decodes to more steps than it states',
+        )
+      }
       if (forward) {
         for (let j = from + 1; j <= to; j++) {
-          push(path.handles[j]!, j)
+          ids[at] = along.ids[j]!
+          rev[at] = along.rev[j]!
+          refStarts[at] = along.starts[j]!
+          bp[at++] = along.bp[j]!
         }
       } else {
         for (let j = from - 1; j >= to; j--) {
-          push(otherStrand(path.handles[j]!), j)
+          ids[at] = along.ids[j]!
+          rev[at] = along.rev[j]! ^ 1
+          refStarts[at] = along.starts[j]!
+          against[at] = 1
+          bp[at++] = along.bp[j]!
         }
       }
     },

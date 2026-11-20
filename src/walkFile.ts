@@ -142,20 +142,33 @@ function checkUnit(unit: WalkUnit, head: string | undefined, rows: string[]) {
     unit.name,
   ].join('\t')
   const kinds = ROW_KINDS.get(unit.kind)
-  const stray = rows.find(row => {
-    const [seq, , , kind = ''] = row.split('\t', 4)
-    return (
-      kinds !== undefined && (seq !== unit.refName || !kinds.includes(kind))
-    )
-  })
-  const extra =
-    kinds === undefined
-      ? undefined
-      : rows.find(row => untagged(row) !== undefined)
-  const short =
-    kinds === undefined
-      ? undefined
-      : rows.find(row => lacking(row) !== undefined)
+  let stray: string | undefined
+  let extra: string | undefined
+  let short: string | undefined
+  if (kinds !== undefined) {
+    for (const row of rows) {
+      const cols = row.split('\t')
+      const kind = cols[3] ?? ''
+      const fixed = FIXED_COLUMNS.get(kind)
+      if (
+        stray === undefined &&
+        (cols[0] !== unit.refName || !kinds.includes(kind))
+      ) {
+        stray = row
+      }
+      if (fixed !== undefined && cols.length !== fixed) {
+        if (cols.length < fixed) {
+          short ??= row
+        } else if (extra === undefined) {
+          for (let k = fixed; k < cols.length; k++) {
+            if (!TAG.test(cols[k]!)) {
+              extra = row
+            }
+          }
+        }
+      }
+    }
+  }
   if (head !== stated) {
     throw new WalkFormatError(
       `${unitName(unit)} starts ${JSON.stringify(head?.slice(0, 80) ?? '')}`,

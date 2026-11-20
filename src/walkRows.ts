@@ -7,7 +7,6 @@ import {
 import { SKIPPED } from './walkChunk.ts'
 import {
   ATTACH_BP,
-  adjacentSteps,
   attachesOwnSteps,
   departureStretch,
 } from './walkDeparture.ts'
@@ -362,6 +361,189 @@ interface Split {
   tail: boolean
 }
 
+// A direct-mapped memo of the last key seen per slot, in front of a Map or
+// Set that most steps would ask the same question of again
+const MEMO_SLOTS = 1 << 16
+const MEMO_MASK = MEMO_SLOTS - 1
+const memoKeys = () => new Float64Array(MEMO_SLOTS).fill(Number.NaN)
+
+// The handles a slot's handle was last linked to, two a slot, so that the
+// two ways on from a bubble's first node both stay held
+interface LinkMemo {
+  from: Float64Array
+  to: Float64Array
+}
+
+// Whether `memo` held the link, which it holds from now on
+function linkHeld(memo: LinkMemo, a: number, b: number) {
+  const slot = a & MEMO_MASK
+  const same = memo.from[slot] === a
+  const held = same && (memo.to[2 * slot] === b || memo.to[2 * slot + 1] === b)
+  if (!held) {
+    memo.to[2 * slot + 1] = same ? memo.to[2 * slot]! : Number.NaN
+    memo.to[2 * slot] = b
+    memo.from[slot] = a
+  }
+  return held
+}
+
+// Links each step from `from` to `to` to the one before it, through `add`
+// where `memo` has not held the link
+function linkSteps(
+  ids: Int32Array,
+  rev: Uint8Array,
+  from: number,
+  to: number,
+  memo: LinkMemo,
+  add: (a: number, b: number) => void,
+) {
+  const first = Math.max(from, 0)
+  const end = Math.min(to, ids.length - 1)
+  let before = first <= end ? ids[first]! : SKIPPED
+  let a = first <= end ? before * 2 + rev[first]! : 0
+  for (let k = first + 1; k <= end; k++) {
+    const id = ids[k]!
+    const b = id * 2 + rev[k]!
+    if (before !== SKIPPED && id !== SKIPPED && !linkHeld(memo, a, b)) {
+      add(a, b)
+    }
+    before = id
+    a = b
+  }
+}
+
+// The loops over a run's steps that a cut runs once per walk, each a
+// function of its own so that it is compiled once and stays compiled
+
+// bp of the steps before each, and after the last
+function bpBefore(
+  ids: Int32Array,
+  stated: Int32Array | undefined,
+  length: (id: number) => number,
+) {
+  const out = new Float64Array(ids.length + 1)
+  for (let i = 0; i < ids.length; i++) {
+    const bp = stated === undefined ? -1 : stated[i]!
+    out[i + 1] = out[i]! + (bp < 0 ? length(ids[i]!) : bp)
+  }
+  return out
+}
+
+// The first and last steps whose pass lies over `start`-`end`, and the
+// stretch those passes cover
+function stepsOver(
+  refStarts: Float64Array,
+  bp: Float64Array,
+  start: number,
+  end: number,
+) {
+  let first = -1
+  let last = -1
+  let lo = Infinity
+  let hi = -Infinity
+  for (let i = 0; i < refStarts.length; i++) {
+    const at = refStarts[i]!
+    const to = at + bp[i + 1]! - bp[i]!
+    if (at < end && to > start) {
+      first = first < 0 ? i : first
+      last = i
+      lo = at < lo ? at : lo
+      hi = to > hi ? to : hi
+    }
+  }
+  return { first, last, lo, hi }
+}
+
+function keepSteps(
+  ids: Int32Array,
+  first: number,
+  last: number,
+  kept: Set<number>,
+  lastKept: Float64Array,
+) {
+  for (let i = first; i <= last; i++) {
+    const id = ids[i]!
+    const slot = id & MEMO_MASK
+    if (lastKept[slot] !== id) {
+      lastKept[slot] = id
+      kept.add(id)
+    }
+  }
+}
+
+// Writes each id's index to `into` from `at`, through `indexOf` where the
+// memo does not hold it
+function indexSteps(
+  ids: Int32Array,
+  into: Int32Array,
+  at: number,
+  lastId: Float64Array,
+  lastIndex: Int32Array,
+  indexOf: (id: number) => number,
+) {
+  for (let j = 0; j < ids.length; j++) {
+    const id = ids[j]!
+    const slot = id & MEMO_MASK
+    if (lastId[slot] !== id) {
+      lastId[slot] = id
+      lastIndex[slot] = indexOf(id)
+    }
+    into[at + j] = lastIndex[slot]!
+  }
+}
+
+function firstOnR(refStarts: Float64Array, from: number, to: number) {
+  let i = from
+  while (i < to && Number.isNaN(refStarts[i])) {
+    i++
+  }
+  return i < to ? i : -1
+}
+
+function lastOnR(refStarts: Float64Array, from: number, to: number) {
+  let i = to - 1
+  while (i >= from && Number.isNaN(refStarts[i])) {
+    i--
+  }
+  return i >= from ? i : -1
+}
+
+// Adds to `out` each two consecutive steps on R, from step `from` to `to`,
+// that do not follow R: the one before and the one after
+function departingPairs(
+  refStarts: Float64Array,
+  against: Uint8Array,
+  bp: Float64Array,
+  from: number,
+  to: number,
+  squeeze: (bp: number) => number,
+  out: number[],
+) {
+  let last = -1
+  for (let i = from; i < to; i++) {
+    const start = refStarts[i]!
+    if (!Number.isNaN(start)) {
+      if (last >= 0) {
+        const leaveReversed = against[last] === 1
+        const rejoinReversed = against[i] === 1
+        const leavePos = leaveReversed
+          ? refStarts[last]!
+          : refStarts[last]! + bp[last + 1]! - bp[last]!
+        const rejoinPos = rejoinReversed ? start + bp[i + 1]! - bp[i]! : start
+        const ownBp = bp[i]! - bp[last + 1]!
+        const adjacent =
+          ownBp === 0 &&
+          leaveReversed === rejoinReversed &&
+          (leavePos === rejoinPos || squeeze(leavePos) === squeeze(rejoinPos))
+        if (!adjacent) {
+          out.push(last, i)
+        }
+      }
+      last = i
+    }
+  }
+}
+
 export const edgeKey = (
   name: string,
   pos: number,
@@ -436,12 +618,7 @@ export function walkCut(
   const before = (run: WalkRun) => {
     let out = prefixes.get(run)
     if (!out) {
-      out = new Float64Array(run.ids.length + 1)
-      const stated = run.bp
-      for (let i = 0; i < run.ids.length; i++) {
-        const bp = stated === undefined ? -1 : stated[i]!
-        out[i + 1] = out[i]! + (bp < 0 ? length(run.ids[i]!) : bp)
-      }
+      out = bpBefore(run.ids, run.bp, length)
       prefixes.set(run, out)
     }
     return out
@@ -450,14 +627,9 @@ export function walkCut(
   // passes come from the steps placed on them
   if (drawn) {
     for (const run of readRuns) {
-      const bp = before(run)
-      for (let i = 0; i < run.ids.length; i++) {
-        const start = run.refStarts[i]!
-        if (start < drawn.end && start + bp[i + 1]! - bp[i]! > drawn.start) {
-          windowStart = Math.min(windowStart, start)
-          windowEnd = Math.max(windowEnd, start + bp[i + 1]! - bp[i]!)
-        }
-      }
+      const over = stepsOver(run.refStarts, before(run), drawn.start, drawn.end)
+      windowStart = Math.min(windowStart, over.lo)
+      windowEnd = Math.max(windowEnd, over.hi)
     }
   }
   const attaches = (d: DepartureEnds) =>
@@ -521,11 +693,17 @@ export function walkCut(
   // the links the steps returned walk, as pairs of handles, each once
   const links: number[] = []
   const linkedTo = new Map<number, Set<number>>()
+  const linkMemo = {
+    from: memoKeys(),
+    to: new Float64Array(2 * MEMO_SLOTS).fill(Number.NaN),
+  }
   const link = (a: number, b: number) => {
     if (linked) {
-      const held = linkedTo.get(a) ?? new Set<number>()
-      linkedTo.set(a, held)
-      if (!held.has(b)) {
+      const held = linkedTo.get(a)
+      if (held === undefined) {
+        linkedTo.set(a, new Set([b]))
+        links.push(a, b)
+      } else if (!held.has(b)) {
         held.add(b)
         links.push(a, b)
       }
@@ -533,11 +711,8 @@ export function walkCut(
   }
   // links each step of `run` from `from` to `to` to the one before it
   const walk = (run: WalkRun, from: number, to: number) => {
-    const { ids, rev } = run
-    for (let k = Math.max(from, 0) + 1; k <= to && k < ids.length; k++) {
-      if (ids[k - 1] !== SKIPPED && ids[k] !== SKIPPED) {
-        link(ids[k - 1]! * 2 + rev[k - 1]!, ids[k]! * 2 + rev[k]!)
-      }
+    if (linked) {
+      linkSteps(run.ids, run.rev, from, to, linkMemo, link)
     }
   }
   // `run` with each split placeholder as two, the part within a span's
@@ -611,18 +786,12 @@ export function walkCut(
     }
   }
   const stretchSpan = (run: WalkRun) => {
-    const bp = before(run)
-    let first = -1
-    let last = -1
-    for (let i = 0; i < run.ids.length; i++) {
-      const start = run.refStarts[i]!
-      if (start < windowEnd && start + bp[i + 1]! - bp[i]! > windowStart) {
-        if (first < 0) {
-          first = i
-        }
-        last = i
-      }
-    }
+    const { first, last } = stepsOver(
+      run.refStarts,
+      before(run),
+      windowStart,
+      windowEnd,
+    )
     if (first >= 0) {
       spans.push({ run, first, last })
     }
@@ -650,10 +819,9 @@ export function walkCut(
       kept.add(id)
     }
   }
+  const lastKept = memoKeys()
   for (const span of spans) {
-    for (let i = span.first; i <= span.last; i++) {
-      kept.add(span.run.ids[i]!)
-    }
+    keepSteps(span.run.ids, span.first, span.last, kept, lastKept)
   }
   const runEnd = (run: WalkRun) => run.hapOffset + before(run)[run.ids.length]!
   // whether a fragment holds step `i` of `run`; a departure's own steps are
@@ -726,6 +894,7 @@ export function walkCut(
     (run.unloaded ?? [])
       .filter(u => u.from < to && u.to > from)
       .map(u => u.piece)
+  const pairs: number[] = []
   for (const run of runs) {
     if (run.name === refName) {
       continue
@@ -734,64 +903,65 @@ export function walkCut(
     const bp = before(run)
     const bounds = pieceBounds(run)
     for (let p = 0; p + 1 < bounds.length; p++) {
-      let last = -1
-      for (let i = bounds[p]!; i < bounds[p + 1]!; i++) {
-        const start = refStarts[i]!
-        if (Number.isNaN(start)) {
-          continue
-        }
-        if (last >= 0) {
-          const ownBp = bp[i]! - bp[last + 1]!
-          const leaveReversed = against[last] === 1
-          const rejoinReversed = against[i] === 1
-          const leavePos = leaveReversed
+      pairs.length = 0
+      departingPairs(
+        refStarts,
+        against,
+        bp,
+        bounds[p]!,
+        bounds[p + 1]!,
+        squeeze,
+        pairs,
+      )
+      for (let q = 0; q < pairs.length; q += 2) {
+        const last = pairs[q]!
+        const i = pairs[q + 1]!
+        const leaveReversed = against[last] === 1
+        const rejoinReversed = against[i] === 1
+        const ends = {
+          ownBp: bp[i]! - bp[last + 1]!,
+          leavePos: leaveReversed
             ? refStarts[last]!
-            : refStarts[last]! + bp[last + 1]! - bp[last]!
-          const rejoinPos = rejoinReversed ? start + bp[i + 1]! - bp[i]! : start
-          const ends = {
-            ownBp,
-            leavePos,
-            leaveReversed,
-            rejoinPos,
-            rejoinReversed,
-          }
-          if (!adjacentSteps(ends, squeeze)) {
-            const [lo, hi] = departureStretch(ends)
-            if (lo < windowEnd && hi > windowStart) {
-              const d: WalkDeparture = {
-                name: run.name,
-                hapStart: run.hapOffset + bp[last + 1]!,
-                ownBp,
-                missingBp: 0,
-                leavePos,
-                leaveReversed,
-                leavePasses: passesOf(ids[last]!),
-                rejoinPos,
-                rejoinReversed,
-                rejoinPasses: passesOf(ids[i]!),
-                fromSteps: true,
-              }
-              if (i > last + 1 && attaches(ends)) {
-                d.steps = {
-                  ids: ids.subarray(last + 1, i),
-                  rev: rev.subarray(last + 1, i),
-                }
-                const held = unloadedIn(run, last + 1, i)
-                if (held.length > 0) {
-                  d.abridged = held
-                }
-                markAttached(run, last + 1, i)
-                walk(
-                  run,
-                  returned(run, last) ? last : last + 1,
-                  returned(run, i) ? i : i - 1,
-                )
-              }
-              departures.push(d)
-            }
-          }
+            : refStarts[last]! + bp[last + 1]! - bp[last]!,
+          leaveReversed,
+          rejoinPos: rejoinReversed
+            ? refStarts[i]! + bp[i + 1]! - bp[i]!
+            : refStarts[i]!,
+          rejoinReversed,
         }
-        last = i
+        const [lo, hi] = departureStretch(ends)
+        if (lo < windowEnd && hi > windowStart) {
+          const d: WalkDeparture = {
+            name: run.name,
+            hapStart: run.hapOffset + bp[last + 1]!,
+            ownBp: ends.ownBp,
+            missingBp: 0,
+            leavePos: ends.leavePos,
+            leaveReversed,
+            leavePasses: passesOf(ids[last]!),
+            rejoinPos: ends.rejoinPos,
+            rejoinReversed,
+            rejoinPasses: passesOf(ids[i]!),
+            fromSteps: true,
+          }
+          if (i > last + 1 && attaches(ends)) {
+            d.steps = {
+              ids: ids.subarray(last + 1, i),
+              rev: rev.subarray(last + 1, i),
+            }
+            const held = unloadedIn(run, last + 1, i)
+            if (held.length > 0) {
+              d.abridged = held
+            }
+            markAttached(run, last + 1, i)
+            walk(
+              run,
+              returned(run, last) ? last : last + 1,
+              returned(run, i) ? i : i - 1,
+            )
+          }
+          departures.push(d)
+        }
       }
     }
   }
@@ -808,16 +978,8 @@ export function walkCut(
     const bp = before(run)
     const bounds = pieceBounds(run)
     for (let p = 0; p + 1 < bounds.length; p++) {
-      let first = -1
-      let last = -1
-      for (let i = bounds[p]!; i < bounds[p + 1]!; i++) {
-        if (onR(run, i)) {
-          if (first < 0) {
-            first = i
-          }
-          last = i
-        }
-      }
+      const first = firstOnR(run.refStarts, bounds[p]!, bounds[p + 1]!)
+      const last = lastOnR(run.refStarts, bounds[p]!, bounds[p + 1]!)
       if (first < 0) {
         continue
       }
@@ -1146,7 +1308,9 @@ export class WalkGraph {
       passes[i] = n
     })
     // a kept node with no row of its own is named, and not drawn
-    const nodeIndex = (id: number) => {
+    const lastId = memoKeys()
+    const lastIndex = new Int32Array(MEMO_SLOTS)
+    const indexOf = (id: number) => {
       let i = index.get(id)
       if (i === undefined) {
         i = names.length
@@ -1154,6 +1318,14 @@ export class WalkGraph {
         names.push(nodeName(id, this.nodes.get(id)))
       }
       return i
+    }
+    const nodeIndex = (id: number) => {
+      const slot = id & MEMO_MASK
+      if (lastId[slot] !== id) {
+        lastId[slot] = id
+        lastIndex[slot] = indexOf(id)
+      }
+      return lastIndex[slot]!
     }
 
     const byLine = new Map<string, number>()
@@ -1206,9 +1378,7 @@ export class WalkGraph {
     const refStarts = new Float64Array(steps.length).fill(Number.NaN)
     walks.forEach(({ ids, rev, refStarts: placed }, p) => {
       const at = offsets[p]!
-      for (let j = 0; j < ids.length; j++) {
-        steps[at + j] = nodeIndex(ids[j]!)
-      }
+      indexSteps(ids, steps, at, lastId, lastIndex, indexOf)
       reversed.set(rev, at)
       refStarts.set(statedPlaces(placed, ids.length), at)
     })
@@ -1253,29 +1423,39 @@ export class WalkGraph {
       return node ? node.end - node.start : 0
     }
     const placed = new Map<number, WalkNode>()
+    // the ids no walk places, with their lengths: those on the reference,
+    // placeholders, and those the cut does not keep
+    const passedId = memoKeys()
+    const passedLength = new Float64Array(MEMO_SLOTS)
     const visit = (name: string, ids: Int32Array, start: number) => {
       let at = start
       for (const id of ids) {
-        const node = this.nodes.get(id)
-        const length = lengthOf(id)
-        const held = placed.get(id)
-        if (
-          node &&
-          node.rank !== 0 &&
-          !node.placeholder &&
-          kept.has(id) &&
-          (!held ||
-            name < held.refName ||
-            (name === held.refName && at < held.start))
-        ) {
-          placed.set(id, {
-            ...node,
-            refName: name,
-            start: at,
-            end: at + length,
-          })
+        const slot = id & MEMO_MASK
+        if (passedId[slot] === id) {
+          at += passedLength[slot]!
+        } else {
+          const node = this.nodes.get(id)
+          const length = node ? node.end - node.start : 0
+          if (node && node.rank !== 0 && !node.placeholder && kept.has(id)) {
+            const held = placed.get(id)
+            if (
+              !held ||
+              name < held.refName ||
+              (name === held.refName && at < held.start)
+            ) {
+              placed.set(id, {
+                ...node,
+                refName: name,
+                start: at,
+                end: at + length,
+              })
+            }
+          } else {
+            passedId[slot] = id
+            passedLength[slot] = length
+          }
+          at += length
         }
-        at += length
       }
     }
     for (const f of fragments) {
@@ -1375,25 +1555,52 @@ function departureTable(
       reversed.set(d.steps.rev, at)
     }
   })
+  const names = new Array<string>(n)
+  const hapStarts = new Float64Array(n)
+  const ownBp = new Float64Array(n)
+  const missingBp = new Float64Array(n)
+  const leavePos = new Float64Array(n)
+  const leaveReversed = new Uint8Array(n)
+  const leavePasses = new Int32Array(n)
+  const rejoinPos = new Float64Array(n)
+  const rejoinReversed = new Uint8Array(n)
+  const rejoinPasses = new Int32Array(n)
+  const fromSteps = new Uint8Array(n)
+  const breakAt = new Int32Array(n)
+  const abridgedSteps = new Float64Array(n)
+  for (let k = 0; k < n; k++) {
+    const d = departures[k]!
+    names[k] = d.name
+    hapStarts[k] = d.hapStart
+    ownBp[k] = d.ownBp
+    missingBp[k] = d.missingBp
+    leavePos[k] = d.leavePos
+    leaveReversed[k] = d.leaveReversed ? 1 : 0
+    leavePasses[k] = d.leavePasses
+    rejoinPos[k] = d.rejoinPos
+    rejoinReversed[k] = d.rejoinReversed ? 1 : 0
+    rejoinPasses[k] = d.rejoinPasses
+    fromSteps[k] = d.fromSteps ? 1 : 0
+    breakAt[k] = d.breakAt ?? -1
+    abridgedSteps[k] = stepsOf(d.abridged)
+  }
   return {
-    names: departures.map(d => d.name),
-    hapStarts: Float64Array.from(departures, d => d.hapStart),
-    ownBp: Float64Array.from(departures, d => d.ownBp),
-    missingBp: Float64Array.from(departures, d => d.missingBp),
-    leavePos: Float64Array.from(departures, d => d.leavePos),
-    leaveReversed: Uint8Array.from(departures, d => (d.leaveReversed ? 1 : 0)),
-    leavePasses: Int32Array.from(departures, d => d.leavePasses),
-    rejoinPos: Float64Array.from(departures, d => d.rejoinPos),
-    rejoinReversed: Uint8Array.from(departures, d =>
-      d.rejoinReversed ? 1 : 0,
-    ),
-    rejoinPasses: Int32Array.from(departures, d => d.rejoinPasses),
-    fromSteps: Uint8Array.from(departures, d => (d.fromSteps ? 1 : 0)),
-    breakAt: Int32Array.from(departures, d => d.breakAt ?? -1),
+    names,
+    hapStarts,
+    ownBp,
+    missingBp,
+    leavePos,
+    leaveReversed,
+    leavePasses,
+    rejoinPos,
+    rejoinReversed,
+    rejoinPasses,
+    fromSteps,
+    breakAt,
     offsets,
     steps,
     reversed,
-    abridgedSteps: Float64Array.from(departures, d => stepsOf(d.abridged)),
+    abridgedSteps,
   }
 }
 

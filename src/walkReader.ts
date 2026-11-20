@@ -1219,7 +1219,9 @@ export class WalkReader {
       kept,
       fragments,
       departures,
-      gaps: cut.gapsOf(),
+      get gaps() {
+        return cut.gapsOf()
+      },
       placeholders: kept.size - keptNodes(kept),
     }
   }
