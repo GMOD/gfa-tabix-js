@@ -359,7 +359,7 @@ describe('a forms cut', () => {
     const { references } = await walks.header()
     const refName = await walks.sequenceFor(references[0]!, window.refName)
     const cut = await walks.cut(refName!, window, {
-      links: false,
+      links: 'none',
       expand: () => true,
     })
     return byHaplotype(

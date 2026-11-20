@@ -85,7 +85,7 @@ test.runIf(walks !== '').each(WINDOWS)(
     const unexpanded = await formsCut(reader(), region, lifted)
     const loaded = await reader().cut(sequence, region, {
       ...lifted,
-      links: false,
+      links: 'none',
       expand: () => true,
     })
     const called = new Set<string>()

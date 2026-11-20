@@ -2675,6 +2675,27 @@ test('a cut of four haplotypes lists the links its fragments walk, and between r
   ).toEqual([])
 })
 
+// hprc-chrM.GRCh38.gfa again: every haplotype's rows lie in the one tile, so a
+// cut of four lists between its nodes the links a cut of all 44 walks
+test("a cut of four haplotypes lists between its nodes every link the file's walks take there", async () => {
+  const walks = reader('hprc-chrM.GRCh38')
+  const [refName = ''] = await walks.referenceSequences()
+  const { haplotypes } = await walks.header()
+  const chrM = { start: 0, end: 16_000 }
+  const keep = walksKept(haplotypes.slice(0, 4), refName)
+  const [walked, between, every] = await Promise.all([
+    walks.cut(refName, chrM, { keep }),
+    walks.cut(refName, chrM, { keep, links: 'between' }),
+    walks.cut(refName, chrM),
+  ])
+  const inCut = (link: string) =>
+    link.split(' ').every(end => between.kept.has(Number(end.slice(0, -1))))
+  const listed = linkNames(between)
+  expect(listed).toEqual(linkNames(every).filter(inCut))
+  expect(listed.length).toBeGreaterThan(linkNames(walked).length)
+  expect(listed).toEqual(expect.arrayContaining(linkNames(walked)))
+})
+
 // adv.R.gfa: R over twelve 10 bp nodes. CROSS leaves after node 3 for 21,
 // two nodes of another sequence and 22, and rejoins at node 10; NOREF's
 // first line ends on 21 and a later one starts at node 10; PLAIN leaves

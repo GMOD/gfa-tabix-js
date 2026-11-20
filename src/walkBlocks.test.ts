@@ -285,7 +285,7 @@ test('the forms cut covers a window with every haplotype stepping on it, whateve
   const region = { refName: 'c', start: 6000, end: 6500 }
   const forms = await formsCut(reader('cover.R'), region)
   const loaded = await reader('cover.R').cut(R, region, {
-    links: false,
+    links: 'none',
     expand: all,
   })
   expect(forms.filter(h => h.covered.length > 0)).toEqual(haplotypes(loaded, R))

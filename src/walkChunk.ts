@@ -771,15 +771,9 @@ export function blocksOver(
   return { first, last }
 }
 
-// The positions of R each block of a piece's blocks row covers, from[k] up to
-// to[k], whole steps over exactly the block's stretch, the blocks together
-// spanning what the piece's abridged row states
-export function blockPositions(
-  piece: AbridgedPiece,
-  blocks: PieceBlocks,
-  path: RefPath,
-) {
-  const { name } = piece
+// The positions of R each block of a blocks row covers, from[k] up to to[k],
+// whole steps over exactly the block's stretch
+function blockRanges(blocks: PieceBlocks, path: RefPath, row: string) {
   const count = blocks.begins.length
   const from = new Int32Array(count)
   const to = new Int32Array(count)
@@ -797,7 +791,7 @@ export function blockPositions(
       path.end(j - 1) !== lo + length
     ) {
       throw new WalkRowError(
-        `block ${k} of ${name}'s blocks row, piece ${piece.piece}, covers no whole steps of its tile's reference path over [${lo}, ${lo + length})`,
+        `block ${k} of ${row} covers no whole steps of its tile's reference path over [${lo}, ${lo + length})`,
       )
     }
     from[k] = i
@@ -805,12 +799,149 @@ export function blockPositions(
     low = Math.min(low, lo)
     high = Math.max(high, lo + length)
   }
+  return { from, to, low, high }
+}
+
+// The positions of R each block of a piece's blocks row covers, the blocks
+// together spanning what the piece's abridged row states
+export function blockPositions(
+  piece: AbridgedPiece,
+  blocks: PieceBlocks,
+  path: RefPath,
+) {
+  const { name } = piece
+  const { from, to, low, high } = blockRanges(
+    blocks,
+    path,
+    `${name}'s blocks row, piece ${piece.piece},`,
+  )
   if (low !== piece.span.start || high !== piece.span.end) {
     throw new WalkRowError(
       `${name}'s blocks row, piece ${piece.piece}, spans [${low}, ${high}) and its abridged row [${piece.span.start}, ${piece.span.end})`,
     )
   }
   return { from, to }
+}
+
+// A piece's first and last handles, -1 where a run off R ends it
+export interface PieceEnds {
+  name: string
+  fragStart: number
+  piece: number
+  first: number
+  last: number
+}
+
+// The links a blocks row's piece takes from one block straight to the next,
+// with no run off R between them, as pairs of handles, and its ends
+export function blockLinks(cols: string[], path: RefPath) {
+  const blocks = parseBlocks(cols)
+  const { from, to } = blockRanges(
+    blocks,
+    path,
+    `${cols[4]}'s blocks row, piece ${cols[6]},`,
+  )
+  const firstOf = (k: number) =>
+    blocks.against[k] === true
+      ? path.handleAt(to[k]! - 1, false)
+      : path.handleAt(from[k]!, true)
+  const lastOf = (k: number) =>
+    blocks.against[k] === true
+      ? path.handleAt(from[k]!, false)
+      : path.handleAt(to[k]! - 1, true)
+  const links: number[] = []
+  for (let k = 1; k < from.length; k++) {
+    if (blocks.off[k] === 0) {
+      links.push(lastOf(k - 1), firstOf(k))
+    }
+  }
+  const ends: PieceEnds = {
+    name: cols[4]!,
+    fragStart: +cols[5]!,
+    piece: +cols[6]!,
+    first: blocks.before > 0 ? -1 : firstOf(0),
+    last: blocks.after > 0 ? -1 : lastOf(from.length - 1),
+  }
+  return { links, ends }
+}
+
+// Every link a tile's ref rows and routes take, whichever walks a cut keeps,
+// as pairs of handles, and the ends of each of its walk rows
+export function tileLinks(rows: string[][], path: RefPath) {
+  const links: number[] = []
+  const chain = (handles: number[]) => {
+    for (let k = 1; k < handles.length; k++) {
+      links.push(handles[k - 1]!, handles[k]!)
+    }
+  }
+  // the positions of R that begin a ref row after its first
+  const rowStarts: number[] = []
+  let at = 0
+  for (const cols of refRows(rows)) {
+    const handles = tokens(cols[9]!, { id: 0 }, [])
+    chain(handles)
+    rowStarts.push(at)
+    at += handles.length
+  }
+  rowStarts.shift()
+  const routes: Route[] = []
+  const previous = { id: 0 }
+  for (const cols of rows) {
+    if (cols[3] === 'route') {
+      const entry = tokens(cols[4]!, previous, [])
+      const interior = tokens(cols[5]!, previous, [])
+      const exit = tokens(cols[6]!, previous, [])
+      routes.push({ entry: entry[0] ?? NONE, interior, exit: exit[0] ?? NONE })
+      chain([...entry, ...interior, ...exit])
+    }
+  }
+  const ends: PieceEnds[] = []
+  for (const cols of rows) {
+    if (cols[3] === 'walk') {
+      const [start, startCopy] = parseCopy(cols[9]!)
+      let first = -1
+      let last = -1
+      traverse(
+        path,
+        routes,
+        start,
+        startCopy,
+        parseChoices(cols[10]!),
+        +cols[8]!,
+        {
+          step: handle => {
+            first = first < 0 ? handle : first
+            last = handle
+          },
+          stretch: (from, to, forward) => {
+            last = path.handleAt(to, forward)
+            for (const b of rowStarts) {
+              if (Math.min(from, to) < b && b <= Math.max(from, to)) {
+                links.push(path.handles[b - 1]!, path.handles[b]!)
+              }
+            }
+          },
+          route: (index, flip) => {
+            const route = routes[index]!
+            const n = route.interior.length
+            if (n > 0) {
+              first = first < 0 ? interiorAt(route, flip, 0) : first
+              last = interiorAt(route, flip, n - 1)
+            }
+            return true
+          },
+        },
+      )
+      ends.push({
+        name: cols[4]!,
+        fragStart: +cols[5]!,
+        piece: +cols[7]!,
+        first,
+        last,
+      })
+    }
+  }
+  return { links, ends }
 }
 
 // The walk row of an abridged piece the cut does not load: blocks `core[0]`

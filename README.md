@@ -85,6 +85,16 @@ const tables = graph.tables(kept, fragments, departures)
   reference is one of the cut's walks: a `keep` that leaves it out keeps the
   reference's nodes on the window and none of its links, and `walksKept` always
   keeps it
+- **`links: 'between'` adds the links other walks take between the cut's
+  nodes,** for a host that draws the graph around a few walks: a collapsed
+  repeat's jumps between copies, or a deletion no kept walk has. It lists each
+  link that a ref row, a route, a walk row stepping R across two ref rows, a
+  blocks row, or two consecutive pieces of a line take in the tiles the cut
+  reads, where both ends are among its nodes, and reads the window's `blocks`
+  units for it, against `byteBudget`. None is outside the GFA. Unlike the
+  default, the list depends on the tiles read: a link only a detail record
+  holds, or only a tile the cut does not read, is missing, so counts, which
+  fetch every record's own steps, can find one it lacks
 - A node the reference passes more than once, as in a collapsed repeat, takes
   the position of its pass over the window, and each walk's step on it the pass
   its row names: `tables.walks.refStarts` gives every step's position on the
@@ -131,6 +141,14 @@ const tables = graph.tables(kept, fragments, departures)
 - Links are written the way round with more `+` ends, as a walk along the
   reference takes them, and with the smaller first handle on a tie: a walk
   `>7>3` gives `L 7 + 3 +`
+
+## Changes in 8
+
+- **`links`** is `'walked'`, `'between'` or `'none'`: `'walked'` is graph-walks
+  7's `true` and the default, `'none'` its `false`, and `'between'` adds the
+  links other walks take between the cut's nodes ([Usage](#usage)). graph-walks
+  7 dropped those links, so a cut of a few haplotypes drew a tandem array's
+  copies as one straight run
 
 ## Changes in 7
 
@@ -282,22 +300,22 @@ const { tables, refName, sample } = await reader.cutRegion(
 
 ## Cut options
 
-| Option                | Effect                                                                                                |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `keep`                | Which walks to decode, the reference's among them, by `sample#haplotype#contig`; every one by default |
-| `context`             | bp of reference kept past each end of the region; default 1000, `WALK_CONTEXT`                        |
-| `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default                      |
-| `byteBudget`          | The most compressed bytes the walk and attach reads fetch; 8 MB by default                            |
-| `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default                                 |
-| `attachBp`            | The most bp of own sequence a departure gets its steps attached for; default 65,536                   |
-| `attachFetches`       | Deprecated and ignored: the tiles of every record that gets its steps are fetched                     |
-| `nodeLimit`           | The most nodes a cut keeps; no limit by default                                                       |
-| `contained`           | `true` keeps each walk within the window; see below                                                   |
-| `links`               | `false` lists no links, for a caller that draws no edges                                              |
-| `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                                |
-| `signal`              | An `AbortSignal` that stops the reads                                                                 |
-| `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default                   |
-| `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets                          |
+| Option                | Effect                                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `keep`                | Which walks to decode, the reference's among them, by `sample#haplotype#contig`; every one by default          |
+| `context`             | bp of reference kept past each end of the region; default 1000, `WALK_CONTEXT`                                 |
+| `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default                               |
+| `byteBudget`          | The most compressed bytes the walk and attach reads fetch; 8 MB by default                                     |
+| `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default                                          |
+| `attachBp`            | The most bp of own sequence a departure gets its steps attached for; default 65,536                            |
+| `attachFetches`       | Deprecated and ignored: the tiles of every record that gets its steps are fetched                              |
+| `nodeLimit`           | The most nodes a cut keeps; no limit by default                                                                |
+| `contained`           | `true` keeps each walk within the window; see below                                                            |
+| `links`               | `'walked'` (default) the links the cut's walks take; `'between'` also other walks' between its nodes; `'none'` |
+| `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                                         |
+| `signal`              | An `AbortSignal` that stops the reads                                                                          |
+| `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default                            |
+| `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets                                   |
 
 - A cut over a budget or its node limit throws a `RegionTooLargeError`. The
   error's `fitsBp` holds about how wide a window would fit, and JBrowse shows it

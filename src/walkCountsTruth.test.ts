@@ -7,6 +7,7 @@ import { rangesRead, readsOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import { COUNT_REASONS } from './walkCounts.ts'
 import { WalkReader } from './walkReader.ts'
+import { walksKept } from './walkRows.ts'
 
 import type { CountColumns, WalkCounts } from './walkCounts.ts'
 import type { WalkCountOptions } from './walkReader.ts'
@@ -450,6 +451,90 @@ test.each(FIXTURES)(
       first: problems.slice(0, 8),
     }).toEqual({
       revisited: String(truth.revisited),
+      problems: 0,
+      first: [],
+    })
+  },
+  60_000,
+)
+
+// Each link a cut lists between two loaded nodes, by its handles
+function cutLinks(cut: Awaited<ReturnType<WalkReader['cut']>>) {
+  const { nodes, links } = cut.graph.tables(
+    cut.kept,
+    cut.fragments,
+    cut.departures,
+  )
+  const named = new Set<string>()
+  links.from.forEach((i, k) => {
+    const j = links.to[k]!
+    const strands = links.strands[k]!
+    const a = 2 * Number(nodes.names[i]) + (strands & 1)
+    const b = 2 * Number(nodes.names[j]) + ((strands >> 1) & 1)
+    if (Number.isInteger(a) && Number.isInteger(b)) {
+      named.add(linkName(a, b))
+    }
+  })
+  return named
+}
+
+test.each(FIXTURES)(
+  "%s: a cut of one haplotype with links 'between' lists only the GFA's links, each the counts find between its nodes, and each it walks",
+  async fixture => {
+    const path = `${DATA}${fixture}.R.walks.gz`
+    const reader = WalkReader.fromFilehandles({
+      data: new LocalFile(path),
+      directory: new LocalFile(`${path}.idx`),
+    })
+    const sequences = await reader.referenceSequences()
+    const { haplotypes } = await reader.header()
+    const truth = truthOf(
+      readFileSync(`${DATA}${gfaOf(fixture)}.R.gfa`, 'utf8'),
+      new Set(sequences),
+    )
+    const problems: string[] = []
+    for (const refName of sequences) {
+      const length = await reader.sequenceLength(refName)
+      const keep = walksKept(haplotypes.slice(0, 1), refName)
+      for (const region of windowsOf(refName, length, truth)) {
+        for (const context of [0, 3]) {
+          for (const contained of [false, true]) {
+            const opts = { context, contained, keep }
+            const where = `${refName}:${region.start}-${region.end}, context ${context}${contained ? ', contained' : ''}`
+            const [walked, between, counts] = await Promise.all([
+              reader.cut(refName, region, opts),
+              reader.cut(refName, region, { ...opts, links: 'between' }),
+              reader.counts(refName, region, { context, contained }),
+            ])
+            const listed = cutLinks(between)
+            const kept = (handle: number) => between.kept.has(handle >> 1)
+            const counted = new Set<string>()
+            counts.links.from.forEach((a, k) => {
+              const b = counts.links.to[k]!
+              if (kept(a) && kept(b)) {
+                counted.add(linkName(a, b))
+              }
+            })
+            for (const link of listed) {
+              if (!truth.links.has(link)) {
+                problems.push(`${where}: ${link} is no link of the GFA`)
+              }
+            }
+            for (const link of counted) {
+              if (!listed.has(link)) {
+                problems.push(`${where}: counted ${link} is not listed`)
+              }
+            }
+            for (const link of cutLinks(walked)) {
+              if (!listed.has(link)) {
+                problems.push(`${where}: walked ${link} is not listed`)
+              }
+            }
+          }
+        }
+      }
+    }
+    expect({ problems: problems.length, first: problems.slice(0, 8) }).toEqual({
       problems: 0,
       first: [],
     })

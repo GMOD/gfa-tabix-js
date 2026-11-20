@@ -4,6 +4,7 @@ import { refNameLookup, resolveRefName } from './refNames.ts'
 import { checkRange } from './tabixSource.ts'
 import { panSNHaplotypeOrSample } from './util.ts'
 import {
+  blockLinks,
   blocksOver,
   bpRow,
   canonicalLink,
@@ -11,6 +12,7 @@ import {
   decodeChunk,
   ownRunsRow,
   ownStretch,
+  tileLinks,
   parseBlocks,
   referenceNodes,
   unloadedRow,
@@ -50,6 +52,7 @@ import type {
   DecodedChunk,
   PieceBlocks,
   PlacedNode,
+  PieceEnds,
   RefPath,
 } from './walkChunk.ts'
 import type { CountUnit, CountWalk } from './walkCounts.ts'
@@ -144,6 +147,27 @@ export async function readInOrder<T, R>(
   }
 }
 
+// The links from each piece's last step to the first of its line's next
+const piecesJoined = (ends: PieceEnds[]) => {
+  const lines = new Map<string, Map<number, PieceEnds>>()
+  for (const piece of ends) {
+    const key = `${piece.name}\t${piece.fragStart}`
+    const line = lines.get(key) ?? new Map<number, PieceEnds>()
+    lines.set(key, line)
+    line.set(piece.piece, piece)
+  }
+  const pairs: number[] = []
+  for (const line of lines.values()) {
+    for (const [k, piece] of line) {
+      const next = line.get(k + 1)
+      if (next && piece.last >= 0 && next.first >= 0) {
+        pairs.push(piece.last, next.first)
+      }
+    }
+  }
+  return pairs
+}
+
 export interface WalkCutOptions {
   signal?: AbortSignal
   // which walks to decode, by `sample#haplotype#contig`; undefined is all
@@ -174,8 +198,11 @@ export interface WalkCutOptions {
    */
   attachFetches?: number
   context?: number
-  // false lists no links, for a caller that draws no edges
-  links?: boolean
+  // which links the cut lists: 'walked', the default, those its steps take;
+  // 'between', also every link a reference row or route of the units it
+  // reads takes between two of its nodes; 'none', for a caller that draws no
+  // edges
+  links?: 'walked' | 'between' | 'none'
   // keep the bases of the nodes, from a file written with --sequences
   sequences?: boolean
   // how a zoom-in notice names the budgets
@@ -600,7 +627,7 @@ export class WalkReader {
       byteBudget = WALK_BUDGETS.byteBudget,
       departureByteBudget = WALK_BUDGETS.departureByteBudget,
       attachBp = ATTACH_BP,
-      links = true,
+      links = 'walked',
       contained = false,
       nodeLimit = Infinity,
       expand,
@@ -677,6 +704,10 @@ export class WalkReader {
       tileBytesTo(end) +
       bytesOf(extra.filter(x => x.from < end + context).map(x => x.unit)) +
       bytesOf(more.filter(x => x.from < end + context).map(x => x.unit))
+    // R of each tile decoded, by its name, and the blocks units read
+    const tilePaths = new Map<string, RefPath>()
+    const pieceEnds: PieceEnds[] = []
+    const blocksRead = new Map<WalkUnit, string[]>()
     const placeholderIds = new Map<string, number>()
     const placeholderId = (name: string, start: number, end: number) => {
       const run = runName(name, start, end)
@@ -715,7 +746,7 @@ export class WalkReader {
     }
     // links as pairs of handles, each written the one way round
     const addLinks = (pairs: number[]) => {
-      if (links) {
+      if (links !== 'none') {
         for (let k = 0; k < pairs.length; k += 2) {
           const [a, b] = canonicalLink(pairs[k]!, pairs[k + 1]!)
           graph.addLinkEnds(a, b)
@@ -756,6 +787,14 @@ export class WalkReader {
         opts.sequences,
       )
       const { path } = tileCut
+      if (links === 'between' && !tilePaths.has(unit.name)) {
+        tilePaths.set(unit.name, path)
+        const taken = tileLinks(tileRows, path)
+        addLinks(taken.links)
+        for (const ends of taken.ends) {
+          pieceEnds.push(ends)
+        }
+      }
       const hull = into === rows ? path.hull(drawn) : undefined
       over.start = Math.min(over.start, hull?.start ?? over.start)
       over.end = Math.max(over.end, hull?.end ?? over.end)
@@ -885,18 +924,22 @@ export class WalkReader {
         }
         return { unit, from }
       })
-      if (wanted.length > 0) {
-        checkBytes(bytesWith(wanted), attaching)
+      const unread = wanted.filter(w => !blocksRead.has(w.unit))
+      if (unread.length > 0) {
+        checkBytes(bytesWith(unread), attaching)
       }
-      const lines = await this.file.read(
-        wanted.map(w => w.unit),
+      const fetched = await this.file.read(
+        unread.map(w => w.unit),
         reads.signal,
       )
+      unread.forEach((w, k) => {
+        extra.push(w)
+        blocksRead.set(w.unit, fetched[k]!)
+      })
       const listed = new Map<WalkUnit, Map<string, string[]>>()
       for (const [k, tileUnit] of [...tilesMet.keys()].entries()) {
-        extra.push(wanted[k]!)
         const byPiece = new Map<string, string[]>()
-        for (const line of lines[k]!) {
+        for (const line of blocksRead.get(wanted[k]!.unit)!) {
           const cols = line.split('\t')
           byPiece.set(
             pieceKey(cols[4] ?? '', cols[5] ?? '', cols[6] ?? ''),
@@ -1052,12 +1095,25 @@ export class WalkReader {
     }
     let cut: ReturnType<typeof walkCut>
     try {
+      const jumps =
+        links === 'between'
+          ? tiles.flatMap(windowTile => {
+              const unit = blocksUnits.get(windowTile.name)
+              return unit ? [{ unit, from: windowTile.start, windowTile }] : []
+            })
+          : []
+      checkBytes(bytesWith(jumps))
       const read = await this.file.read(
-        [...tiles, ...departureBlocks],
+        [...tiles, ...departureBlocks, ...jumps.map(x => x.unit)],
         reads.signal,
       )
+      const tilesAndRecords = tiles.length + departureBlocks.length
+      jumps.forEach((x, k) => {
+        extra.push(x)
+        blocksRead.set(x.unit, read[tilesAndRecords + k]!)
+      })
       const { records, ownTiles } = departureRecords(
-        read.slice(tiles.length).flat(),
+        read.slice(tiles.length, tilesAndRecords).flat(),
         drawn,
         keep,
       )
@@ -1071,6 +1127,14 @@ export class WalkReader {
       tiles.forEach((unit, k) => {
         decode(unit, read[k]!, rows, unit.start)
       })
+      for (const { unit, windowTile } of jumps) {
+        const path = tilePaths.get(windowTile.name)!
+        for (const line of blocksRead.get(unit)!) {
+          const piece = blockLinks(line.split('\t'), path)
+          addLinks(piece.links)
+          pieceEnds.push(piece.ends)
+        }
+      }
       await resolve(false)
       const tooManyRead = stepBudgetError(
         rows,
@@ -1093,7 +1157,7 @@ export class WalkReader {
           drawn: bounds,
           attach: joinPieces(attachRows),
           placeholder: placeholderId,
-          links,
+          links: links !== 'none',
         })
       cut = cutRows()
       // the tiles holding own steps the read lacks, the walks wanting each,
@@ -1148,6 +1212,7 @@ export class WalkReader {
       throw tooMany
     }
     addLinks(cut.links)
+    addLinks(piecesJoined(pieceEnds))
     const { kept, fragments, departures } = cut
     return {
       graph,

@@ -355,7 +355,7 @@ export async function formsCut(
     (await reader.sequenceFor(sample, region.refName, { signal })) ??
     region.refName
   const cut = await reader.cut(refName, region, {
-    links: false,
+    links: 'none',
     stepBudget: Math.max(stepBudget, FORMS_STEP_BUDGET),
     byteBudget,
     departureByteBudget,
