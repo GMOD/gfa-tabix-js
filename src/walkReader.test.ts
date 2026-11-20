@@ -2623,12 +2623,8 @@ test('a window inside a hole in the reference returns the jump across it, whethe
     (
       await reader(name).cut('R#0#chr', { start: 20, end: 24 }, { context: 0 })
     ).departures.map(d => departure(d).slice(0, 6))
-  expect(await across('hole.R')).toEqual([
-    ['H#1#h', 4, 0, 0, '4+', '44+'],
-  ])
-  expect(await across('holetile.R')).toEqual([
-    ['H#1#h', 4, 0, 0, '4+', '44+'],
-  ])
+  expect(await across('hole.R')).toEqual([['H#1#h', 4, 0, 0, '4+', '44+']])
+  expect(await across('holetile.R')).toEqual([['H#1#h', 4, 0, 0, '4+', '44+']])
 })
 
 // Each link of a cut's tables, as its two nodes and their strands

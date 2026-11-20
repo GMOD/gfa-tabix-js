@@ -463,9 +463,9 @@ once:
   piece's steps, whose stretch, from the base beside its leave to the base
   beside its rejoin, overlaps the drawn stretch: the window and its context,
   widened to the reference's nodes over them, whole, and to every pass of a
-  walk's step over them. A window inside a hole in the reference so returns
-  the jumps across it, as a record would be. A walk's jump inside one piece
-  far from the window, even inside its fragment, is not returned
+  walk's step over them. A window inside a hole in the reference so returns the
+  jumps across it, as a record would be. A walk's jump inside one piece far from
+  the window, even inside its fragment, is not returned
 
 ```ts
 import { departureKind } from '@jbrowse/graph-walks'
