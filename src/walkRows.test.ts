@@ -555,6 +555,100 @@ test.each([false, true])(
   },
 )
 
+test('nodes whose ids lie 65,536 apart, which share a slot of the memos a cut asks before its sets and maps, are kept, linked, indexed and placed each as itself', () => {
+  const far = 1 << 16
+  const g = new WalkGraph({
+    refName: 'GRCh38#0#chr1',
+    start: 0,
+    end: 400,
+    context: 0,
+  })
+  for (const [k, id] of [1, 2, 3, 4].entries()) {
+    g.placeNode(id, {
+      rank: 0,
+      refName: 'GRCh38#0#chr1',
+      start: 100 * k,
+      end: 100 * k + 100,
+      passes: 1,
+    })
+  }
+  for (const id of [2 + far, 2 + 2 * far, 3 + far]) {
+    g.placeNode(id, {
+      rank: 1,
+      refName: 'unplaced',
+      start: 0,
+      end: 100,
+      passes: 0,
+    })
+  }
+  const walks = [
+    { name: 'GRCh38#0#chr1', hapOffset: 0, steps: [1, 2, 3, 4] },
+    { name: 'HG002#1#chr1', hapOffset: 1000, steps: [1, 2 + far, 3, 4] },
+    {
+      name: 'HG002#2#chr1',
+      hapOffset: 2000,
+      steps: [1, 2 + 2 * far, 3 + far, 4],
+    },
+    { name: 'HG002#3#chr1', hapOffset: 2500, steps: [1, 2 + 2 * far, 3, 4] },
+    { name: 'HG003#1#chr1', hapOffset: 3000, steps: [1, 2, 3, 4] },
+    { name: 'HG003#2#chr1', hapOffset: 4000, steps: [1, 2 + far, 3, 4] },
+  ]
+  // attachBp 0 attaches no own steps, so a node off the reference is kept
+  // only as a step of its fragment
+  const { kept, fragments, departures, links } = walkCut(
+    joinPieces(walks.map(w => run(g, w.name, w.hapOffset, w.steps))),
+    g.nodes,
+    'GRCh38#0#chr1',
+    [],
+    { attachBp: 0 },
+  )
+  expect([...kept].sort((a, b) => a - b)).toEqual([
+    1,
+    2,
+    3,
+    4,
+    2 + far,
+    3 + far,
+    2 + 2 * far,
+  ])
+  const linked = Array.from({ length: links.length / 2 }, (_, k) => [
+    links[2 * k]! / 2,
+    links[2 * k + 1]! / 2,
+  ])
+  expect(linked.sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]!)).toEqual([
+    [1, 2],
+    [1, 2 + far],
+    [1, 2 + 2 * far],
+    [2, 3],
+    [3, 4],
+    [2 + far, 3],
+    [3 + far, 4],
+    [2 + 2 * far, 3],
+    [2 + 2 * far, 3 + far],
+  ])
+  const tables = g.tables(kept, fragments, departures)
+  const { names, refNames, refs, starts } = tables.nodes
+  const placed = (id: number) => {
+    const i = names.indexOf(String(id))
+    return [refNames[refs[i]!], starts[i]]
+  }
+  expect(placed(2 + far)).toEqual(['HG002#1#chr1', 1100])
+  expect(placed(2 + 2 * far)).toEqual(['HG002#2#chr1', 2100])
+  expect(placed(3 + far)).toEqual(['HG002#2#chr1', 2200])
+  expect(
+    tables.walks.names.map((name, p) => [
+      name,
+      Array.from(
+        tables.walks.steps.subarray(
+          tables.walks.offsets[p],
+          tables.walks.offsets[p + 1],
+        ),
+        i => names[i],
+      ),
+    ]),
+  ).toEqual(walks.map(w => [w.name, w.steps.map(String)]))
+})
+
 test('a cut is written as the GFA its tables stand for, with the departures over it', () => {
   const g = graph()
   const runs = joinPieces([
