@@ -705,7 +705,7 @@ export class WalkReader {
       bytesOf(extra.filter(x => x.from < end + context).map(x => x.unit)) +
       bytesOf(more.filter(x => x.from < end + context).map(x => x.unit))
     // R of each tile decoded, by its name, and the blocks units read
-    const tilePaths = new Map<string, RefPath>()
+    const tilePaths = new Map<string, { path: RefPath; rowStarts: number[] }>()
     const pieceEnds: PieceEnds[] = []
     const blocksRead = new Map<WalkUnit, string[]>()
     const placeholderIds = new Map<string, number>()
@@ -788,8 +788,8 @@ export class WalkReader {
       )
       const { path } = tileCut
       if (links === 'between' && !tilePaths.has(unit.name)) {
-        tilePaths.set(unit.name, path)
         const taken = tileLinks(tileRows, path)
+        tilePaths.set(unit.name, { path, rowStarts: taken.rowStarts })
         addLinks(taken.links)
         for (const ends of taken.ends) {
           pieceEnds.push(ends)
@@ -1128,9 +1128,9 @@ export class WalkReader {
         decode(unit, read[k]!, rows, unit.start)
       })
       for (const { unit, windowTile } of jumps) {
-        const path = tilePaths.get(windowTile.name)!
+        const { path, rowStarts } = tilePaths.get(windowTile.name)!
         for (const line of blocksRead.get(unit)!) {
-          const piece = blockLinks(line.split('\t'), path)
+          const piece = blockLinks(line.split('\t'), path, rowStarts)
           addLinks(piece.links)
           pieceEnds.push(piece.ends)
         }

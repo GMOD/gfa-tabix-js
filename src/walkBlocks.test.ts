@@ -6,9 +6,12 @@ import {
   RefPath,
   SKIPPED,
   WalkRowError,
+  blockLinks,
+  chunkRef,
   decodeChunk,
   ownRunsRow,
   parseBlocks,
+  tileLinks,
   unloadedRow,
 } from './walkChunk.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
@@ -1368,3 +1371,25 @@ test.each([
     expect(missing).toEqual([])
   },
 )
+
+// R is two reference lines that abut, >1>2 at 0 and >3>4 at 12, and H walks
+// >1>2>3>4: as a walk row or as one block, it steps from 2 to 3
+test('a block over two abutting ref rows links the step from one to the next, as the walk row does', () => {
+  const row = (line: string) => line.split(' ')
+  const refs = [
+    row('R#0#c 0 24 ref R#0#c 0 0 0 2 2,2 6,6 .'),
+    row('R#0#c 0 24 ref R#0#c 12 12 0 2 6,2 6,6 .'),
+  ]
+  const { path } = chunkRef(refs)
+  const walked = tileLinks(
+    [...refs, row('R#0#c 0 24 walk H#1#c 0 0 0 4 2 .')],
+    path,
+  )
+  const block = blockLinks(
+    row('R#0#c 0 24 blocks H#1#c 0 0 0+24'),
+    path,
+    walked.rowStarts,
+  )
+  expect(walked.links).toEqual(expect.arrayContaining([4, 6]))
+  expect(block.links).toEqual([4, 6])
+})

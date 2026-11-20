@@ -2707,6 +2707,18 @@ test("a cut of four haplotypes lists between its nodes every link the file's wal
   expect(listed).toEqual(expect.arrayContaining(linkNames(walked)))
 })
 
+// abut.R.gfa: R steps >1>2 in the tile at 0 and >3>4 in the next. A cut that
+// keeps ABUT alone, whose two lines end at 2 and start at 4, lists the
+// reference's step from 2 to 3 with links 'between'
+test("a cut whose keep leaves the reference out lists the reference's link from one tile to the next with links 'between'", async () => {
+  const cut = await reader('abut.R').cut(
+    'R#0#c',
+    { start: 0, end: 60 },
+    { context: 0, keep: name => name.startsWith('ABUT#1#'), links: 'between' },
+  )
+  expect(linkNames(cut)).toContain('2+ 3+')
+})
+
 // adv.R.gfa: R over twelve 10 bp nodes. CROSS leaves after node 3 for 21,
 // two nodes of another sequence and 22, and rejoins at node 10; NOREF's
 // first line ends on 21 and a later one starts at node 10; PLAIN leaves
