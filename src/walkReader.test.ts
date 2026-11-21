@@ -25,6 +25,7 @@ import type { AbridgedPiece, ChunkRef } from './walkChunk.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
 import type { WalkGap } from './walkGaps.ts'
+import type { WalkCutOptions } from './walkReader.ts'
 import type { WalkFragment } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
@@ -52,10 +53,12 @@ vi.mock(import('./walkChunk.ts'), async importOriginal => {
       decoding.tiles++
       return chunk.decodeChunk(rows, tileStart, keep, withSequences, ref)
     },
-    surelyKeptSteps: (
+    tileSteps: (
       lines: string[],
       keep: ((name: string) => boolean) | undefined,
-    ) => (decoding.countsFirst ? chunk.surelyKeptSteps(lines, keep) : 0),
+      expand: ((name: string) => boolean) | undefined,
+    ) =>
+      decoding.countsFirst ? chunk.tileSteps(lines, keep, expand) : undefined,
   }
 })
 
@@ -823,16 +826,52 @@ const keptSteps = (cut: {
   cut.fragments.reduce((sum, f) => sum + f.ids.length, 0) +
   cut.departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
 
-const refusal = (error: unknown) =>
+// A refusal's fields but its fitsBp, which its message names too
+const butFitsBp = (error: unknown) =>
   error instanceof RegionTooLargeError
-    ? [
-        error.message,
-        error.limit,
-        error.windowBp,
-        error.fitsBp,
-        error.zoomHelps,
-      ]
+    ? {
+        type: error.constructor,
+        name: error.name,
+        message: error.message.replace(/about [^ ,]+/, 'about …'),
+        limit: error.limit,
+        windowBp: error.windowBp,
+        zoomHelps: error.zoomHelps,
+        bytes: error.bytes,
+        regionTooLarge: error.regionTooLarge,
+      }
     : error
+
+const limitOf = (error: unknown) =>
+  error instanceof RegionTooLargeError ? error.limit : error
+
+const fitsNarrower = (error: unknown, window: { start: number; end: number }) =>
+  !(error instanceof RegionTooLargeError) ||
+  error.fitsBp < window.end - window.start
+
+// A cut that counts the steps it surely keeps before it decodes, and the
+// same cut left to the finished cut's refusals: what each throws, and how
+// many tiles it decoded
+async function earlyAndFinished(
+  walks: WalkReader,
+  window: { start: number; end: number },
+  opts: WalkCutOptions,
+) {
+  const run = async () => {
+    decoding.tiles = 0
+    const error = await walks.cut('R#0#chr', window, opts).then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    return { error, decoded: decoding.tiles }
+  }
+  const early = await run()
+  decoding.countsFirst = false
+  try {
+    return { early, finished: await run() }
+  } finally {
+    decoding.countsFirst = true
+  }
+}
 
 // R over eight 4 bp nodes from 16 to 48, in 16 bp tiles, and three haplotypes
 // along it: 32 steps, all inside a window on 16-48 with 1 bp of context
@@ -851,48 +890,315 @@ const alongR = [
   ]),
 ]
 
-test('a window whose tiles surely keep more steps than the budget is refused before any row is decoded, as the finished cut refuses it', async () => {
-  const cut = () =>
-    inline(alongR)
-      .cut('R#0#chr', { start: 16, end: 48 }, { context: 1, stepBudget: 31 })
-      .catch((e: unknown) => e)
-  decoding.tiles = 0
-  const early = await cut()
-  expect(decoding.tiles).toBe(0)
-  decoding.countsFirst = false
-  try {
-    const finished = await cut()
-    expect(decoding.tiles).toBe(2)
-    expect(early).toBeInstanceOf(RegionTooLargeError)
-    expect(refusal(early)).toEqual([
-      'Zoom in to about 31bp, or choose fewer haplotypes, to see the graph',
-      31,
-      32,
-      31,
-      true,
-    ])
-    expect(refusal(early)).toEqual(refusal(finished))
-  } finally {
-    decoding.countsFirst = true
-  }
+// alongR with one haplotype
+const alongOne = alongR.filter(line => !/H#[23]/.test(line))
+
+// alongR from 0 to 32, so a window at 0 never counts its first tile
+const alongFromZero = [
+  '#walks format:i:8 tile:i:16',
+  '#reference R',
+  '#haplotype H#1',
+  '#haplotype H#2',
+  '#haplotype H#3',
+  'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4 .',
+  'R#0#chr 16 ref R#0#chr 0 16 1 4 10,2,2,2 4,4,4,4 .',
+  ...[1, 2, 3].flatMap(h => [
+    `R#0#chr 0 walk H#${h}#h 0 0 0 4 2 .`,
+    `R#0#chr 16 walk H#${h}#h 0 16 1 4 10 .`,
+  ]),
+]
+
+const withH1 = (name: string) => name === 'R#0#chr' || name === 'H#1#h'
+const over16to48 = { start: 16, end: 48 }
+
+// Each refusal the finished cut makes for alongR, and the cuts it keeps: the
+// early count refuses only where it can tell no earlier refusal comes, and
+// then as the finished cut does but for fitsBp. `limit` tells the refusal:
+// 8 × the step budget for the read budget, the node limit for that, and the
+// step budget for the steps kept
+test.each([
+  {
+    refusal: 'the read budget, every walk',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 0.4 },
+    limit: 3.2,
+    early: false,
+  },
+  {
+    refusal: 'the read budget, the walks keep takes',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, keep: withH1, stepBudget: 0.2 },
+    limit: 1.6,
+    early: false,
+  },
+  {
+    refusal: 'the read budget, offering no fewer of two walks',
+    lines: alongOne,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 0.3 },
+    limit: 2.4,
+    early: false,
+  },
+  {
+    refusal: 'the steps kept, a step over the read budget',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 1 },
+    limit: 1,
+    early: true,
+  },
+  {
+    refusal: 'the steps kept, one over',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 31 },
+    limit: 31,
+    early: true,
+  },
+  {
+    refusal: 'nothing at the steps kept',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 32 },
+    limit: undefined,
+    early: false,
+  },
+  {
+    refusal: 'the node limit',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 1, nodeLimit: 4 },
+    limit: 4,
+    early: false,
+  },
+  {
+    refusal: 'the steps kept, at the node limit',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 1, nodeLimit: 8 },
+    limit: 1,
+    early: true,
+  },
+  {
+    refusal: 'the steps kept, contained',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, stepBudget: 31, contained: true },
+    limit: 31,
+    early: true,
+  },
+  {
+    refusal: 'the steps kept, the walks keep takes',
+    lines: alongR,
+    window: over16to48,
+    opts: { context: 1, keep: withH1, stepBudget: 15 },
+    limit: 15,
+    early: true,
+  },
+  {
+    refusal: 'the steps kept, most of them in the context',
+    lines: alongR,
+    window: { start: 30, end: 34 },
+    opts: { context: 16, stepBudget: 20 },
+    limit: 20,
+    early: true,
+  },
+  {
+    refusal: 'the steps kept, of a window at 0 whose first tile is not counted',
+    lines: alongFromZero,
+    window: { start: 0, end: 32 },
+    opts: { context: 1, stepBudget: 20 },
+    limit: 20,
+    early: false,
+  },
+  {
+    refusal: 'the steps kept, of a window at 0 over its second tile alone',
+    lines: alongFromZero,
+    window: { start: 0, end: 32 },
+    opts: { context: 1, stepBudget: 15 },
+    limit: 15,
+    early: true,
+  },
+])(
+  'a cut refused by $refusal is refused before decoding where the early count tells, with the error the finished cut throws but for fitsBp',
+  async ({ lines, window, opts, limit, early: fires }) => {
+    const { early, finished } = await earlyAndFinished(
+      inline(lines),
+      window,
+      opts,
+    )
+    expect(early.decoded === 0).toBe(fires)
+    expect(finished.decoded).toBeGreaterThan(0)
+    expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+    expect(limitOf(finished.error)).toBe(limit)
+    expect(fitsNarrower(early.error, window)).toBe(true)
+  },
+)
+
+test.each([
+  { window: over16to48, context: 1, stepBudget: 31, fitsBp: 30 },
+  { window: { start: 30, end: 34 }, context: 16, stepBudget: 20, fitsBp: 1 },
+])(
+  'a window over the budget is refused before decoding with fitsBp where its counted steps reach the budget, less the context: $fitsBp',
+  async ({ window, context, stepBudget, fitsBp }) => {
+    const { early } = await earlyAndFinished(inline(alongR), window, {
+      context,
+      stepBudget,
+    })
+    expect(early).toMatchObject({
+      decoded: 0,
+      error: { fitsBp, windowBp: window.end - window.start },
+    })
+  },
+)
+
+// The reference passes 2 and 3 twice, 6 bp nodes in one tile at 16 (as
+// copies.R.gfa's, past a hole): F leaves from 2's second pass, `:1`, by the
+// second route, U lands on 3's second pass, `@1`, and S starts on 2's second
+// pass, `start@1`. Its fragments keep 20 steps, and the departures by 8 and 9
+// hold one more each
+const copiesAt16 = [
+  '#walks format:i:8 tile:i:1000 revisited:i:2',
+  '#reference R',
+  '#haplotype F#1',
+  '#haplotype S#1',
+  '#haplotype U#1',
+  '#hole R#0#chr 0 16',
+  'R#0#chr 16 ref R#0#chr 16 16 0 6 2,2,2,-2,2,2 6,6,6,6,6,6 1,2,2,2,2,1',
+  'R#0#chr 16 nodes 8,1 2,18',
+  'R#0#chr 16 route 2 16 -12',
+  'R#0#chr 16 route -2 12 -10',
+  'R#0#chr 16 walk F#1#f 0 0 0 7 2 2:1',
+  'R#0#chr 16 walk S#1#s 0 0 0 3 4@1 .',
+  'R#0#chr 16 walk U#1#u 0 0 0 4 2 0@1',
+]
+
+test('a window over a revisited reference, whose rows name passes by :k, @k and start@k and take its second route, is cut at the 22 steps it keeps and refused before decoding below the 20 its rows keep, as the finished cut refuses it', async () => {
+  const window = { start: 16, end: 52 }
+  const cut = await inline(copiesAt16).cut('R#0#chr', window, { context: 1 })
+  expect(keptSteps(cut)).toBe(22)
+  const at = await earlyAndFinished(inline(copiesAt16), window, {
+    context: 1,
+    stepBudget: 22,
+  })
+  expect(at.early).toEqual({ error: undefined, decoded: 1 })
+  const { early, finished } = await earlyAndFinished(
+    inline(copiesAt16),
+    window,
+    { context: 1, stepBudget: 19 },
+  )
+  expect(early.decoded).toBe(0)
+  expect(finished.error).toMatchObject({ limit: 19 })
+  expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
 })
 
-test('a window whose tiles keep exactly the step budget is cut', async () => {
-  decoding.tiles = 0
-  const cut = await inline(alongR).cut(
-    'R#0#chr',
-    { start: 16, end: 48 },
-    { context: 1, stepBudget: 32 },
+// H#1 abridged over tile 16, >1>2, 30 steps off R, >3>4, built from its
+// blocks row with one placeholder for the 30
+const abridgedAt16 = [
+  '#walks format:i:8 tile:i:16',
+  '#reference R',
+  '#haplotype H#1',
+  '#hole R#0#chr 0 16',
+  'R#0#chr 16 ref R#0#chr 16 16 0 4 2,2,2,2 4,4,4,4 .',
+  'R#0#chr 16 abridged H#1#h 0 0 0 34 46 0',
+  `R#0#chr 16:0 16 32 nodes 100${',1'.repeat(29)} 1${',1'.repeat(29)}`,
+  `R#0#chr 16:0 16 32 route 4 196${',2'.repeat(29)} -252`,
+  'R#0#chr 16:0 16 32 walk H#1#h 0 0 0 34 2 0',
+  'R#0#chr 16 16 32 blocks H#1#h 0 0 16+8,30,0+8',
+]
+
+test('a window whose blocks unit takes it past the byte budget gets the byte refusal, bytes and all, and one within it the early refusal', async () => {
+  const walks = inline(abridgedAt16)
+  const units = await walks.units('R#0#chr')
+  const bytes = units
+    .filter(u => u.name === '16' && (u.kind === 'tile' || u.kind === 'blocks'))
+    .reduce((sum, u) => sum + u.length, 0)
+  const window = { start: 16, end: 32 }
+  const over = await earlyAndFinished(walks, window, {
+    context: 1,
+    stepBudget: 3,
+    byteBudget: bytes - 1,
+  })
+  expect(over.early.decoded).toBe(1)
+  expect(over.finished.error).toMatchObject({ limit: bytes - 1, bytes })
+  expect(butFitsBp(over.early.error)).toEqual(butFitsBp(over.finished.error))
+  const within = await earlyAndFinished(walks, window, {
+    context: 1,
+    stepBudget: 3,
+    byteBudget: bytes,
+  })
+  expect(within.early.decoded).toBe(0)
+  expect(within.finished.error).toMatchObject({ limit: 3 })
+  expect(butFitsBp(within.early.error)).toEqual(
+    butFitsBp(within.finished.error),
   )
-  expect(keptSteps(cut)).toBe(32)
-  expect(decoding.tiles).toBe(2)
+})
+
+// attachmany.R over 300-400: 52 steps on its tiles strictly inside, and the
+// records of all ten haplotypes rejoining there, whose own steps lie in
+// tiles 0 to 90
+test.each([
+  { refusal: 'the attach fetches past the byte budget', over: 1, early: false },
+  { refusal: 'the steps kept', over: 0, early: true },
+])(
+  'a window whose records can fetch tiles to attach gets the refusal the finished cut throws, $refusal',
+  async ({ over, early: fires }) => {
+    const walks = reader('attachmany.R')
+    const bytes = (await walks.units('R#0#chr'))
+      .filter(u => u.kind === 'tile' && (u.start < 100 || u.start >= 300))
+      .reduce((sum, u) => sum + u.length, 0)
+    const { early, finished } = await earlyAndFinished(
+      walks,
+      attachManyRejoins,
+      {
+        context: 0,
+        stepBudget: 10,
+        byteBudget: bytes - over,
+      },
+    )
+    expect(early.decoded === 0).toBe(fires)
+    expect(finished.error).toMatchObject(
+      over > 0 ? { limit: bytes - 1, bytes } : { limit: 10 },
+    )
+    expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+  },
+)
+
+test('a window whose records can fetch tiles to attach is left to the finished cut under a node limit', async () => {
+  const { early, finished } = await earlyAndFinished(
+    reader('attachmany.R'),
+    attachManyRejoins,
+    { context: 0, stepBudget: 10, nodeLimit: 1000 },
+  )
+  expect(early.decoded).toBeGreaterThan(0)
+  expect(finished.error).toMatchObject({ limit: 10 })
+  expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+})
+
+test('a row naming a route its tile lacks, mid-row, gets the decode refusal where the window without it is refused before decoding', async () => {
+  const fine = [...alongR, 'R#0#chr 16 route 4 . 4']
+  const opts = { context: 1, stepBudget: 2 }
+  const without = await earlyAndFinished(inline(fine), over16to48, opts)
+  expect(without.early.decoded).toBe(0)
+  const lines = [...fine, 'R#0#chr 16 walk H#4#h 0 0 0 3 2 0,10,-10']
+  const { early, finished } = await earlyAndFinished(
+    inline(lines),
+    over16to48,
+    opts,
+  )
+  expect(finished.error).toBeInstanceOf(WalkRowError)
+  expect(early.error).toEqual(finished.error)
 })
 
 // Rows whose nsteps overstate what a cut keeps, each window cut with the
 // budget at what it keeps: H#1 starting its line with 10 steps off R before
-// node 1, which no fragment holds; the two haplotypes `keep` leaves out; and
-// H#1 abridged, >1>2, 30 steps off R, >3>4, built from its blocks row with
-// one placeholder for the 30, which its departure holds too
+// node 1, which no fragment holds; H#1 ending its line with 10 steps off R
+// after node 4, by its second route taken flipped; tiles reaching past the
+// drawn stretch; the haplotypes `keep` leaves out, and R too; H#1 abridged,
+// whose departure holds its 30 steps off R; and a ref row stating more
+// steps than it lists
 test.each([
   {
     rows: 'a leading run off R',
@@ -909,44 +1215,90 @@ test.each([
     window: { start: 16, end: 32 },
     keep: undefined,
     kept: 8,
+    early: true,
   },
   {
-    rows: 'haplotypes keep leaves out',
-    lines: alongR,
-    window: { start: 16, end: 48 },
-    keep: (name: string) => name === 'R#0#chr' || name === 'H#1#h',
-    kept: 16,
-  },
-  {
-    rows: 'an abridged piece',
+    rows: 'a trailing run off R',
     lines: [
       '#walks format:i:8 tile:i:16',
       '#reference R',
       '#haplotype H#1',
       '#hole R#0#chr 0 16',
       'R#0#chr 16 ref R#0#chr 16 16 0 4 2,2,2,2 4,4,4,4 .',
-      'R#0#chr 16 abridged H#1#h 0 0 0 34 46 0',
-      `R#0#chr 16:0 16 32 nodes 100${',1'.repeat(29)} 1${',1'.repeat(29)}`,
-      `R#0#chr 16:0 16 32 route 4 196${',2'.repeat(29)} -252`,
-      'R#0#chr 16:0 16 32 walk H#1#h 0 0 0 34 2 0',
-      'R#0#chr 16 16 32 blocks H#1#h 0 0 16+8,30,0+8',
+      'R#0#chr 16 nodes 100,1,1,1,1,1,1,1,1,1 1,1,1,1,1,1,1,1,1,1',
+      'R#0#chr 16 route 4 . 4',
+      'R#0#chr 16 route . 211,-1,-1,-1,-1,-1,-1,-1,-1,-1 -191',
+      'R#0#chr 16 walk H#1#h 0 0 0 13 2 0,3',
     ],
     window: { start: 16, end: 32 },
     keep: undefined,
+    kept: 7,
+    early: true,
+  },
+  {
+    rows: 'a tile reaching past the drawn stretch',
+    lines: alongR,
+    window: { start: 16, end: 40 },
+    keep: undefined,
+    kept: 28,
+    early: false,
+  },
+  {
+    rows: 'haplotypes keep leaves out',
+    lines: alongR,
+    window: over16to48,
+    keep: withH1,
+    kept: 16,
+    early: true,
+  },
+  {
+    rows: 'the reference keep leaves out',
+    lines: alongR,
+    window: over16to48,
+    keep: (name: string) => name === 'H#1#h',
+    kept: 8,
+    early: true,
+  },
+  {
+    rows: 'an abridged piece',
+    lines: abridgedAt16,
+    window: { start: 16, end: 32 },
+    keep: undefined,
     kept: 10,
+    early: false,
+  },
+  {
+    rows: 'a ref row stating more steps than it lists',
+    lines: alongR.map(line =>
+      line.replace('16 16 0 4 2,2,2,2', '16 16 0 40 2,2,2,2'),
+    ),
+    window: over16to48,
+    keep: undefined,
+    kept: 32,
+    early: true,
   },
 ])(
-  'a window of $rows, whose rows state more steps than its cut keeps, is cut with a budget of the $kept it keeps',
-  async ({ lines, window, keep, kept }) => {
+  'a window of $rows, whose rows state more steps than its cut keeps, is cut with a budget of the $kept it keeps, and refused one below, before decoding where its count reaches it',
+  async ({ lines, window, keep, kept, early: fires }) => {
     const stated = lines
       .map(line => line.split(' '))
       .filter(cols => ['ref', 'walk', 'abridged'].includes(cols[2]!))
       .reduce((sum, cols) => sum + Number(cols[7]), 0)
-    const cut = (stepBudget: number) =>
-      inline(lines).cut('R#0#chr', window, { context: 1, keep, stepBudget })
     expect(stated).toBeGreaterThan(kept)
-    expect(keptSteps(await cut(kept))).toBe(kept)
-    await expect(cut(kept - 1)).rejects.toBeInstanceOf(RegionTooLargeError)
+    const cut = await inline(lines).cut('R#0#chr', window, {
+      context: 1,
+      keep,
+      stepBudget: kept,
+    })
+    expect(keptSteps(cut)).toBe(kept)
+    const { early, finished } = await earlyAndFinished(inline(lines), window, {
+      context: 1,
+      keep,
+      stepBudget: kept - 1,
+    })
+    expect(early.decoded === 0).toBe(fires)
+    expect(limitOf(finished.error)).toBe(kept - 1)
+    expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
   },
 )
 

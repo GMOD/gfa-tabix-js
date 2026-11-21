@@ -545,21 +545,25 @@ function sliceBases(
   }
 }
 
+const isCount = (field: string | undefined, least = 0) =>
+  field !== undefined &&
+  field !== '' &&
+  Number.isSafeInteger(Number(field)) &&
+  Number(field) >= least
+
+// Whether abridgedPiece takes an `abridged` line's numbers
+const abridgedCounts = (cols: string[]) =>
+  [1, 2, 5, 6, 7, 8, 10].every(k => isCount(cols[k])) && isCount(cols[9], 1)
+
 // An `abridged` line, `path fragStart hapOffset piece nsteps hapBp detail`: a
 // piece the writer moved to a detail record, with its span on R and its bp
 // on its contig
 export function abridgedPiece(cols: string[], tileStart: number) {
   const count = (k: number, least = 0) => {
-    const n = Number(cols[k])
-    if (
-      cols[k] === undefined ||
-      cols[k] === '' ||
-      !Number.isSafeInteger(n) ||
-      n < least
-    ) {
+    if (!isCount(cols[k], least)) {
       throw new WalkRowError(`not an abridged row: ${cols.join('\t')}`)
     }
-    return n
+    return Number(cols[k])
   }
   const abridged: Abridged = {
     steps: count(8),
@@ -1152,41 +1156,71 @@ export const refRows = (rows: string[][]) =>
 const tokenCount = (field: string) =>
   field === '.' ? 0 : field.split(',').length
 
-// A walk row's first and last choices, as route index and flip
-function endChoices(field: string) {
-  let route = 0
-  const ends: { first?: [number, number]; last?: [number, number] } = {}
-  if (field !== '.') {
-    for (const token of field.split(',')) {
-      const delta = Number.parseInt(token, 10)
-      const flip = delta & 1
-      route += (delta - flip) / 2
-      ends.first ??= [route, flip]
-      ends.last = [route, flip]
-    }
-  }
-  return ends
+// A route as a count of a walk row's steps: whether it lacks an entry or an
+// exit, and its interior's steps
+interface CountedRoute {
+  noEntry: boolean
+  interior: number
+  noExit: boolean
 }
 
+// A walk row's steps off R, and of them those before its first step on R
+// and after its last; undefined where its decode would refuse the row, for
+// a route the tile lacks or a route without an entry or exit inside it
+function stepsOffR(choices: number[], routes: CountedRoute[]) {
+  let interior = 0
+  let ends = 0
+  let sound = true
+  for (let k = 0; k < choices.length; k += 4) {
+    const route = routes[choices[k]!]
+    if (route) {
+      const flip = choices[k + 1] === 1
+      const noEntry = flip ? route.noExit : route.noEntry
+      const noExit = flip ? route.noEntry : route.noExit
+      const leading = k === 0 && noEntry
+      const trailing = !leading && noExit
+      sound &&= (leading || !noEntry) && (!trailing || k + 4 === choices.length)
+      interior += route.interior
+      ends += leading || trailing ? route.interior : 0
+    } else {
+      sound = false
+    }
+  }
+  return sound ? { interior, ends } : undefined
+}
+
+const COUNTED_KINDS = new Set(['ref', 'walk', 'abridged'])
+
 /**
- * The steps a cut surely keeps of a tile whose extent lies strictly inside
- * the stretch it draws, from the tile's lines before any is decoded: the
- * `nsteps` of each `ref` and `walk` row of a walk `keep` takes, less the
- * steps off R before a walk row's first step on R and after its last. Every
- * step a row places on R lies within its tile's extent, so a cut over the
- * extent keeps each row from its first step on R to its last, and every step
- * between, as one stretch of a fragment, whether it is contained or not. The
- * steps off R at a row's ends are kept only if a neighbouring piece reaches
- * the window, so they are not counted. An `abridged` row counts nothing,
- * since a cut builds the piece from its blocks row with a placeholder for
- * each run off R, in fewer steps than its `nsteps`. A departure's own steps
- * are not counted either, nor a row naming a route its tile lacks, which its
- * decode refuses. So the sum never exceeds the steps of the cut's fragments,
- * which its step budget counts with the departures' own steps.
+ * What a cut's decode of a tile reads, and what it surely keeps of the tile
+ * where its extent lies strictly inside the stretch the cut draws, from the
+ * tile's lines before any is decoded; undefined where the decode would
+ * refuse a row of a walk `keep` takes.
+ *
+ * `kept` is the steps of each `ref` and `walk` row of a walk `keep` takes,
+ * less the steps off R before a walk row's first step on R and after its
+ * last. Every step a row places on R lies within its tile's extent, so a cut
+ * over the extent keeps each row from its first step on R to its last, and
+ * every step between, as one stretch of a fragment, whether it is contained
+ * or not. The steps off R at a row's ends are kept only if a neighbouring
+ * piece reaches the window, so they are not counted. An `abridged` row
+ * counts nothing, since a cut builds the piece from its blocks row with a
+ * placeholder for each run off R, in fewer steps than its `nsteps`, and a
+ * departure's own steps are not counted either. So `kept` never exceeds the
+ * steps of the cut's fragments, which its step budget counts with the
+ * departures' own steps.
+ *
+ * `n` and `interior` bound the steps the decode's rows give the read budget,
+ * and those of them off R: each `ref` and `walk` row's own, and an abridged
+ * piece's `nsteps`, all off R where `expand` reads it from its detail
+ * record, and else as many on R, no fewer than the row built from its blocks
+ * row or its bp holds. `blocks` says the cut reads a blocks row for one of
+ * the tile's pieces, and `expanded` a detail record.
  */
-export function surelyKeptSteps(
+export function tileSteps(
   lines: string[],
   keep: ((name: string) => boolean) | undefined,
+  expand: ((name: string) => boolean) | undefined,
 ) {
   const rows = lines.map(line => line.split('\t'))
   const routes = rows
@@ -1196,33 +1230,68 @@ export function surelyKeptSteps(
       interior: tokenCount(cols[5] ?? '.'),
       noExit: cols[6] === '.',
     }))
-  const offEnd = (choice: [number, number] | undefined, leading: boolean) => {
-    const route = choice ? routes[choice[0]] : undefined
-    const open =
-      route !== undefined &&
-      (leading === (choice?.[1] === 1) ? route.noExit : route.noEntry)
-    return choice === undefined
-      ? 0
-      : route === undefined
-        ? Infinity
-        : open
-          ? route.interior
-          : 0
-  }
-  let steps = 0
+  const tally = { kept: 0, n: 0, interior: 0, blocks: false, expanded: false }
+  let sound = true
   for (const cols of rows) {
-    const kind = cols[3]
-    if ((kind === 'ref' || kind === 'walk') && (keep?.(cols[4]!) ?? true)) {
-      const n = +cols[8]!
+    const kind = cols[3]!
+    const name = cols[4]!
+    if (COUNTED_KINDS.has(kind) && (keep?.(name) ?? true)) {
       if (kind === 'ref') {
-        steps += n
+        const n = tokenCount(cols[9] ?? '.')
+        tally.kept += n
+        tally.n += n
+      } else if (kind === 'walk') {
+        const n = Number(cols[8])
+        const off = stepsOffR(parseChoices(cols[10] ?? '.'), routes)
+        sound &&= off !== undefined && n > off.interior
+        tally.kept += n - (off?.ends ?? 0)
+        tally.n += n
+        tally.interior += off?.interior ?? 0
       } else {
-        const { first, last } = endChoices(cols[10] ?? '.')
-        steps += Math.max(0, n - offEnd(first, true) - offEnd(last, false))
+        const n = Number(cols[8])
+        const expanded = expand?.(name) === true
+        sound &&= abridgedCounts(cols)
+        tally.n += expanded ? n : Math.max(n, 1)
+        tally.interior += expanded ? n : 0
+        tally.expanded ||= expanded
+        tally.blocks ||= !expanded
       }
     }
   }
-  return steps
+  return sound ? tally : undefined
+}
+
+// The ids of a column of delta tokens, from `previous.id`, which ends on the
+// last id read
+const deltaIds = (field: string, previous: { id: number }) =>
+  field === '.'
+    ? []
+    : field.split(',').map(token => {
+        const delta = Number.parseInt(token, 10)
+        previous.id += (delta - (delta & 1)) / 2
+        return previous.id
+      })
+
+// Every node id a tile's ref rows and routes name, which holds every node
+// its decode and the pieces built from its blocks rows place
+export function tileNodeIds(lines: string[], into: Set<number>) {
+  const previous = { id: 0 }
+  for (const line of lines) {
+    const cols = line.split('\t')
+    const columns =
+      cols[3] === 'ref'
+        ? [cols[9]]
+        : cols[3] === 'route'
+          ? cols.slice(4, 7)
+          : []
+    const from = cols[3] === 'ref' ? { id: 0 } : previous
+    for (const field of columns) {
+      for (const id of deltaIds(field ?? '.', from)) {
+        into.add(id)
+      }
+    }
+  }
+  return into
 }
 
 // A chunk's R and its nodes' lengths, which its detail records share

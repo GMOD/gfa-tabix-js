@@ -358,25 +358,36 @@ const { tables, refName, sample } = await reader.cutRegion(
   cuts. The rows of tiles fetched for records' own steps are not counted there,
   and the own steps they give count against `stepBudget` with the rest
 - Before it decodes a row, the cut counts the steps it will surely keep of the
-  window's tiles whose extent lies strictly inside the window and its context,
-  and throws the `RegionTooLargeError` the finished cut would, but for its
-  `fitsBp`, when they are over `stepBudget`. So a window over the budget costs
-  its fetch, not its cut. The count takes each `ref` and `walk` row of a walk
-  `keep` takes at its `nsteps`, less a walk row's steps off the reference before
-  its first step on it and after its last. Every step a row places on the
-  reference lies in its tile's extent, so a cut over that extent keeps the row
-  from its first such step to its last and every step between, contained or not;
-  the steps off the reference at a row's ends are kept only where a neighbouring
-  piece reaches the window. An `abridged` row counts nothing, since the cut
-  builds its piece with a placeholder per run off the reference, in fewer steps
-  than its `nsteps`, and neither do departures' own steps. So the count never
-  passes the steps the cut's fragments keep. Its `fitsBp` is worked out tile by
-  tile from the window's start, each counted tile holding its count evenly over
-  its extent, a tile not counted holding the counted tiles' steps per bp and a
-  stretch no tile covers none: it is where those steps reach `stepBudget`. Both
-  are estimates; on the hosted GRCh38 file this one more often lies nearer the
-  widest window that cuts than the finished cut's own, the window scaled by the
-  steps it kept
+  window's tiles whose extent lies strictly inside the window and its context.
+  When they are over `stepBudget` and the rows and the unit table show that no
+  refusal the cut makes before it counts the steps it keeps can come, it throws
+  there the `RegionTooLargeError` the finished cut would, the same in every
+  field but `fitsBp` and the span its message names. So such a window costs its
+  fetch, not its cut. The refusals it rules out are those of a malformed row for
+  a route its tile lacks, a route without an entry or exit inside the row, fewer
+  steps than its routes hold, or an `abridged` row's numbers; the node limit,
+  which no more nodes than the tiles' `ref` rows and routes name can reach,
+  where no detail record `expand` reads or tile fetched to attach can bring
+  more; the byte budget, over the `blocks` units the cut reads and every tile
+  its records could fetch to attach; and the 8 times `stepBudget` the rows may
+  hold, over the most the rows and the pieces built from them can. Where it
+  can't rule one out, the finished cut refuses the window. The count takes each
+  `ref` and `walk` row of a walk `keep` takes at its steps, less a walk row's
+  steps off the reference before its first step on it and after its last. Every
+  step a row places on the reference lies in its tile's extent, so a cut over
+  that extent keeps the row from its first such step to its last and every step
+  between, contained or not; the steps off the reference at a row's ends are
+  kept only where a neighbouring piece reaches the window. An `abridged` row
+  counts nothing, since the cut builds its piece with a placeholder per run off
+  the reference, in fewer steps than its `nsteps`, and neither do departures'
+  own steps. So the count never passes the steps the cut's fragments keep. Its
+  `fitsBp` is worked out tile by tile from the start of the window's context,
+  each counted tile holding its count evenly over its extent, a tile not counted
+  holding the counted tiles' steps per bp and a stretch no tile covers none:
+  where those steps reach `stepBudget` is where the context of a window that
+  fits ends, so it is narrower than the window refused, as the finished cut's
+  is. Both are estimates, the finished cut's the window scaled by the steps it
+  kept
 
 ## Cut presets
 

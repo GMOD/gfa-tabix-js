@@ -15,7 +15,8 @@ import {
   tileLinks,
   parseBlocks,
   referenceNodes,
-  surelyKeptSteps,
+  tileNodeIds,
+  tileSteps,
   unloadedRow,
 } from './walkChunk.ts'
 import { WalkTally } from './walkCounts.ts'
@@ -1095,6 +1096,122 @@ export class WalkReader {
         item.into.push(bpRow(item.piece))
       }
     }
+    // whether `more` read with the units read so far passes the byte budget
+    const overBytes = (more: Needed[], attach: boolean) =>
+      Number.isFinite(byteBudget) &&
+      byteBudgetError(
+        bytesWith(more),
+        byteBudget,
+        region,
+        tile,
+        opts.budgetNames,
+        attach,
+      ) !== undefined
+    // Whether none of the refusals a cut makes before keptStepsError can
+    // come, from its tiles' lines and records before any is decoded: a row
+    // its decode refuses; its node limit, which no more nodes than the
+    // tiles' ref rows and routes name can reach where no detail record or
+    // attach fetch brings more; the byte budget, over the blocks units it
+    // reads and every tile it can fetch to attach; and the read budget, over
+    // the most its rows and pieces can hold
+    const noEarlierRefusal = (
+      read: string[][],
+      counted: (ReturnType<typeof tileSteps> | 'edge')[],
+      records: WalkDeparture[],
+      ownTiles: Map<WalkDeparture, number[]>,
+    ) => {
+      const all = tiles.map((_, k) => {
+        const tally = counted[k]
+        return tally === 'edge' ? tileSteps(read[k]!, keep, expand) : tally
+      })
+      const blocks = tiles
+        .filter((_, k) => all[k]?.blocks === true)
+        .map(unit => ({ unit: blocksUnits.get(unit.name), from: unit.start }))
+      const unread = blocks.flatMap(({ unit, from }) =>
+        unit && !blocksRead.has(unit) ? [{ unit, from }] : [],
+      )
+      const attaching = new Map<WalkUnit, number>()
+      const decoded = new Set(tiles.map(unit => unit.offset))
+      const tilesNamed = new Map<number, WalkUnit[]>()
+      for (const unit of units) {
+        if (unit.kind === 'tile' && unit.length > 0) {
+          const start = Number(unit.name)
+          tilesNamed.set(start, [...(tilesNamed.get(start) ?? []), unit])
+        }
+      }
+      for (const d of records) {
+        if (attachesOwnSteps(d, bounds, attachBp)) {
+          const from = Math.min(
+            d.leavePos,
+            d.rejoinPos,
+            region.end + context - 1,
+          )
+          for (const start of ownTiles.get(d) ?? []) {
+            for (const unit of tilesNamed.get(start) ?? []) {
+              if (!decoded.has(unit.offset)) {
+                attaching.set(unit, Math.min(attaching.get(unit) ?? from, from))
+              }
+            }
+          }
+        }
+      }
+      const fetching = [...attaching].map(([unit, from]) => ({ unit, from }))
+      const nodesFit = () =>
+        !Number.isFinite(nodeLimit) ||
+        (fetching.length === 0 &&
+          all.every(t => t?.expanded === false) &&
+          read
+            .slice(0, tiles.length)
+            .reduce((ids, lines) => tileNodeIds(lines, ids), new Set<number>())
+            .size <= nodeLimit)
+      const held = all.reduce(
+        (sum, t) => ({
+          n: sum.n + (t?.n ?? 0),
+          interior: sum.interior + (t?.interior ?? 0),
+        }),
+        { n: 0, interior: 0 },
+      )
+      return (
+        all.every(t => t !== undefined) &&
+        blocks.every(({ unit }) => unit !== undefined) &&
+        readSteps(held) <= stepBudget * READ_STEPS_PER_KEPT &&
+        !(unread.length > 0 && overBytes(unread, false)) &&
+        !(fetching.length > 0 && overBytes([...unread, ...fetching], true)) &&
+        nodesFit()
+      )
+    }
+    // keptStepsError's notice, given before any tile is decoded where the
+    // steps the tiles strictly inside the drawn stretch surely keep
+    // (tileSteps in walkChunk.ts) pass the step budget and no earlier
+    // refusal can come, so the finished cut would throw it
+    const earlyRefusal = (
+      read: string[][],
+      records: WalkDeparture[],
+      ownTiles: Map<WalkDeparture, number[]>,
+    ) => {
+      const counted = tiles.map((unit, k) =>
+        unit.start > drawn.start && unit.end < drawn.end
+          ? tileSteps(read[k]!, keep, expand)
+          : 'edge',
+      )
+      const kept = counted.reduce(
+        (sum, tally) => sum + (tally === 'edge' ? 0 : (tally?.kept ?? 0)),
+        0,
+      )
+      return kept > stepBudget &&
+        noEarlierRefusal(read, counted, records, ownTiles)
+        ? surelyKeptError(
+            tiles.map((unit, k) => {
+              const tally = counted[k]
+              return tally === 'edge' ? unit : { ...unit, steps: tally?.kept }
+            }),
+            stepBudget,
+            region,
+            context,
+            filtered,
+          )
+        : undefined
+    }
     let cut: ReturnType<typeof walkCut>
     try {
       const jumps =
@@ -1109,21 +1226,6 @@ export class WalkReader {
         [...tiles, ...departureBlocks, ...jumps.map(x => x.unit)],
         reads.signal,
       )
-      if (Number.isFinite(stepBudget)) {
-        const overBudget = surelyKeptError(
-          tiles.map((unit, k) =>
-            unit.start > drawn.start && unit.end < drawn.end
-              ? { ...unit, steps: surelyKeptSteps(read[k]!, keep) }
-              : unit,
-          ),
-          stepBudget,
-          region,
-          filtered,
-        )
-        if (overBudget) {
-          throw overBudget
-        }
-      }
       const tilesAndRecords = tiles.length + departureBlocks.length
       jumps.forEach((x, k) => {
         extra.push(x)
@@ -1140,6 +1242,12 @@ export class WalkReader {
           ownRecords.set(d.name, held)
           held.push(d)
         }
+      }
+      const early = Number.isFinite(stepBudget)
+        ? earlyRefusal(read, records, ownTiles)
+        : undefined
+      if (early) {
+        throw early
       }
       tiles.forEach((unit, k) => {
         decode(unit, read[k]!, rows, unit.start)

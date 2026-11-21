@@ -1769,18 +1769,21 @@ function zoomInError(
 
 /**
  * keptStepsError's notice given before a cut decodes its tiles, or undefined
- * where the steps it surely keeps of the tiles it counted (surelyKeptSteps in
+ * where the steps it surely keeps of the tiles it counted (tileSteps in
  * walkChunk.ts, `steps` here) fit `budget`. `tiles` are the window's tiles in
  * order, those not counted with no `steps`. The span that fits is worked out
- * tile by tile from the window's start: a counted tile holds its steps evenly
- * over its extent, a tile not counted holds the counted tiles' steps per bp,
- * and a stretch no tile covers holds none. It is where those steps reach the
- * budget.
+ * tile by tile from the start of the window's `context`: a counted tile holds
+ * its steps evenly over its extent, a tile not counted holds the counted
+ * tiles' steps per bp, and a stretch no tile covers holds none. Where those
+ * steps reach the budget is where the context of the span that fits ends,
+ * before the last counted tile ends and so before the window's context does:
+ * the span is narrower than the window.
  */
 export function surelyKeptError(
   tiles: { start: number; end: number; steps?: number }[],
   budget: number,
   window: { start: number; end: number },
+  context: number,
   filtered: boolean,
 ) {
   let steps = 0
@@ -1791,9 +1794,14 @@ export function surelyKeptError(
       bp += tile.end - tile.start
     }
   }
+  const drawn = {
+    start: Math.max(0, window.start - context),
+    end: window.end + context,
+  }
   return steps > budget
     ? zoomInError(
-        budgetReach(tiles, bp > 0 ? steps / bp : 0, budget, window) -
+        budgetReach(tiles, bp > 0 ? steps / bp : 0, budget, drawn) -
+          context -
           window.start,
         budget,
         window,
@@ -1802,20 +1810,20 @@ export function surelyKeptError(
     : undefined
 }
 
-// Where on the window the steps of `tiles` from its start reach `budget`,
-// each tile's spread evenly over its extent, `perBp` a tile's with no steps
-// of its own; the window's end where they don't
+// Where on `drawn` the steps of `tiles` from its start reach `budget`, each
+// tile's spread evenly over its extent, `perBp` a tile's with no steps of its
+// own; the end of `drawn` where they don't
 function budgetReach(
   tiles: { start: number; end: number; steps?: number }[],
   perBp: number,
   budget: number,
-  window: { start: number; end: number },
+  drawn: { start: number; end: number },
 ) {
   let held = 0
   let reach: number | undefined
   for (const tile of tiles) {
-    const from = Math.max(tile.start, window.start)
-    const bp = Math.max(0, tile.end - from)
+    const from = Math.max(tile.start, drawn.start)
+    const bp = Math.max(0, Math.min(tile.end, drawn.end) - from)
     const share =
       tile.steps === undefined
         ? perBp * bp
@@ -1827,7 +1835,7 @@ function budgetReach(
     }
     held += share
   }
-  return Math.floor(Math.min(reach ?? window.end, window.end))
+  return Math.floor(reach ?? drawn.end)
 }
 
 /**
