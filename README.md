@@ -360,22 +360,23 @@ const { tables, refName, sample } = await reader.cutRegion(
 - Before it decodes a row, the cut counts the steps it will surely keep of the
   window's tiles whose extent lies strictly inside the window and its context,
   and throws the `RegionTooLargeError` the finished cut would, but for its
-  `fitsBp`, when they are over `stepBudget`. So a window over the budget costs its fetch, not its cut. The
-  count takes each `ref` and `walk` row of a walk `keep` takes at its `nsteps`,
-  less a walk row's steps off the reference before its first step on it and
-  after its last. Every step a row places on the reference lies in its tile's
-  extent, so a cut over that extent keeps the row from its first such step to
-  its last and every step between, contained or not; the steps off the reference
-  at a row's ends are kept only where a neighbouring piece reaches the window.
-  An `abridged` row counts nothing, since the cut builds its piece with a
-  placeholder per run off the reference, in fewer steps than its `nsteps`, and
-  neither do departures' own steps. So the count never passes the steps the
-  cut's fragments keep. Its `fitsBp` is worked out tile by tile from the
-  window's start, each counted tile holding its count evenly over its extent, a
-  tile not counted holding the counted tiles' steps per bp and a stretch no tile
-  covers none: it is where those steps reach `stepBudget`. Both are estimates;
-  on the hosted GRCh38 file this one more often lies nearer the widest window
-  that cuts than the finished cut's own, the window scaled by the steps it kept
+  `fitsBp`, when they are over `stepBudget`. So a window over the budget costs
+  its fetch, not its cut. The count takes each `ref` and `walk` row of a walk
+  `keep` takes at its `nsteps`, less a walk row's steps off the reference before
+  its first step on it and after its last. Every step a row places on the
+  reference lies in its tile's extent, so a cut over that extent keeps the row
+  from its first such step to its last and every step between, contained or not;
+  the steps off the reference at a row's ends are kept only where a neighbouring
+  piece reaches the window. An `abridged` row counts nothing, since the cut
+  builds its piece with a placeholder per run off the reference, in fewer steps
+  than its `nsteps`, and neither do departures' own steps. So the count never
+  passes the steps the cut's fragments keep. Its `fitsBp` is worked out tile by
+  tile from the window's start, each counted tile holding its count evenly over
+  its extent, a tile not counted holding the counted tiles' steps per bp and a
+  stretch no tile covers none: it is where those steps reach `stepBudget`. Both
+  are estimates; on the hosted GRCh38 file this one more often lies nearer the
+  widest window that cuts than the finished cut's own, the window scaled by the
+  steps it kept
 
 ## Cut presets
 
