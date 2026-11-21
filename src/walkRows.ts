@@ -387,6 +387,44 @@ function linkHeld(memo: LinkMemo, a: number, b: number) {
   return held
 }
 
+// Pairs of numbers, each exact as a double, by open addressing, so that a
+// cut's millions of links are no Set apiece
+class PairSet {
+  private keys = new Float64Array(2048).fill(Number.NaN)
+  private size = 0
+
+  // whether the pair is new, which the set holds from now on
+  add(a: number, b: number) {
+    if (4 * (this.size + 1) > this.keys.length) {
+      const held = this.keys
+      this.keys = new Float64Array(2 * held.length).fill(Number.NaN)
+      this.size = 0
+      for (let k = 0; k < held.length; k += 2) {
+        if (!Number.isNaN(held[k])) {
+          this.add(held[k]!, held[k + 1]!)
+        }
+      }
+    }
+    const { keys } = this
+    const mask = keys.length / 2 - 1
+    const mixed = Math.imul(a | 0, 0x9e3779b1) ^ (b | 0)
+    let slot = Math.imul(mixed ^ (mixed >>> 16), 0x85ebca6b) & mask
+    while (
+      !Number.isNaN(keys[2 * slot]) &&
+      !(keys[2 * slot] === a && keys[2 * slot + 1] === b)
+    ) {
+      slot = (slot + 1) & mask
+    }
+    const fresh = Number.isNaN(keys[2 * slot])
+    if (fresh) {
+      keys[2 * slot] = a
+      keys[2 * slot + 1] = b
+      this.size++
+    }
+    return fresh
+  }
+}
+
 // Links each step from `from` to `to` to the one before it, through `add`
 // where `memo` has not held the link
 function linkSteps(
@@ -605,21 +643,14 @@ export function walkCut(
   } = walkSpans(readRuns, nodes, options)
   // the links the steps returned walk, as pairs of handles, each once
   const links: number[] = []
-  const linkedTo = new Map<number, Set<number>>()
+  const linkedTo = new PairSet()
   const linkMemo = {
     from: memoKeys(),
     to: new Float64Array(2 * MEMO_SLOTS).fill(Number.NaN),
   }
   const link = (a: number, b: number) => {
-    if (linked) {
-      const held = linkedTo.get(a)
-      if (held === undefined) {
-        linkedTo.set(a, new Set([b]))
-        links.push(a, b)
-      } else if (!held.has(b)) {
-        held.add(b)
-        links.push(a, b)
-      }
+    if (linked && linkedTo.add(a, b)) {
+      links.push(a, b)
     }
   }
   // links each step of `run` from `from` to `to` to the one before it
@@ -688,7 +719,12 @@ export function walkCut(
     attached.set(run, marks)
     for (let k = from; k < to; k++) {
       marks.add(k)
-      kept.add(run.ids[k]!)
+      const id = run.ids[k]!
+      const slot = id & MEMO_MASK
+      if (lastKept[slot] !== id) {
+        lastKept[slot] = id
+        kept.add(id)
+      }
     }
   }
   const unloadedIn = (run: WalkRun, from: number, to: number) =>
@@ -891,7 +927,18 @@ function walkSpans(
     const node = nodes.get(id)
     return node === undefined ? 0 : node.end - node.start
   }
-  const passesOf = (id: number) => nodes.get(id)?.passes ?? 0
+  const passesSeen = memoKeys()
+  const passesHeld = new Float64Array(MEMO_SLOTS)
+  // each node's passes, which the cut asks of the same few nodes again and
+  // again; it changes no node after it first asks
+  const passesOf = (id: number) => {
+    const slot = id & MEMO_MASK
+    if (passesSeen[slot] !== id) {
+      passesSeen[slot] = id
+      passesHeld[slot] = nodes.get(id)?.passes ?? 0
+    }
+    return passesHeld[slot]!
+  }
   const onR = (run: WalkRun, i: number) => !Number.isNaN(run.refStarts[i])
   // bp of a run's steps before each, and after its last
   const prefixes = new Map<WalkRun, Float64Array>()
