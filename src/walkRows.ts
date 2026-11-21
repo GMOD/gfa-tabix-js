@@ -387,6 +387,51 @@ function linkHeld(memo: LinkMemo, a: number, b: number) {
   return held
 }
 
+// A number below 1e12 in absolute value as a key that sorts as its decimal
+// string does: '-' sorts before every digit, and of two digit strings the
+// one with the lower digits, padded right to 12, sorts first, the shorter on
+// a tie
+function stringOrder(x: number) {
+  const m = Math.abs(x)
+  let digits = 1
+  let pad = 1e11
+  while (m >= 10 ** digits) {
+    digits++
+    pad /= 10
+  }
+  return (x < 0 ? 0 : 2 ** 48) + (m * pad * 16 + digits)
+}
+
+// Each link between two kept nodes once, as its two handles, in the order
+// its L line, source, strand, target and strand joined by tabs, sorts as a
+// string. A tab sorts below every character of the fields, so that is the
+// order of each id as a string, then of its strand, '+' first
+function linkLines(links: number[], kept: Set<number>) {
+  const distinct = new PairSet()
+  const chosen: number[] = []
+  const sources: number[] = []
+  const targets: number[] = []
+  for (let i = 0; i < links.length; i += 2) {
+    const a = links[i]!
+    const b = links[i + 1]!
+    const source = Math.floor(a / 2)
+    const target = Math.floor(b / 2)
+    if (kept.has(source) && kept.has(target) && distinct.add(a, b)) {
+      chosen.push(i)
+      sources.push(2 * stringOrder(source) + (a & 1))
+      targets.push(2 * stringOrder(target) + (b & 1))
+    }
+  }
+  const order = Array.from(chosen.keys()).sort(
+    (x, y) => sources[x]! - sources[y]! || targets[x]! - targets[y]!,
+  )
+  const lines: number[] = []
+  for (const k of order) {
+    lines.push(links[chosen[k]!]!, links[chosen[k]! + 1]!)
+  }
+  return lines
+}
+
 // Pairs of numbers, each exact as a double, by open addressing, so that a
 // cut's millions of links are no Set apiece
 class PairSet {
@@ -1483,31 +1528,17 @@ export class WalkGraph {
       return lastIndex[slot]!
     }
 
-    const byLine = new Map<string, number>()
-    for (let i = 0; i < this.links.length; i += 2) {
-      const a = this.links[i]!
-      const b = this.links[i + 1]!
-      const source = Math.floor(a / 2)
-      const target = Math.floor(b / 2)
-      if (kept.has(source) && kept.has(target)) {
-        byLine.set(
-          `${source}\t${a & 1 ? '-' : '+'}\t${target}\t${b & 1 ? '-' : '+'}`,
-          i,
-        )
-      }
+    const lines = linkLines(this.links, kept)
+    const from = new Int32Array(lines.length / 2)
+    const to = new Int32Array(lines.length / 2)
+    const strands = new Uint8Array(lines.length / 2)
+    for (let k = 0; k < lines.length; k += 2) {
+      const a = lines[k]!
+      const b = lines[k + 1]!
+      from[k / 2] = nodeIndex(Math.floor(a / 2))
+      to[k / 2] = nodeIndex(Math.floor(b / 2))
+      strands[k / 2] = (a & 1) | ((b & 1) << 1)
     }
-    const lines = [...byLine.keys()].sort()
-    const from = new Int32Array(lines.length)
-    const to = new Int32Array(lines.length)
-    const strands = new Uint8Array(lines.length)
-    lines.forEach((line, k) => {
-      const i = byLine.get(line)!
-      const a = this.links[i]!
-      const b = this.links[i + 1]!
-      from[k] = nodeIndex(Math.floor(a / 2))
-      to[k] = nodeIndex(Math.floor(b / 2))
-      strands[k] = (a & 1) | ((b & 1) << 1)
-    })
 
     const walks = this.referenceFirst(fragments)
     // a piece counts on the first walk holding it, else on the first
