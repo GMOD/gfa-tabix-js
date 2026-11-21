@@ -586,16 +586,301 @@ export function walkCut(
   nodes: Map<number, WalkNode>,
   refName: string,
   records: readonly Readonly<DepartureRecord>[],
+  options: WalkCutOptions = {},
+) {
+  const {
+    squeeze = (bp: number) => bp,
+    attach = [],
+    links: linked = true,
+  } = options
+  const {
+    windowStart,
+    windowEnd,
+    passesOf,
+    before,
+    attaches,
+    breakpoint,
+    runs,
+    spans,
+  } = walkSpans(readRuns, nodes, options)
+  // the links the steps returned walk, as pairs of handles, each once
+  const links: number[] = []
+  const linkedTo = new Map<number, Set<number>>()
+  const linkMemo = {
+    from: memoKeys(),
+    to: new Float64Array(2 * MEMO_SLOTS).fill(Number.NaN),
+  }
+  const link = (a: number, b: number) => {
+    if (linked) {
+      const held = linkedTo.get(a)
+      if (held === undefined) {
+        linkedTo.set(a, new Set([b]))
+        links.push(a, b)
+      } else if (!held.has(b)) {
+        held.add(b)
+        links.push(a, b)
+      }
+    }
+  }
+  // links each step of `run` from `from` to `to` to the one before it
+  const walk = (run: WalkRun, from: number, to: number) => {
+    if (linked) {
+      linkSteps(run.ids, run.rev, from, to, linkMemo, link)
+    }
+  }
+  const kept = new Set<number>()
+  for (const [id, node] of nodes) {
+    if (node.onWindow) {
+      kept.add(id)
+    }
+  }
+  const lastKept = memoKeys()
+  for (const span of spans) {
+    keepSteps(span.run.ids, span.first, span.last, kept, lastKept)
+  }
+  const runEnd = (run: WalkRun) => run.hapOffset + before(run)[run.ids.length]!
+  // whether a fragment holds step `i` of `run`; a departure's own steps are
+  // linked to its leave step and to its rejoin step where one does
+  const spansOf = new Map<WalkRun, { first: number; last: number }[]>()
+  for (const span of spans) {
+    const held = spansOf.get(span.run) ?? []
+    spansOf.set(span.run, held)
+    held.push(span)
+  }
+  const returned = (run: WalkRun, i: number) =>
+    spansOf.get(run)?.some(({ first, last }) => first <= i && i <= last) ===
+    true
+  const fragments: WalkFragment[] = []
+  for (const { run, first, last } of spans) {
+    const { ids, rev } = run
+    const bp = before(run)
+    walk(run, first, last)
+    const hapStart = run.hapOffset + bp[first]!
+    const hapEnd = run.hapOffset + bp[last + 1]!
+    const held = (run.unloaded ?? []).filter(
+      ({ from, to }) => from <= last && to > first,
+    )
+    const unloadedSteps = held.reduce(
+      (sum, { from, to }) =>
+        sum + Math.min(to, last + 1) - Math.max(from, first),
+      0,
+    )
+    fragments.push({
+      name: run.name,
+      fragStart: run.fragStart,
+      hapStart,
+      hapEnd,
+      ids: ids.subarray(first, last + 1),
+      rev: rev.subarray(first, last + 1),
+      refStarts: run.refStarts.subarray(first, last + 1),
+      against: run.against.subarray(first, last + 1),
+      trimmedBefore: hapStart - run.hapOffset,
+      trimmedAfter: runEnd(run) - hapEnd,
+      ...(held.length > 0
+        ? { abridged: held.map(u => u.piece), unloadedSteps }
+        : {}),
+    })
+  }
+  const departures: WalkDeparture[] = []
+  const attached = new Map<WalkRun, Set<number>>()
+  const markAttached = (run: WalkRun, from: number, to: number) => {
+    const marks = attached.get(run) ?? new Set<number>()
+    attached.set(run, marks)
+    for (let k = from; k < to; k++) {
+      marks.add(k)
+      kept.add(run.ids[k]!)
+    }
+  }
+  const unloadedIn = (run: WalkRun, from: number, to: number) =>
+    (run.unloaded ?? [])
+      .filter(u => u.from < to && u.to > from)
+      .map(u => u.piece)
+  const pairs: number[] = []
+  for (const run of runs) {
+    if (run.name === refName) {
+      continue
+    }
+    const { ids, rev, refStarts, against } = run
+    const bp = before(run)
+    const bounds = pieceBounds(run)
+    for (let p = 0; p + 1 < bounds.length; p++) {
+      pairs.length = 0
+      departingPairs(
+        refStarts,
+        against,
+        bp,
+        bounds[p]!,
+        bounds[p + 1]!,
+        squeeze,
+        pairs,
+      )
+      for (let q = 0; q < pairs.length; q += 2) {
+        const last = pairs[q]!
+        const i = pairs[q + 1]!
+        const leaveReversed = against[last] === 1
+        const rejoinReversed = against[i] === 1
+        const ends = {
+          ownBp: bp[i]! - bp[last + 1]!,
+          leavePos: leaveReversed
+            ? refStarts[last]!
+            : refStarts[last]! + bp[last + 1]! - bp[last]!,
+          leaveReversed,
+          rejoinPos: rejoinReversed
+            ? refStarts[i]! + bp[i + 1]! - bp[i]!
+            : refStarts[i]!,
+          rejoinReversed,
+        }
+        const [lo, hi] = departureStretch(ends)
+        if (lo < windowEnd && hi > windowStart) {
+          const d: WalkDeparture = {
+            name: run.name,
+            hapStart: run.hapOffset + bp[last + 1]!,
+            ownBp: ends.ownBp,
+            missingBp: 0,
+            leavePos: ends.leavePos,
+            leaveReversed,
+            leavePasses: passesOf(ids[last]!),
+            rejoinPos: ends.rejoinPos,
+            rejoinReversed,
+            rejoinPasses: passesOf(ids[i]!),
+            fromSteps: true,
+          }
+          if (i > last + 1 && attaches(ends)) {
+            d.steps = {
+              ids: ids.subarray(last + 1, i),
+              rev: rev.subarray(last + 1, i),
+            }
+            const held = unloadedIn(run, last + 1, i)
+            if (held.length > 0) {
+              d.abridged = held
+            }
+            markAttached(run, last + 1, i)
+            walk(
+              run,
+              returned(run, last) ? last : last + 1,
+              returned(run, i) ? i : i - 1,
+            )
+          }
+          departures.push(d)
+        }
+      }
+    }
+  }
+  const { leaves, rejoins } = recordEnds(
+    [...runs, ...attach],
+    before,
+    breakpoint,
+  )
+  const unattached: Unattached[] = []
+  for (const record of records) {
+    const d: WalkDeparture = { ...record }
+    if (attaches(d)) {
+      const ids: number[] = []
+      const rev: number[] = []
+      const held: Abridged[] = []
+      const leave = leaves.get(
+        edgeKey(d.name, d.leavePos, d.leaveReversed, d.hapStart),
+      )
+      if (leave) {
+        const [run, i, end] = leave
+        for (let k = i + 1; k < end; k++) {
+          ids.push(run.ids[k]!)
+          rev.push(run.rev[k]!)
+        }
+        markAttached(run, i + 1, end)
+        walk(run, returned(run, i) ? i : i + 1, end - 1)
+        for (const piece of unloadedIn(run, i + 1, end)) {
+          held.push(piece)
+        }
+      }
+      const rejoin = rejoins.get(
+        edgeKey(d.name, d.rejoinPos, d.rejoinReversed, d.hapStart + d.ownBp),
+      )
+      if (rejoin) {
+        const [run, i, start] = rejoin
+        for (let k = start; k < i; k++) {
+          ids.push(run.ids[k]!)
+          rev.push(run.rev[k]!)
+        }
+        markAttached(run, start, i)
+        walk(run, start, returned(run, i) ? i : i - 1)
+        for (const piece of unloadedIn(run, start, i)) {
+          held.push(piece)
+        }
+      }
+      const oneRun =
+        leave !== undefined &&
+        rejoin !== undefined &&
+        leave[0].fragStart === rejoin[0].fragStart &&
+        pieceOf(leave[0], leave[1]) + 1 === pieceOf(rejoin[0], rejoin[1]) &&
+        (leave[2] - 1 > leave[1] || returned(leave[0], leave[1])) &&
+        (rejoin[2] < rejoin[1] || returned(rejoin[0], rejoin[1]))
+      if (leave && rejoin && oneRun && ids.length > 0) {
+        const [left, , end] = leave
+        const [right, , start] = rejoin
+        const last = left.ids[end - 1]
+        const next = right.ids[start]
+        if (
+          last !== undefined &&
+          next !== undefined &&
+          last !== SKIPPED &&
+          next !== SKIPPED
+        ) {
+          link(last * 2 + left.rev[end - 1]!, next * 2 + right.rev[start]!)
+        }
+      }
+      if (ids.length > 0) {
+        d.steps = { ids: Int32Array.from(ids), rev: Uint8Array.from(rev) }
+        if (!oneRun) {
+          d.breakAt = leave ? leave[2] - leave[1] - 1 : 0
+        }
+        if (held.length > 0) {
+          d.abridged = held
+        }
+      }
+      if (!leave || !rejoin) {
+        unattached.push({ departure: record })
+      }
+    }
+    departures.push(d)
+  }
+  departures.sort(
+    (a, b) =>
+      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
+      a.hapStart - b.hapStart ||
+      a.leavePos - b.leavePos,
+  )
+  let gaps: WalkGap[] | undefined
+  const gapsOf = () => {
+    gaps ??= walkGaps({
+      runs,
+      attach,
+      fragments,
+      departures,
+      refName,
+      before,
+      attached,
+      breakpoint,
+      spans,
+    })
+    return gaps
+  }
+  return { kept, fragments, departures, unattached, gapsOf, links }
+}
+
+// The drawn stretch a cut widens the window and its context to, the runs it
+// keeps, split where a contained span's context ends inside a placeholder,
+// and the spans it keeps of them
+function walkSpans(
+  readRuns: WalkRun[],
+  nodes: Map<number, WalkNode>,
   {
     contained = false,
     context = 0,
     attachBp = ATTACH_BP,
-    squeeze = (bp: number) => bp,
     drawn,
-    attach = [],
     placeholder,
-    links: linked = true,
-  }: WalkCutOptions = {},
+  }: WalkCutOptions,
 ) {
   // the drawn stretch: the window and its context, widened to the reference
   // nodes on it, so a window inside a hole in the reference has one
@@ -689,31 +974,6 @@ export function walkCut(
       }
     }
     return { found, splits }
-  }
-  // the links the steps returned walk, as pairs of handles, each once
-  const links: number[] = []
-  const linkedTo = new Map<number, Set<number>>()
-  const linkMemo = {
-    from: memoKeys(),
-    to: new Float64Array(2 * MEMO_SLOTS).fill(Number.NaN),
-  }
-  const link = (a: number, b: number) => {
-    if (linked) {
-      const held = linkedTo.get(a)
-      if (held === undefined) {
-        linkedTo.set(a, new Set([b]))
-        links.push(a, b)
-      } else if (!held.has(b)) {
-        held.add(b)
-        links.push(a, b)
-      }
-    }
-  }
-  // links each step of `run` from `from` to `to` to the one before it
-  const walk = (run: WalkRun, from: number, to: number) => {
-    if (linked) {
-      linkSteps(run.ids, run.rev, from, to, linkMemo, link)
-    }
   }
   // `run` with each split placeholder as two, the part within a span's
   // context and the rest
@@ -813,59 +1073,6 @@ export function walkCut(
     }
     return split
   })
-  const kept = new Set<number>()
-  for (const [id, node] of nodes) {
-    if (node.onWindow) {
-      kept.add(id)
-    }
-  }
-  const lastKept = memoKeys()
-  for (const span of spans) {
-    keepSteps(span.run.ids, span.first, span.last, kept, lastKept)
-  }
-  const runEnd = (run: WalkRun) => run.hapOffset + before(run)[run.ids.length]!
-  // whether a fragment holds step `i` of `run`; a departure's own steps are
-  // linked to its leave step and to its rejoin step where one does
-  const spansOf = new Map<WalkRun, { first: number; last: number }[]>()
-  for (const span of spans) {
-    const held = spansOf.get(span.run) ?? []
-    spansOf.set(span.run, held)
-    held.push(span)
-  }
-  const returned = (run: WalkRun, i: number) =>
-    spansOf.get(run)?.some(({ first, last }) => first <= i && i <= last) ===
-    true
-  const fragments: WalkFragment[] = []
-  for (const { run, first, last } of spans) {
-    const { ids, rev } = run
-    const bp = before(run)
-    walk(run, first, last)
-    const hapStart = run.hapOffset + bp[first]!
-    const hapEnd = run.hapOffset + bp[last + 1]!
-    const held = (run.unloaded ?? []).filter(
-      ({ from, to }) => from <= last && to > first,
-    )
-    const unloadedSteps = held.reduce(
-      (sum, { from, to }) =>
-        sum + Math.min(to, last + 1) - Math.max(from, first),
-      0,
-    )
-    fragments.push({
-      name: run.name,
-      fragStart: run.fragStart,
-      hapStart,
-      hapEnd,
-      ids: ids.subarray(first, last + 1),
-      rev: rev.subarray(first, last + 1),
-      refStarts: run.refStarts.subarray(first, last + 1),
-      against: run.against.subarray(first, last + 1),
-      trimmedBefore: hapStart - run.hapOffset,
-      trimmedAfter: runEnd(run) - hapEnd,
-      ...(held.length > 0
-        ? { abridged: held.map(u => u.piece), unloadedSteps }
-        : {}),
-    })
-  }
   // A step's breakpoint on R: where the path's sequence stops following R,
   // the node's end for a step along R and its start for one against it, and
   // the other way round for a rejoin
@@ -880,101 +1087,36 @@ export function walkCut(
       reversed,
     }
   }
-  const departures: WalkDeparture[] = []
-  const attached = new Map<WalkRun, Set<number>>()
-  const markAttached = (run: WalkRun, from: number, to: number) => {
-    const marks = attached.get(run) ?? new Set<number>()
-    attached.set(run, marks)
-    for (let k = from; k < to; k++) {
-      marks.add(k)
-      kept.add(run.ids[k]!)
-    }
+  return {
+    windowStart,
+    windowEnd,
+    passesOf,
+    before,
+    attaches,
+    breakpoint,
+    runs,
+    spans,
   }
-  const unloadedIn = (run: WalkRun, from: number, to: number) =>
-    (run.unloaded ?? [])
-      .filter(u => u.from < to && u.to > from)
-      .map(u => u.piece)
-  const pairs: number[] = []
-  for (const run of runs) {
-    if (run.name === refName) {
-      continue
-    }
-    const { ids, rev, refStarts, against } = run
-    const bp = before(run)
-    const bounds = pieceBounds(run)
-    for (let p = 0; p + 1 < bounds.length; p++) {
-      pairs.length = 0
-      departingPairs(
-        refStarts,
-        against,
-        bp,
-        bounds[p]!,
-        bounds[p + 1]!,
-        squeeze,
-        pairs,
-      )
-      for (let q = 0; q < pairs.length; q += 2) {
-        const last = pairs[q]!
-        const i = pairs[q + 1]!
-        const leaveReversed = against[last] === 1
-        const rejoinReversed = against[i] === 1
-        const ends = {
-          ownBp: bp[i]! - bp[last + 1]!,
-          leavePos: leaveReversed
-            ? refStarts[last]!
-            : refStarts[last]! + bp[last + 1]! - bp[last]!,
-          leaveReversed,
-          rejoinPos: rejoinReversed
-            ? refStarts[i]! + bp[i + 1]! - bp[i]!
-            : refStarts[i]!,
-          rejoinReversed,
-        }
-        const [lo, hi] = departureStretch(ends)
-        if (lo < windowEnd && hi > windowStart) {
-          const d: WalkDeparture = {
-            name: run.name,
-            hapStart: run.hapOffset + bp[last + 1]!,
-            ownBp: ends.ownBp,
-            missingBp: 0,
-            leavePos: ends.leavePos,
-            leaveReversed,
-            leavePasses: passesOf(ids[last]!),
-            rejoinPos: ends.rejoinPos,
-            rejoinReversed,
-            rejoinPasses: passesOf(ids[i]!),
-            fromSteps: true,
-          }
-          if (i > last + 1 && attaches(ends)) {
-            d.steps = {
-              ids: ids.subarray(last + 1, i),
-              rev: rev.subarray(last + 1, i),
-            }
-            const held = unloadedIn(run, last + 1, i)
-            if (held.length > 0) {
-              d.abridged = held
-            }
-            markAttached(run, last + 1, i)
-            walk(
-              run,
-              returned(run, last) ? last : last + 1,
-              returned(run, i) ? i : i - 1,
-            )
-          }
-          departures.push(d)
-        }
-      }
-    }
-  }
-  // A record's own steps: those after its leave step to the end of that
-  // piece, then those before its rejoin step from the start of its piece. A
-  // leave step is the last step on R of its piece and a rejoin step the
-  // first of its, so the cut indexes those by name, breakpoint and contig
-  // position
-  // a piece's last step on R and where the piece ends, and its first and
-  // where the piece starts
+}
+
+// A record's own steps: those after its leave step to the end of that
+// piece, then those before its rejoin step from the start of its piece. A
+// leave step is the last step on R of its piece and a rejoin step the
+// first of its, so the cut indexes by name, breakpoint and contig position
+// each piece's last step on R and where the piece ends, and its first and
+// where the piece starts
+function recordEnds(
+  runs: WalkRun[],
+  before: (run: WalkRun) => Float64Array,
+  breakpoint: (
+    run: WalkRun,
+    i: number,
+    leave: boolean,
+  ) => { pos: number; reversed: boolean },
+) {
   const leaves = new Map<string, [WalkRun, number, number]>()
   const rejoins = new Map<string, [WalkRun, number, number]>()
-  for (const run of [...runs, ...attach]) {
+  for (const run of runs) {
     const bp = before(run)
     const bounds = pieceBounds(run)
     for (let p = 0; p + 1 < bounds.length; p++) {
@@ -1005,7 +1147,7 @@ export function walkCut(
       )
     }
   }
-  for (const run of [...runs, ...attach]) {
+  for (const run of runs) {
     for (const { key, leave, from, to } of run.own ?? []) {
       if (leave) {
         leaves.set(key, [run, from - 1, to])
@@ -1014,101 +1156,31 @@ export function walkCut(
       }
     }
   }
-  const unattached: Unattached[] = []
-  for (const record of records) {
-    const d: WalkDeparture = { ...record }
-    if (attaches(d)) {
-      const ids: number[] = []
-      const rev: number[] = []
-      const held: Abridged[] = []
-      const leave = leaves.get(
-        edgeKey(d.name, d.leavePos, d.leaveReversed, d.hapStart),
-      )
-      if (leave) {
-        const [run, i, end] = leave
-        for (let k = i + 1; k < end; k++) {
-          ids.push(run.ids[k]!)
-          rev.push(run.rev[k]!)
-        }
-        markAttached(run, i + 1, end)
-        walk(run, returned(run, i) ? i : i + 1, end - 1)
-        for (const piece of unloadedIn(run, i + 1, end)) {
-          held.push(piece)
-        }
-      }
-      const rejoin = rejoins.get(
-        edgeKey(d.name, d.rejoinPos, d.rejoinReversed, d.hapStart + d.ownBp),
-      )
-      if (rejoin) {
-        const [run, i, start] = rejoin
-        for (let k = start; k < i; k++) {
-          ids.push(run.ids[k]!)
-          rev.push(run.rev[k]!)
-        }
-        markAttached(run, start, i)
-        walk(run, start, returned(run, i) ? i : i - 1)
-        for (const piece of unloadedIn(run, start, i)) {
-          held.push(piece)
-        }
-      }
-      const oneRun =
-        leave !== undefined &&
-        rejoin !== undefined &&
-        leave[0].fragStart === rejoin[0].fragStart &&
-        pieceOf(leave[0], leave[1]) + 1 === pieceOf(rejoin[0], rejoin[1]) &&
-        (leave[2] - 1 > leave[1] || returned(leave[0], leave[1])) &&
-        (rejoin[2] < rejoin[1] || returned(rejoin[0], rejoin[1]))
-      if (leave && rejoin && oneRun && ids.length > 0) {
-        const [left, , end] = leave
-        const [right, , start] = rejoin
-        const last = left.ids[end - 1]
-        const next = right.ids[start]
-        if (
-          last !== undefined &&
-          next !== undefined &&
-          last !== SKIPPED &&
-          next !== SKIPPED
-        ) {
-          link(last * 2 + left.rev[end - 1]!, next * 2 + right.rev[start]!)
-        }
-      }
-      if (ids.length > 0) {
-        d.steps = { ids: Int32Array.from(ids), rev: Uint8Array.from(rev) }
-        if (!oneRun) {
-          d.breakAt = leave ? leave[2] - leave[1] - 1 : 0
-        }
-        if (held.length > 0) {
-          d.abridged = held
-        }
-      }
-      if (!leave || !rejoin) {
-        unattached.push({ departure: record })
-      }
-    }
-    departures.push(d)
-  }
-  departures.sort(
-    (a, b) =>
-      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
-      a.hapStart - b.hapStart ||
-      a.leavePos - b.leavePos,
+  return { leaves, rejoins }
+}
+
+// The records walkCut lists as unattached, found without cutting: those it
+// attaches own steps for that lack their leave piece or their rejoin piece
+export function unattachedRecords(
+  readRuns: WalkRun[],
+  nodes: Map<number, WalkNode>,
+  records: readonly Readonly<DepartureRecord>[],
+  options: WalkCutOptions = {},
+) {
+  const { runs, before, attaches, breakpoint } = walkSpans(
+    readRuns,
+    nodes,
+    options,
   )
-  let gaps: WalkGap[] | undefined
-  const gapsOf = () => {
-    gaps ??= walkGaps({
-      runs,
-      attach,
-      fragments,
-      departures,
-      refName,
-      before,
-      attached,
-      breakpoint,
-      spans,
-    })
-    return gaps
-  }
-  return { kept, fragments, departures, unattached, gapsOf, links }
+  const { leaves, rejoins } = recordEnds(runs, before, breakpoint)
+  return records.filter(
+    d =>
+      attaches(d) &&
+      (!leaves.has(edgeKey(d.name, d.leavePos, d.leaveReversed, d.hapStart)) ||
+        !rejoins.has(
+          edgeKey(d.name, d.rejoinPos, d.rejoinReversed, d.hapStart + d.ownBp),
+        )),
+  )
 }
 
 const pieceOf = (run: WalkRun, step: number) =>

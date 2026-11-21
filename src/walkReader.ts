@@ -44,6 +44,7 @@ import {
   stepBudgetError,
   surelyKept,
   surelyKeptError,
+  unattachedRecords,
   walkCut,
   walkHeader,
   walksKept,
@@ -1288,23 +1289,26 @@ export class WalkReader {
       if (tooManyRead) {
         throw tooManyRead
       }
-      const cutRows = () =>
-        walkCut(joinPieces(rows), graph.nodes, refName, records, {
-          contained,
-          context,
-          attachBp,
-          squeeze: squeezer(header.holes, refName),
-          drawn: bounds,
-          attach: joinPieces(attachRows),
-          placeholder: placeholderId,
-          links: links !== 'none',
-        })
-      cut = cutRows()
+      const joined = joinPieces(rows)
+      const cutOptions = {
+        contained,
+        context,
+        attachBp,
+        squeeze: squeezer(header.holes, refName),
+        drawn: bounds,
+        placeholder: placeholderId,
+        links: links !== 'none',
+      }
       // the tiles holding own steps the read lacks, the walks wanting each,
       // and where on R the first record wanting it starts
       const fetches = new Map<WalkUnit, { names: Set<string>; from: number }>()
       const tilesOwning = attachTiles(units)
-      for (const { departure } of cut.unattached) {
+      for (const departure of unattachedRecords(
+        joined,
+        graph.nodes,
+        records,
+        cutOptions,
+      )) {
         const { name } = departure
         const from = Math.min(
           departure.leavePos,
@@ -1333,8 +1337,11 @@ export class WalkReader {
           decode(unit, fetched[k]!, attachRows, from, name => names.has(name))
         }
         await resolve(true)
-        cut = cutRows()
       }
+      cut = walkCut(joined, graph.nodes, refName, records, {
+        ...cutOptions,
+        attach: joinPieces(attachRows),
+      })
     } catch (error) {
       reads.abort()
       throw error
