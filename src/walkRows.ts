@@ -844,12 +844,7 @@ export function walkCut(
     }
     departures.push(d)
   }
-  departures.sort(
-    (a, b) =>
-      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) ||
-      a.hapStart - b.hapStart ||
-      a.leavePos - b.leavePos,
-  )
+  sortByWalk(departures)
   let gaps: WalkGap[] | undefined
   const gapsOf = () => {
     gaps ??= walkGaps({
@@ -1181,6 +1176,47 @@ export function unattachedRecords(
           edgeKey(d.name, d.rejoinPos, d.rejoinReversed, d.hapStart + d.ownBp),
         )),
   )
+}
+
+// Sorts departures by name, then contig position, then where each leaves R,
+// ties in the order given, comparing numbers: each name by its rank. Names
+// come in long runs, so each is looked up once a run
+function sortByWalk(departures: WalkDeparture[]) {
+  const n = departures.length
+  const names = new Set<string>()
+  let last: string | undefined
+  for (const { name } of departures) {
+    if (name !== last) {
+      names.add(name)
+      last = name
+    }
+  }
+  const rank = new Map([...names].sort().map((name, k) => [name, k]))
+  const ranks = new Float64Array(n)
+  const haps = new Float64Array(n)
+  const leaves = new Float64Array(n)
+  let lastRank = 0
+  last = undefined
+  departures.forEach((d, k) => {
+    if (d.name !== last) {
+      lastRank = rank.get(d.name)!
+      last = d.name
+    }
+    ranks[k] = lastRank
+    haps[k] = d.hapStart
+    leaves[k] = d.leavePos
+  })
+  const order = Array.from(departures.keys()).sort(
+    (a, b) =>
+      ranks[a]! - ranks[b]! ||
+      haps[a]! - haps[b]! ||
+      leaves[a]! - leaves[b]! ||
+      a - b,
+  )
+  const sorted = order.map(k => departures[k]!)
+  sorted.forEach((d, k) => {
+    departures[k] = d
+  })
 }
 
 const pieceOf = (run: WalkRun, step: number) =>
