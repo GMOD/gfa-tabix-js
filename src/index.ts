@@ -39,6 +39,7 @@ export type {
   WalkDeparture,
 } from './walkDeparture.ts'
 export {
+  BROWSER_NODE_LIMIT,
   CUT_PRESETS,
   DepartureReadError,
   WALK_BUDGETS,

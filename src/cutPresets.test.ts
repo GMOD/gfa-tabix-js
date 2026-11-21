@@ -55,6 +55,7 @@ const BROWSER = {
   stepBudget: 4_000_000,
   byteBudget: 8_000_000,
   departureByteBudget: 2_000_000,
+  nodeLimit: 30_000,
 }
 
 const FIGURE = {
@@ -62,6 +63,7 @@ const FIGURE = {
   stepBudget: Infinity,
   byteBudget: Infinity,
   departureByteBudget: Infinity,
+  nodeLimit: Infinity,
 }
 
 const CUTS = [
@@ -88,7 +90,7 @@ test('the presets are the ones the README tabulates', () => {
   expect(readmePresets()).toEqual(CUT_PRESETS)
 })
 
-test('the presets keep WALK_CONTEXT and differ only in their budgets', () => {
+test('the presets keep WALK_CONTEXT and differ only in their budgets and node limit', () => {
   expect(CUT_PRESETS).toEqual({ browser: BROWSER, figure: FIGURE })
   expect(CUT_PRESETS.figure.context).toBe(WALK_CONTEXT)
 })

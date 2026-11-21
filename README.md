@@ -383,9 +383,13 @@ const cut = await reader.cut(refName, region, {
 - `WALK_CONTEXT` is the context both keep
 - `CUT_PRESETS`, each preset and `WALK_BUDGETS` are frozen: a reader spreads one
   into its options, as above, so no reader changes them for another
-- `keep`, `expand`, `nodeLimit`, `links` and `sequences` stay each reader's own:
-  which walks it shows, which it reads in full, how many nodes its layout
-  places, and what it draws
+- The browser preset keeps at most `BROWSER_NODE_LIMIT`, 30,000 nodes. Past it a
+  canvas of the whole graph no longer draws at a usable speed, and every window
+  a reader's examples open stays under it, KIV-2's 22,357 nodes the largest. The
+  cut throws a `RegionTooLargeError` with `fitsBp`, so a reader says how far to
+  zoom in. A reader with a node limit setting starts it here
+- `keep`, `expand`, `links` and `sequences` stay each reader's own: which walks
+  it shows, which it reads in full, and what it draws
 
 | Option                | `browser` | `figure` |
 | --------------------- | --------- | -------- |
@@ -395,6 +399,7 @@ const cut = await reader.cut(refName, region, {
 | `stepBudget`          | 4,000,000 | Infinity |
 | `byteBudget`          | 8,000,000 | Infinity |
 | `departureByteBudget` | 2,000,000 | Infinity |
+| `nodeLimit`           | 30,000    | Infinity |
 
 ## Fragments
 

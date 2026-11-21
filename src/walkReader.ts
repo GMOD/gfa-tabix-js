@@ -82,6 +82,11 @@ export const WALK_BUDGETS = Object.freeze({
   attachBp: ATTACH_BP,
 })
 
+// The most nodes a browser's cut keeps: past it a canvas of the whole graph
+// no longer draws at a usable speed, and every window a reader's examples
+// open, KIV-2's 22,357 nodes the largest, stays under it
+export const BROWSER_NODE_LIMIT = 30_000
+
 // The same cut rules in both; a figure has no window to protect
 export const CUT_PRESETS = Object.freeze({
   browser: Object.freeze({
@@ -91,6 +96,7 @@ export const CUT_PRESETS = Object.freeze({
     stepBudget: WALK_BUDGETS.stepBudget,
     byteBudget: WALK_BUDGETS.byteBudget,
     departureByteBudget: WALK_BUDGETS.departureByteBudget,
+    nodeLimit: BROWSER_NODE_LIMIT,
   }),
   figure: Object.freeze({
     context: WALK_CONTEXT,
@@ -99,6 +105,7 @@ export const CUT_PRESETS = Object.freeze({
     stepBudget: Infinity,
     byteBudget: Infinity,
     departureByteBudget: Infinity,
+    nodeLimit: Infinity,
   }),
 }) satisfies Record<string, WalkCutOptions>
 
