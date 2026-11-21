@@ -371,11 +371,15 @@ const { tables, refName, sample } = await reader.cutRegion(
   more; the byte budget, over the `blocks` units the cut reads and every tile
   its records could fetch to attach; and the 8 times `stepBudget` the rows may
   hold, over the most the rows and the pieces built from them can. Where it
-  can't rule one out, the finished cut refuses the window. The count takes each
-  `ref` and `walk` row of a walk `keep` takes at its steps, less a walk row's
-  steps off the reference before its first step on it and after its last. Every
-  step a row places on the reference lies in its tile's extent, so a cut over
-  that extent keeps the row from its first such step to its last and every step
+  can't rule one out, the finished cut refuses the window. A file malformed in
+  any other way, such as a `ref` row whose passes or a `walk` row whose `nsteps`
+  disagree with its steps, or a `blocks` or detail unit that disagrees with its
+  rows, may be refused here as too large before the cut would find the fault,
+  which a window narrow enough to cut then reports. The count takes each `ref`
+  and `walk` row of a walk `keep` takes at its steps, less a walk row's steps
+  off the reference before its first step on it and after its last. Every step a
+  row places on the reference lies in its tile's extent, so a cut over that
+  extent keeps the row from its first such step to its last and every step
   between, contained or not; the steps off the reference at a row's ends are
   kept only where a neighbouring piece reaches the window. An `abridged` row
   counts nothing, since the cut builds its piece with a placeholder per run off
