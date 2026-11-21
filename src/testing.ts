@@ -373,6 +373,9 @@ export function walkFileOf(
     const table = write(
       `${[
         ['#unit', seq, 0, end, 'table', '.'],
+        ...(gap > 0 && seq === sequences[0]
+          ? [['#entry', seq, 0, 0, 'filler', '.', headerLength, gap]]
+          : []),
         ...held.map(u => [
           '#entry',
           seq,

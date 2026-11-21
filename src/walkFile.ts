@@ -85,6 +85,19 @@ function unitName(unit: WalkUnit) {
   return `The unit at byte ${unit.offset} of the walk file, ${unit.refName}'s ${unit.kind} ${unit.name} over [${unit.start}, ${unit.end}) as its table lists it,`
 }
 
+function endOfTableBefore(
+  { header, tables }: Directory,
+  table: { offset: number },
+) {
+  let start = header.offset + header.length
+  for (const { offset, length } of tables.values()) {
+    if (offset < table.offset) {
+      start = Math.max(start, offset + length)
+    }
+  }
+  return start
+}
+
 function isTableHead(head: string, refName: string) {
   const [tag, seq, start, , kind, name, ...more] = head.split('\t')
   return (
@@ -338,10 +351,13 @@ export class WalkFile {
     let read = this.tableReads.get(refName)
     if (!read) {
       read = once(async () => {
-        const range = (await this.readDirectory()).tables.get(refName)
+        const directory = await this.readDirectory()
+        const range = directory.tables.get(refName)
         const [checked, table] = await Promise.allSettled([
           this.header(),
-          range ? this.table(refName, range) : [],
+          range
+            ? this.table(refName, range, endOfTableBefore(directory, range))
+            : [],
         ])
         if (checked.status === 'rejected') {
           throw checked.reason
@@ -358,6 +374,7 @@ export class WalkFile {
   private async table(
     refName: string,
     { offset, length }: { offset: number; length: number },
+    unitsStart: number,
   ) {
     const [head = '', ...entries] = await unitLines(
       await this.data.read(length, offset),
@@ -368,7 +385,7 @@ export class WalkFile {
         `${refName}'s table, at byte ${offset} of the walk file, starts ${JSON.stringify(head.slice(0, 80))}`,
       )
     }
-    return entries.map(line => {
+    const units = entries.map(line => {
       const [
         tag,
         seq = '',
@@ -401,6 +418,21 @@ export class WalkFile {
       }
       return unit
     })
+    let covered = unitsStart
+    for (const unit of units) {
+      if (unit.offset !== covered) {
+        throw new WalkFormatError(
+          `${refName}'s unit table lists its ${unit.kind} ${unit.name} at byte ${unit.offset} of the walk file, where the bytes its entries cover so far end at byte ${covered}: a table's entries leave no gap and do not overlap`,
+        )
+      }
+      covered = unit.offset + unit.length
+    }
+    if (covered !== offset) {
+      throw new WalkFormatError(
+        `${refName}'s unit table is at byte ${offset} of the walk file, where the bytes its entries cover end at byte ${covered}: a table's entries leave no gap and do not overlap`,
+      )
+    }
+    return units
   }
 
   /**

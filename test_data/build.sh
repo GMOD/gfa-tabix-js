@@ -90,9 +90,10 @@ addition() {
 addition tags --tag zz:i:1
 addition unit-kind $'#unit\tR#0#c\t0\t36\ttable\t.\n' $'#unit\tR#0#c\t0\t36\tfuture\tx\nR#0#c\t0\t36\tfuture\tanything\n#unit\tR#0#c\t0\t36\ttable\t.\n'
 addition header-line $'#reference\tR\n' $'#reference\tR\n#future\tx\n'
-# planted/: files that checkout's broken.sh breaks by hand, each with a step on
-# a node the reference passes once filed away from its pass, as they are
-for planted in other-sequence-as-interior other-tile-as-interior other-sequence-as-interior-revisited; do
+# planted/: files that checkout's broken.sh breaks by hand, as they are: three
+# with a step on a node the reference passes once filed away from its pass,
+# and entry-dropped, whose table leaves out a unit's entry
+for planted in other-sequence-as-interior other-tile-as-interior other-sequence-as-interior-revisited entry-dropped; do
   cp "$BROKEN/$planted.walks.gz" "$BROKEN/$planted.walks.gz.idx" planted/
 done
 cp "$BROKEN/far.gfa" "$BROKEN/shared.gfa" planted/

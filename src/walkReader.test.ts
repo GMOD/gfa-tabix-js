@@ -1789,16 +1789,19 @@ test('two records whose leave pieces lie in adjacent chunks both get their own s
   ])
 })
 
-// An empty entry first in the table at the file's start, or after the
-// first tile at that tile's offset, where it would shadow the tile in a read
-// that took it
+// An empty entry before the first tile or after it, at the offset of the unit
+// that follows it, which it would shadow in a read that took it
 test.each([
-  { at: 'first, at the file start', after: false },
-  { at: "after the first tile, at the tile's offset", after: true },
+  { at: "first, at the first tile's offset", after: false },
+  { at: "after the first tile, at the next unit's offset", after: true },
 ])('a table entry of length 0 is never read: $at', async ({ after }) => {
   const { data, directory, units } = walkFileOf(copyJump)
   const bytes = new Uint8Array(await data.readFile())
   const end = bytes.length - 28
+  const [walks = '', header = '', listed = ''] = (
+    await directory.readFile('utf8')
+  ).split('\n')
+  const tableAt = Number(listed.split('\t')[1])
   const entry = (u: WalkUnit) => [
     '#entry',
     u.refName,
@@ -1812,7 +1815,7 @@ test.each([
   const [first, ...rest] = units.map(entry)
   const empty = entry({
     ...units[0]!,
-    offset: after ? units[0]!.offset : 0,
+    offset: units[0]!.offset + (after ? units[0]!.length : 0),
     length: 0,
   })
   const entries = [
@@ -1822,12 +1825,9 @@ test.each([
   ]
   const table = bgzf(`${entries.map(e => e.join('\t')).join('\n')}\n`)
   const tableLength = table.reduce((sum, block) => sum + block.length, 0)
-  const parts = [bytes.subarray(0, end), ...table, bytes.subarray(end)]
+  const parts = [bytes.subarray(0, tableAt), ...table, bytes.subarray(end)]
   const size = parts.reduce((sum, part) => sum + part.length, 0)
-  const [walks = '', header = ''] = (await directory.readFile('utf8')).split(
-    '\n',
-  )
-  const index = `${walks.replace(/\tbytes:i:\d+/, `\tbytes:i:${size}`)}\n${header}\nR#0#chr\t${end}\t${tableLength}\n`
+  const index = `${walks.replace(/\tbytes:i:\d+/, `\tbytes:i:${size}`)}\n${header}\nR#0#chr\t${tableAt}\t${tableLength}\n`
   const headerReader = WalkReader.fromFilehandles({
     data: new BlobFile(new Blob(parts)),
     directory: new BlobFile(new Blob([index])),
@@ -1927,9 +1927,11 @@ test('a file past 4 GiB is read at its exact offsets', async () => {
   const { data, directory, units } = walkFileOf(copyJump, { gap })
   expect(units[0]!.offset).toBeGreaterThan(2 ** 32)
   const walks = WalkReader.fromFilehandles({ data, directory })
-  expect((await walks.units('R#0#chr')).map(u => u.offset)).toEqual(
-    units.map(u => u.offset),
-  )
+  expect(
+    (await walks.units('R#0#chr'))
+      .filter(u => u.kind !== 'filler')
+      .map(u => u.offset),
+  ).toEqual(units.map(u => u.offset))
   expect(await copyJumpCut(20, 36, false, walks)).toEqual(
     await copyJumpCut(20, 36, false),
   )
@@ -3083,7 +3085,7 @@ test.each([
     const { data, directory } = oneUnit(
       unit,
       (at, length) =>
-        `${tableOf(at, length, kind, name)}${kind === 'detail' ? `#entry\tR#0#chr\t0\t4\tblocks\t0\t${at}\t${length}\n` : ''}`,
+        `${tableOf(at, length, kind, name)}${kind === 'detail' ? `#entry\tR#0#chr\t0\t4\tblocks\t0\t${at + length}\t0\n` : ''}`,
     )
     const file = new WalkFile(data, directory)
     const units = await file.units('R#0#chr')
@@ -3143,6 +3145,78 @@ test.each([
   await expect(
     oneTile(bgzf(TILE_HEAD + REF_ROW), table).units('R#0#chr'),
   ).rejects.toThrow(message)
+})
+
+const twoEntries = (
+  first: [number, number],
+  second: [number, number],
+  kinds = ['tile', 'sketch'],
+) =>
+  `#unit\tR#0#chr\t0\t4\ttable\t.\n${[first, second]
+    .map(
+      ([at, length], k) =>
+        `#entry\tR#0#chr\t0\t4\t${kinds[k]}\t${k}\t${at}\t${length}\n`,
+    )
+    .join('')}`
+
+test.each([
+  [
+    "no entry for a unit's bytes, between two entries",
+    (at: number, length: number) =>
+      twoEntries([at, 10], [at + 20, length - 20]),
+    "R#0#chr's unit table lists its sketch 1 at byte 89 of the walk file, where the bytes its entries cover so far end at byte 79",
+  ],
+  [
+    "no entry for a unit's bytes, before the first entry",
+    (at: number, length: number) => tableOf(at + 10, length - 10),
+    "R#0#chr's unit table lists its tile 0 at byte 79 of the walk file, where the bytes its entries cover so far end at byte 69",
+  ],
+  [
+    "no entry for a unit's bytes, before the table",
+    (at: number, length: number) => tableOf(at, length - 10),
+    "R#0#chr's unit table is at byte 138 of the walk file, where the bytes its entries cover end at byte 128",
+  ],
+  [
+    'two entries that overlap',
+    (at: number, length: number) =>
+      twoEntries([at, length], [at + 10, length - 10]),
+    "R#0#chr's unit table lists its sketch 1 at byte 79 of the walk file, where the bytes its entries cover so far end at byte 138",
+  ],
+  [
+    'entries out of file order',
+    (at: number, length: number) =>
+      twoEntries([at + 10, length - 10], [at, 10]),
+    "R#0#chr's unit table lists its tile 0 at byte 79 of the walk file, where the bytes its entries cover so far end at byte 69",
+  ],
+])('a table with %s is refused', async (_, table, message) => {
+  await expect(
+    oneTile(bgzf(TILE_HEAD + REF_ROW), table).units('R#0#chr'),
+  ).rejects.toThrow(message)
+})
+
+test('a table whose entries cover every byte since the header is read, an entry of no bytes among them', async () => {
+  const units = await oneTile(bgzf(TILE_HEAD + REF_ROW), (at, length) =>
+    twoEntries([at, length], [at + length, 0]),
+  ).units('R#0#chr')
+  expect(units.map(u => [u.kind, u.length > 0])).toEqual([
+    ['tile', true],
+    ['sketch', false],
+  ])
+})
+
+test("gfa-to-tabix's entry-dropped file, a table that leaves out its departures unit's entry, is refused", async () => {
+  await expect(
+    reader('planted/entry-dropped').units('GRCh38#0#chr'),
+  ).rejects.toThrow('leave no gap and do not overlap')
+})
+
+test("a second sequence's table covers the bytes from the first sequence's table on", async () => {
+  const walks = reader('adv.R')
+  const before = await walks.units('R#0#c1')
+  const after = await walks.units('R#0#c2')
+  expect(after[0]!.offset).toBeGreaterThan(
+    before.at(-1)!.offset + before.at(-1)!.length,
+  )
 })
 
 test("a reader that cannot learn the data's length skips the directory's bytes check", async () => {
