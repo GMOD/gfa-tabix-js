@@ -57,7 +57,6 @@ export {
 export { WalkRowError, referenceNodes } from './walkChunk.ts'
 export {
   FLOOR_PRESETS,
-  LOPSIDED_RATIO,
   NO_CALL_STATE,
   OTHER_STATE,
   RARER_STATE,
@@ -70,7 +69,6 @@ export {
   formStateAt,
   formTag,
   haplotypeMarks,
-  lopsidedKind,
   markTag,
   minCarriersFor,
   pairShifts,

@@ -11,7 +11,6 @@ import {
   formStateAt,
   formTag,
   haplotypeMarks,
-  lopsidedKind,
   markTag,
   minCarriersFor,
   pairShifts,
@@ -90,19 +89,31 @@ test('a form needs 1% of the haplotypes, and at least one', () => {
   expect(minCarriersFor(11)).toBe(1)
 })
 
-// Checked against the release's wave callset on 2026-10-21: GSTM1's deletion
-// is REF 18,446 to 1, C4's 26 kb gain REF 32,738 to 59,108, and LPA's KIV-2
-// gains replace a 30,736 bp array
-test('a change inserts, deletes or replaces on its exact REF and ALT', () => {
-  expect(changeKind(1, 18_001)).toBe('insertion')
-  expect(changeKind(18_446, 1)).toBe('deletion')
-  expect(changeKind(32_738, 59_108)).toBe('replacement')
-  expect(changeKind(30_736, 108_736)).toBe('replacement')
+test('a change deletes or inserts only where one side is 0 bp, and replaces at any ratio', () => {
+  expect(changeKind(18_445, 0)).toBe('deletion')
+  expect(changeKind(0, 18_001)).toBe('insertion')
+  expect(changeKind(86_000, 12)).toBe('replacement')
+  expect(changeKind(18_446, 1)).toBe('replacement')
+  expect(changeKind(1, 18_001)).toBe('replacement')
+  expect(changeKind(5, 305)).toBe('replacement')
+  expect(changeKind(25_900, 104_000)).toBe('replacement')
   expect(changeKind(176_380, 82_380)).toBe('replacement')
-  expect(changeKind(100, 200)).toBe('replacement')
-  expect(changeKind(5, 305)).toBe('insertion')
-  // what the sidecar's rounding slack called a deletion
-  expect(changeKind(18_446, 60)).toBe('replacement')
+})
+
+test('a mark is named by the bp of R it leaves out and the bp of its own it runs', () => {
+  const said = (departures: Departure[]) =>
+    haplotypeMarks(departures, {}).map(m => [m.kind, markTag(m)])
+  expect(said([dep(1000, 87_000, 0)])).toEqual([['deletion', 'del 86kb']])
+  expect(said([dep(1000, 87_000, 12)])).toEqual([
+    ['replacement', 'repl 86kb->12bp'],
+  ])
+  expect(said([dep(1000, 1000, 104_000)])).toEqual([['insertion', 'ins 104kb']])
+  expect(said([dep(1000, 1001, 104_000)])).toEqual([
+    ['replacement', 'repl 1bp->104kb'],
+  ])
+  expect(said([dep(1000, 26_900, 104_000)])).toEqual([
+    ['replacement', 'repl 25.9kb->104kb'],
+  ])
 })
 
 test('departures under 50 bp of R apart join, keeping their net change', () => {
@@ -113,16 +124,71 @@ test('departures under 50 bp of R apart join, keeping their net change', () => {
     ),
   ).toEqual([
     {
-      kind: 'deletion',
+      kind: 'replacement',
       refStart: 1000,
       refEnd: 1500,
-      altLength: 22,
+      altLength: 2,
       delta: -478,
     },
   ])
   expect(
     haplotypeMarks([dep(1000, 1400, 0), dep(1460, 1800, 0)], {}),
   ).toHaveLength(2)
+})
+
+test('joined departures are named by those that change length: R walked between them and a SNP beside them are neither side', () => {
+  const said = (departures: Departure[]) =>
+    haplotypeMarks(departures, {}).map(m => [
+      m.kind,
+      m.refStart,
+      m.refEnd,
+      m.altLength,
+      markTag(m),
+    ])
+  expect(said([dep(1000, 1060, 0), dep(1090, 1160, 0)])).toEqual([
+    ['deletion', 1000, 1160, 0, 'del 130bp'],
+  ])
+  expect(said([dep(1000, 1000, 500), dep(1031, 1031, 563)])).toEqual([
+    ['insertion', 1000, 1031, 1063, 'ins 1.06kb'],
+  ])
+  expect(said([dep(985, 986, 1), dep(1000, 13_152, 0)])).toEqual([
+    ['deletion', 985, 13_152, 0, 'del 12.2kb'],
+  ])
+  expect(said([dep(985, 985, 2), dep(1000, 13_152, 0)])).toEqual([
+    ['replacement', 985, 13_152, 2, 'repl 12.2kb->2bp'],
+  ])
+})
+
+test("a summed site's change is named by the pieces it sums", () => {
+  const said = (departures: Departure[]) =>
+    forms([
+      ...haps('R', 4),
+      ...haps('W', 4, [dep(1000, 1400, 0)]),
+      ...haps('C', 4, departures),
+    ])
+      .forms.find(f => f.members.includes('C0#1'))!
+      .marks.map(m => [m.kind, m.altLength, m.delta, markTag(m)])
+  expect(said([dep(1000, 1100, 0), dep(1300, 1300, 30)])).toEqual([
+    ['replacement', 30, -70, 'repl 100bp->30bp'],
+  ])
+  expect(said([dep(1000, 1300, 0), dep(1380, 1381, 1)])).toEqual([
+    ['deletion', 0, -300, 'del 300bp'],
+  ])
+})
+
+test('a loss with a few bp of its own still pairs into a shift', () => {
+  expect(
+    haplotypeMarks([dep(10_000, 30_000, 12), dep(50_000, 50_000, 20_000)], {}),
+  ).toEqual([
+    {
+      kind: 'shift',
+      refStart: 10_000,
+      refEnd: 50_000,
+      altLength: 40_012,
+      delta: 12,
+      shiftedBp: 19_988,
+    },
+  ])
 })
 
 test('forms group the haplotypes that match at every informative site', () => {
@@ -958,38 +1024,27 @@ test('markTag says a change in a short token', () => {
   expect(markTag(mark('deletion', 0, 999_600, -999_600))).toBe('del 1Mb')
 })
 
-// C4's 6.46 kb to 94 bp, CYP2D6's 178 bp to 13.9 kb and MHC's 87.5 kb to
-// 920 bp keep R's REF span and their ALT length, and read as a loss or gain
-test('a replacement under 5% on one side reads as a deletion or insertion', () => {
-  const lopsided = (refLength: number, altLength: number) =>
+test('a replacement far smaller on one side is still a replacement, both sizes given', () => {
+  const replaced = (refLength: number, altLength: number) =>
     haplotypeMarks([dep(1000, 1000 + refLength, altLength)], {})[0]!
-  const c4 = lopsided(6460, 94)
-  expect(c4).toEqual({
-    ...mark('replacement', 1000, 7460, 94 - 6460),
-    lopsided: 'deletion',
-  })
-  expect(markTag(c4)).toBe('del 6.46kb->94bp')
-  expect(lopsided(178, 13_900).lopsided).toBe('insertion')
-  expect(markTag(lopsided(178, 13_900))).toBe('ins 178bp->13.9kb')
-  expect(markTag(lopsided(87_500, 920))).toBe('del 87.5kb->920bp')
-  expect(lopsided(32_700, 58_700).lopsided).toBeUndefined()
-  expect(lopsided(2000, 100).lopsided).toBeUndefined()
-  expect(lopsided(2000, 99).lopsided).toBe('deletion')
-  expect(lopsidedKind(2000, 100)).toBeUndefined()
+  const small = replaced(6460, 94)
+  expect(small).toEqual(mark('replacement', 1000, 7460, 94 - 6460))
+  expect(markTag(small)).toBe('repl 6.46kb->94bp')
+  expect(markTag(replaced(178, 13_900))).toBe('repl 178bp->13.9kb')
+  expect(markTag(replaced(87_500, 920))).toBe('repl 87.5kb->920bp')
 
   const result = forms([
     ...haps('C', 4, [dep(1000, 7460, 94)]),
     ...haps('R', 4),
   ])
   const loss = result.forms.find(f => f.members.includes('C0#1'))!
-  expect(loss.marks[0]).toMatchObject({
-    kind: 'replacement',
-    lopsided: 'deletion',
+  expect(loss.marks[0]).toEqual({
+    ...mark('replacement', 1000, 7460, 94 - 6460),
     site: 0,
+    state: '-6400@1000',
   })
-  expect(markTag(loss.marks[0]!)).toBe('del 6.46kb->94bp')
-  expect(formTag(loss, result)).toBe('del 6.46kb->94bp')
-  expect(describeForm(loss)).toBe('del 6.46kb->94bp')
+  expect(formTag(loss, result)).toBe('repl 6.46kb->94bp')
+  expect(describeForm(loss)).toBe('repl 6.46kb->94bp')
 })
 
 // AMY1's H3r: R's length with 94 kb aligned elsewhere
@@ -1142,7 +1197,7 @@ test('a GSTM1-like window is two forms, and other holds a rare insertion', () =>
       return dep(at, at + 1, 1)
     })
   const indel = (i: number) => (i % 5 === 0 ? [dep(30_100, 30_120, 0)] : [])
-  const deletion = dep(7001, 25_447, 1)
+  const deletion = dep(7001, 25_446, 0)
   const input = Array.from({ length: 462 }, (_, i) => {
     const own = [...snps(i), ...indel(i)]
     if (i < 306) {
@@ -1183,7 +1238,7 @@ test('a GSTM1-like window is two forms, and other holds a rare insertion', () =>
   expect(at50.rareCarriers).toEqual(['HG400#1', 'HG401#1'])
   expect(at50.forms[0]!.marks).toEqual([
     {
-      ...mark('deletion', 7001, 25_447, -18_445),
+      ...mark('deletion', 7001, 25_446, -18_445),
       site: 0,
       state: '-18000@7001',
     },

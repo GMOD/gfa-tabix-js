@@ -3,10 +3,12 @@ import { panSNMatchesPrefix } from './util.ts'
 import type { Departure, HaplotypeDepartures } from './walkDepartures.ts'
 
 /**
- * What a haplotype's change does to R's bases over its REF span: inserts at a
- * point, deletes, replaces them, inverts them, or walks a stretch of R again
- * (`duplication`). A `shift` pairs a deletion with an insertion of about its
- * size near it.
+ * What a haplotype's change states against R. A `deletion` runs no bp of the
+ * haplotype's own where it leaves R's out, an `insertion` leaves none of R's
+ * out where it runs its own, and a `replacement` does both, at any size on
+ * either side. An `inversion` walks R against it, a `duplication` walks a
+ * stretch of R again, and a `shift` pairs a loss with a gain of about its size
+ * near it.
  */
 export type MarkKind =
   | 'insertion'
@@ -16,10 +18,11 @@ export type MarkKind =
   | 'shift'
   | 'duplication'
 
-// `delta` is altLength minus the REF span. A duplication states the bp it
-// walks again and their span on R, and a shift the size of its deletion. A
-// replacement whose smaller side is under LOPSIDED_RATIO of its larger one
-// states which way it reads, as `lopsided`.
+// An insertion, deletion or replacement's `altLength` is the bp of the
+// haplotype's own that its departures run, counting those that change length,
+// and `delta` is that minus the bp of R they leave out. Any other mark's
+// `altLength` is its REF span plus `delta`. A duplication states the bp it
+// walks again and their span on R, and a shift the size of its loss.
 export interface Mark {
   kind: MarkKind
   refStart: number
@@ -29,7 +32,6 @@ export interface Mark {
   repeatedBp?: number
   copied?: [number, number]
   shiftedBp?: number
-  lopsided?: 'deletion' | 'insertion'
 }
 
 // A mark in a structuralForms result: `site` indexes its `sites`, and `state`
@@ -138,18 +140,14 @@ export interface StructuralForms {
   floorBp: number
 }
 
-// The smallest change detected, and the side of a change under which it
-// inserts or deletes rather than replaces
+// The smallest change detected, and the side of a change under which a shift
+// pairs it as a loss or a gain
 export const STRUCTURAL_BP = 50
 
 export const FLOOR_PRESETS = [50, 1000, 10_000] as const
 
-// A replacement whose smaller side is under this share of its larger one
-// reads as a deletion or insertion: 6,460 bp to 94 bp
-export const LOPSIDED_RATIO = 0.05
-
-// The smallest deletion a shift pairs, and how far apart in size its two
-// sides may be, as a share of the larger
+// The smallest loss a shift pairs, and how far apart in size its two sides may
+// be, as a share of the larger
 export const SHIFT_MIN_BP = 1000
 export const SHIFT_TOLERANCE = 0.1
 
@@ -174,35 +172,26 @@ export function autoFloor(widthBp: number) {
 export const minCarriersFor = (haplotypes: number) =>
   Math.max(1, Math.round(haplotypes / 100))
 
-// Under STRUCTURAL_BP on one side a change inserts or deletes; otherwise it
-// replaces R's bases
 export function changeKind(refLength: number, altLength: number) {
-  return altLength > refLength && refLength < STRUCTURAL_BP
-    ? 'insertion'
-    : altLength < refLength && altLength < STRUCTURAL_BP
-      ? 'deletion'
+  return altLength === 0
+    ? 'deletion'
+    : refLength === 0
+      ? 'insertion'
       : 'replacement'
 }
 
-export function lopsidedKind(
-  refLength: number,
-  altLength: number,
-): Mark['lopsided'] {
-  return altLength < LOPSIDED_RATIO * refLength
-    ? 'deletion'
-    : refLength < LOPSIDED_RATIO * altLength
-      ? 'insertion'
-      : undefined
-}
+const PLAIN_KINDS = new Set<MarkKind>(['insertion', 'deletion', 'replacement'])
 
-const lopsidedField = (
-  kind: MarkKind,
-  refLength: number,
-  altLength: number,
-) => {
-  const lopsided =
-    kind === 'replacement' ? lopsidedKind(refLength, altLength) : undefined
-  return lopsided ? { lopsided } : {}
+const lengthSide = (m: Mark) => {
+  const refLength = m.refEnd - m.refStart
+  const walked = Math.max(0, refLength + m.delta)
+  return !PLAIN_KINDS.has(m.kind)
+    ? m.kind
+    : walked > refLength && refLength < STRUCTURAL_BP
+      ? 'gain'
+      : walked < refLength && walked < STRUCTURAL_BP
+        ? 'loss'
+        : 'exchange'
 }
 
 // The second significant figure's place value: 1,000 for 10-99 kb
@@ -245,12 +234,15 @@ interface Joined {
   refStart: number
   refEnd: number
   delta: number
+  ownBp: number
   invertedBp: number
   repeatedBp: number
   copied?: [number, number]
 }
 
 const deltaOf = (d: Departure) => d.altLength - (d.refEnd - d.refStart)
+
+const lengthChangingOwn = (d: Departure) => (deltaOf(d) === 0 ? 0 : d.altLength)
 
 // Departures nearer than `joinBp` on R joined, keeping their net change
 export function joinDepartures(departures: Departure[], joinBp: number) {
@@ -260,6 +252,7 @@ export function joinDepartures(departures: Departure[], joinBp: number) {
     if (last && d.refStart - last.refEnd < joinBp) {
       last.refEnd = Math.max(last.refEnd, d.refEnd)
       last.delta += deltaOf(d)
+      last.ownBp += lengthChangingOwn(d)
       last.invertedBp += d.invertedBp
       last.repeatedBp += d.repeatedBp
       if (d.copied) {
@@ -275,6 +268,7 @@ export function joinDepartures(departures: Departure[], joinBp: number) {
         refStart: d.refStart,
         refEnd: d.refEnd,
         delta: deltaOf(d),
+        ownBp: lengthChangingOwn(d),
         invertedBp: d.invertedBp,
         repeatedBp: d.repeatedBp,
         ...(d.copied ? { copied: d.copied } : {}),
@@ -285,8 +279,6 @@ export function joinDepartures(departures: Departure[], joinBp: number) {
 }
 
 function markOf(d: Joined, floorBp: number): Mark | undefined {
-  const refLength = d.refEnd - d.refStart
-  const altLength = Math.max(0, refLength + d.delta)
   const size = Math.abs(d.delta)
   const kind: MarkKind | undefined =
     size < floorBp
@@ -295,39 +287,41 @@ function markOf(d: Joined, floorBp: number): Mark | undefined {
         : undefined
       : d.repeatedBp >= STRUCTURAL_BP && d.delta > 0
         ? 'duplication'
-        : changeKind(refLength, altLength)
+        : changeKind(d.ownBp - d.delta, d.ownBp)
   return (
     kind && {
       kind,
       refStart: d.refStart,
       refEnd: d.refEnd,
-      altLength,
+      altLength: PLAIN_KINDS.has(kind)
+        ? d.ownBp
+        : Math.max(0, d.refEnd - d.refStart + d.delta),
       delta: d.delta,
       ...(kind === 'duplication' ? { repeatedBp: d.repeatedBp } : {}),
       ...(kind === 'duplication' && d.copied ? { copied: d.copied } : {}),
-      ...lopsidedField(kind, refLength, altLength),
     }
   )
 }
 
 /**
- * A deletion of 1 kb or more and an insertion or duplication within 10% of
- * its size, no further from it than twice that size, are R's length with the
- * sequence placed elsewhere: at AMY1, 191 haplotypes pair a 94,204 bp
- * deletion with a 94,142 bp insertion 18 kb away
+ * A loss of 1 kb or more and a gain or duplication within 10% of its size, no
+ * further from it than twice that size, are R's length with the sequence
+ * placed elsewhere: at AMY1, 191 haplotypes pair a 94,204 bp deletion with a
+ * 94,142 bp insertion 18 kb away. A loss walks under STRUCTURAL_BP over its
+ * REF span and a gain spans under STRUCTURAL_BP of R, whatever each is named.
  */
 export function pairShifts(marks: Mark[]) {
   const used = new Set<Mark>()
   const shifts: Mark[] = []
-  const deletions = marks
-    .filter(m => m.kind === 'deletion' && -m.delta >= SHIFT_MIN_BP)
+  const losses = marks
+    .filter(m => lengthSide(m) === 'loss' && -m.delta >= SHIFT_MIN_BP)
     .sort((a, b) => a.delta - b.delta)
-  for (const d of deletions) {
+  for (const d of losses) {
     const size = -d.delta
     const gain = marks.find(
       m =>
         !used.has(m) &&
-        (m.kind === 'insertion' || m.kind === 'duplication') &&
+        (lengthSide(m) === 'gain' || m.kind === 'duplication') &&
         Math.abs(m.delta - size) <= SHIFT_TOLERANCE * Math.max(m.delta, size) &&
         Math.max(m.refStart - d.refEnd, d.refStart - m.refEnd) <= 2 * size,
     )
@@ -351,8 +345,6 @@ export function pairShifts(marks: Mark[]) {
     (a, b) => a.refStart - b.refStart,
   )
 }
-
-const PLAIN_KINDS = new Set<MarkKind>(['insertion', 'deletion', 'replacement'])
 
 // The widest site whose plain changes sum into one per haplotype. The gate
 // windows' repeats that walks split run up to 600 bp, and the next wider
@@ -428,16 +420,13 @@ function siteChange(pieces: Joined[], floorBp: number): Mark | undefined {
     refStart = Math.min(refStart, d.refStart)
     refEnd = Math.max(refEnd, d.refEnd)
   }
-  const refLength = refEnd - refStart
-  const altLength = Math.max(0, refLength + delta)
-  const kind = changeKind(refLength, altLength)
+  const altLength = pieces.reduce((s, d) => s + d.ownBp, 0)
   return {
-    kind,
+    kind: changeKind(altLength - delta, altLength),
     refStart,
     refEnd,
     altLength,
     delta,
-    ...lopsidedField(kind, refLength, altLength),
   }
 }
 
@@ -983,7 +972,7 @@ function onceEach(
     const over = sitesOver(spans, m)
     const key =
       over.length > 1
-        ? `${m.kind} ${stateKey(m, floorBp)} ${over.join(',')}`
+        ? `${lengthSide(m)} ${stateKey(m, floorBp)} ${over.join(',')}`
         : `${m.kind} ${m.refStart} ${m.refEnd} ${m.delta}`
     const fresh = !seen.has(key)
     seen.add(key)
@@ -1037,19 +1026,12 @@ export function sizeTag(n: number) {
 
 const signed = (n: number) => `${n < 0 ? '-' : '+'}${sizeTag(Math.abs(n))}`
 
-const REPLACEMENT_VERB = {
-  deletion: 'del',
-  insertion: 'ins',
-  none: 'repl',
-} as const
-
 /**
  * A mark as a short token: "del 18.4kb", "ins 22kb", "repl 32.7kb->58.7kb",
- * "inv 12kb", "dup 49kb", "shift 94.2kb". A replacement gives
- * its REF span and ALT length, and one under LOPSIDED_RATIO on a side reads
- * as a deletion or insertion: "del 6.46kb->94bp", "ins 178bp->13.9kb". A
- * shift gives its net change where that says more than its size can:
- * "shift 94.2kb net +2.8kb".
+ * "inv 12kb", "dup 49kb", "shift 94.2kb". A deletion gives the bp of R it
+ * leaves out, an insertion the bp of its own, and a replacement both, R's
+ * first, at any ratio: "repl 86.6kb->1bp". A shift gives its net change
+ * where that says more than its size can: "shift 94.2kb net +2.8kb".
  */
 export function markTag(m: Mark | SiteMark) {
   const span = m.refEnd - m.refStart
@@ -1067,7 +1049,7 @@ export function markTag(m: Mark | SiteMark) {
         ? `shift ${sizeTag(m.shiftedBp!)} net ${signed(m.delta)}`
         : `shift ${sizeTag(m.shiftedBp!)}`
     case 'replacement':
-      return `${REPLACEMENT_VERB[lopsidedKind(span, m.altLength) ?? 'none']} ${sizeTag(span)}->${sizeTag(m.altLength)}`
+      return `repl ${sizeTag(m.altLength - m.delta)}->${sizeTag(m.altLength)}`
   }
 }
 

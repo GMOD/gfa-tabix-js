@@ -956,28 +956,30 @@ result.forms.map(f => formTag(f, result))
 ### Labels
 
 - `markTag(mark)` is the per-mark label and takes a `Mark` or a `SiteMark`. C4's
-  common change gives `del 6.46kb->94bp`
+  common change gives `del 6.37kb`
 - `formTag` names a form in about 20 characters for a row label: its largest
   change's `markTag`, then ` +N` counting the rest. Given the result, it leaves
   out the changes every form shares
 - `describeForm` lists every change's `markTag`, largest first, comma-separated
 - Sizes take 3 significant figures with the unit attached (`94bp`, `6.46kb`,
   `1.2Mb`), as `sizeTag` writes them
-- A replacement whose smaller side is under 5% (`LOPSIDED_RATIO`) of its larger
-  side stays `kind: 'replacement'` with its exact REF span and ALT length, and
-  gains `lopsided: 'deletion' | 'insertion'`, so a caller can colour it as a
-  loss or gain. Its label reads as one
+- A change is a deletion where it runs 0 bp of the haplotype's own, an insertion
+  where it leaves out 0 bp of the reference, and a replacement where both sides
+  have bp, at any ratio: no size threshold names one. A deletion or an insertion
+  gives its one size and a replacement both, the reference's first
+- A mark's two sides sum its departures that change length, so a SNP joined to a
+  deletion leaves it a deletion. `altLength` is the haplotype's side and
+  `altLength - delta` the reference's
 
-| Change                         | Token                                   |
-| ------------------------------ | --------------------------------------- |
-| deletion, insertion            | `del 18.4kb`, `ins 22kb`                |
-| lopsided replacement           | `del 6.46kb->94bp`, `ins 178bp->13.9kb` |
-| other replacement              | `repl 32.7kb->58.7kb`                   |
-| shift, inversion, duplication  | `shift 94.2kb`, `inv 12kb`, `dup 49kb`  |
-| shift that changes length      | `shift 94.2kb net +2.81kb`              |
-| no change, only shared changes | `ref`, `shared`                         |
-| rare change, no call           | `rarer`, `no call`                      |
-| more changes, in `formTag`     | `del 32.7kb +1`                         |
+| Change                         | Token                                     |
+| ------------------------------ | ----------------------------------------- |
+| deletion, insertion            | `del 18.4kb`, `ins 22kb`                  |
+| replacement                    | `repl 32.7kb->58.7kb`, `repl 86.6kb->1bp` |
+| shift, inversion, duplication  | `shift 94.2kb`, `inv 12kb`, `dup 49kb`    |
+| shift that changes length      | `shift 94.2kb net +2.81kb`                |
+| no change, only shared changes | `ref`, `shared`                           |
+| rare change, no call           | `rarer`, `no call`                        |
+| more changes, in `formTag`     | `del 32.7kb +1`                           |
 
 ## Contained cuts
 
