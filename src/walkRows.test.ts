@@ -250,6 +250,17 @@ test("a walk file's header states its format, tile, references, haplotypes and h
   })
 })
 
+test('a #reference, #haplotype or #hole line that carries a tag reads as the line without it', () => {
+  const lines = [
+    '#reference\tGRCh38',
+    '#haplotype\tHG002#1',
+    '#hole\tGRCh38#0#chr1\t12\t20',
+  ]
+  const plain = walkHeader(lines)
+  expect(plain.holes).toHaveLength(1)
+  expect(walkHeader(lines.map(line => `${line}\tzz:i:1`))).toEqual(plain)
+})
+
 test("a walk file's header states its graph and the lines it leaves out, by name in any order, and a file without them is read alike", () => {
   const options =
     'format:i:8\ttile:i:1000\trevisited:i:0\tstay:i:311\tabridge:i:1000000\tabridgebytes:i:3000000'
