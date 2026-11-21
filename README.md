@@ -176,6 +176,10 @@ record's own steps in a tile fetched to attach them.
   than its line's next piece starts; a record whose own steps in a piece are not
   a run at one end of it, or not the run its `blocks` row has there. Each is
   checked on the rows a cut reads
+- **Refused where a table leaves bytes out:** a sequence's table whose entries
+  do not cover every byte from the end of the table before it, or of the header
+  unit, to the table itself, in file order with no gap and no overlap. A table
+  that left out a unit's entry read before as a sequence without that unit
 - **Links:** a cut lists the links its steps walk and no other
   ([Usage](#usage)). graph-walks 6 also listed links of walks a cut left out,
   where the file kept their rows in a tile, and a link between the reference's
