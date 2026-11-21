@@ -201,24 +201,20 @@ export class RefPath {
   // The position a stretch along R from position i, reading R the way `h`
   // does there, first holds `target`, i itself included
   reach(i: number, h: number, target: number) {
-    const forward = this.handles[i] === h
-    let found: number | undefined
-    for (const j of this.occurrences.get(idOf(target)) ?? []) {
-      if (forward && j >= i && this.handles[j] === target) {
-        if (found === undefined || j < found) {
-          found = j
-        }
-      } else if (
-        !forward &&
-        j <= i &&
-        otherStrand(this.handles[j]!) === target
-      ) {
-        if (found === undefined || j > found) {
-          found = j
-        }
+    const at = this.occurrences.get(idOf(target)) ?? []
+    let k = firstAtLeast(at, i)
+    if (this.handles[i] === h) {
+      while (k < at.length && this.handles[at[k]!] !== target) {
+        k++
       }
+      return at[k]
+    } else {
+      k = at[k] === i ? k : k - 1
+      while (k >= 0 && otherStrand(this.handles[at[k]!]!) !== target) {
+        k--
+      }
+      return at[k]
     }
-    return found
   }
 
   handleAt(i: number, forward: boolean) {
