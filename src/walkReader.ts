@@ -277,11 +277,26 @@ function checkDepartureBytes(departureBlocks: WalkUnit[], budget: number) {
   }
 }
 
-// The tiles an attach fetch reads for a record: those its `ownTiles` names
-export function attachTiles(units: WalkUnit[], ownTiles: number[]) {
-  return units.filter(
-    u => u.kind === 'tile' && u.length > 0 && ownTiles.includes(Number(u.name)),
-  )
+// The tiles an attach fetch reads for a record: those its `ownTiles` names,
+// in file order
+export function attachTiles(units: WalkUnit[]) {
+  const byStart = new Map<number, number[]>()
+  units.forEach((u, k) => {
+    const start = Number(u.name)
+    if (u.kind === 'tile' && u.length > 0 && !Number.isNaN(start)) {
+      const held = byStart.get(start)
+      if (held) {
+        held.push(k)
+      } else {
+        byStart.set(start, [k])
+      }
+    }
+  })
+  return (ownTiles: number[]) =>
+    [...new Set(ownTiles)]
+      .flatMap(start => byStart.get(start) ?? [])
+      .sort((a, b) => a - b)
+      .map(k => units[k]!)
 }
 
 const pieceKey = (
@@ -1180,6 +1195,7 @@ export class WalkReader {
       // the tiles holding own steps the read lacks, the walks wanting each,
       // and where on R the first record wanting it starts
       const fetches = new Map<WalkUnit, { names: Set<string>; from: number }>()
+      const tilesOwning = attachTiles(units)
       for (const { departure } of cut.unattached) {
         const { name } = departure
         const from = Math.min(
@@ -1187,7 +1203,7 @@ export class WalkReader {
           departure.rejoinPos,
           region.end + context - 1,
         )
-        for (const unit of attachTiles(units, ownTiles.get(departure) ?? [])) {
+        for (const unit of tilesOwning(ownTiles.get(departure) ?? [])) {
           if (!decodedFor(unit, name)) {
             const wanting = fetches.get(unit)
             fetches.set(unit, {
