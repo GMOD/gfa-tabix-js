@@ -39,7 +39,6 @@ import {
   keptStepsError,
   megabytes,
   readSteps,
-  runName,
   stepBudgetError,
   surelyKept,
   surelyKeptError,
@@ -726,11 +725,19 @@ export class WalkReader {
     const tilePaths = new Map<string, { path: RefPath; rowStarts: number[] }>()
     const pieceEnds: PieceEnds[] = []
     const blocksRead = new Map<WalkUnit, string[]>()
-    const placeholderIds = new Map<string, number>()
+    // the id of each run of a contig a placeholder stands for, by the walk's
+    // name, the run's start and its end: -1 for the first run, then -2
+    const placeholderIds = new Map<string, Map<number, Map<number, number>>>()
+    let minted = 0
     const placeholderId = (name: string, start: number, end: number) => {
-      const run = runName(name, start, end)
-      const id = placeholderIds.get(run) ?? -(placeholderIds.size + 1)
-      placeholderIds.set(run, id)
+      const byStart =
+        placeholderIds.get(name) ?? new Map<number, Map<number, number>>()
+      placeholderIds.set(name, byStart)
+      const byEnd = byStart.get(start) ?? new Map<number, number>()
+      byStart.set(start, byEnd)
+      const id = byEnd.get(end) ?? -(minted + 1)
+      minted = Math.max(minted, -id)
+      byEnd.set(end, id)
       return id
     }
     // the abridged rows decoded and not yet read from a blocks row or a
