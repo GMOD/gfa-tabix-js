@@ -66,9 +66,9 @@ const net = (h: HaplotypeDepartures) =>
 const summary = (h: HaplotypeDepartures) =>
   `${net(h)} ${JSON.stringify(h.covered)}`
 
-test.runIf(walks !== '').each(WINDOWS)(
+test.runIf(walks !== '').for(WINDOWS)(
   '%i-%i: abridged pieces read unexpanded as expanded over the tiles the drawn stretch overlaps, context on both sides, and no form contradicts a member',
-  async (start, end) => {
+  async ([start, end], { skip }) => {
     const sequence =
       (await reader().sequenceFor(
         (await reader().header()).references[0] ?? '',
@@ -77,6 +77,7 @@ test.runIf(walks !== '').each(WINDOWS)(
     const tiles = (await reader().units(sequence)).filter(
       u => u.kind === 'tile' && u.start < end + 1000 && u.end > start - 1000,
     )
+    skip(tiles.length === 0, `no tile of ${sequence} overlaps ${start}-${end}`)
     const region = {
       refName,
       start: tiles[0]!.start + 1000,
