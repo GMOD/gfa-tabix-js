@@ -198,7 +198,7 @@ Row labels at the `auto` floor, 462 haplotypes once CHM13 is left out:
 | C4     | 95         | `shift 32.7kb`             | `onlyShifts`                                              |
 | C4     | 20         | `repl 6.36kb->26.4kb`      | Both sides have bp                                        |
 | CYP2D6 | 38         | `repl 8bp->13.7kb`         | 8 bp of R left out                                        |
-| MHC    | 26         | `repl 86.6kb->1bp +2`      | An 86 kb deletion with a 1 bp insertion joined to it      |
+| MHC    | 26         | `repl 86.6kb->1bp +2`      | An 86,048 bp deletion; joined small indels add the 1 bp   |
 | MHC    | 31         | `repl 6.29kb->48.2kb +10`  | `describeForm` lists all 11 tokens                        |
 | AMY1   | 175        | `shift 94.2kb`             | H3r, `onlyShifts`                                         |
 | AMY1   | 16         | `shift 94.2kb net +2.81kb` | `onlyShifts`; the net passes 1 kb, the size's last figure |
