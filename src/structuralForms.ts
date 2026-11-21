@@ -996,6 +996,25 @@ export function markTag(m: Mark | SiteMark) {
 // markTag under its earlier name
 export const changeName = markTag
 
+// The size a row draws a change at: a mark's larger side, an inversion's span
+const drawnSize = (m: Mark) =>
+  m.kind === 'inversion'
+    ? m.refEnd - m.refStart
+    : Math.max(m.refLength, m.altLength)
+
+// That size as a label prints it, to three significant figures
+const printedSize = (m: Mark) => Number(drawnSize(m).toPrecision(3))
+
+const drawnOverSpan = (m: Mark) =>
+  m.copied ? m.copied[1] > m.copied[0] : m.refEnd > m.refStart
+
+// Marks as a label names them: largest as printed first, then a change drawn
+// over a span of R before one at a point, then larger first
+const byDrawnSize = (a: Mark, b: Mark) =>
+  printedSize(b) - printedSize(a) ||
+  Number(drawnOverSpan(b)) - Number(drawnOverSpan(a)) ||
+  drawnSize(b) - drawnSize(a)
+
 const counted = (token: string, n: number) =>
   n === 0 ? [] : [n === 1 ? token : `${token} x${n}`]
 
@@ -1011,7 +1030,7 @@ export function describeForm(form: {
   key?: string
 }) {
   const tokens = [
-    ...form.marks.toSorted((a, b) => sizeOf(b) - sizeOf(a)).map(markTag),
+    ...form.marks.toSorted(byDrawnSize).map(markTag),
     ...counted('rarer', form.states.filter(s => s === RARER_STATE).length),
     ...counted('no call', form.states.filter(s => s === NO_CALL_STATE).length),
   ]
@@ -1043,22 +1062,27 @@ export function formStateAt(
         : (form.marks.find(m => m.site === site)?.state ?? REFERENCE_STATE)
 }
 
-// A form's tokens outside the shared sites, largest change first: each mark's
-// markTag, then "rarer" and "no call" once per site
+// A form's tokens outside the shared sites, as a label names its marks, then
+// "rarer" and "no call" once per site, and how many lead at the largest size
+// as printed
 function ownTokens(
   form: { marks: (Mark | SiteMark)[]; states: string[] },
   result?: Pick<StructuralForms, 'sites'>,
 ) {
-  const own = form.marks.filter(
-    m => !('site' in m && result?.sites[m.site]?.shared === true),
-  )
+  const own = form.marks
+    .filter(m => !('site' in m && result?.sites[m.site]?.shared === true))
+    .toSorted(byDrawnSize)
   const each = (token: string, state: string) =>
     form.states.filter(s => s === state).map(() => token)
+  const tokens = own
+    .map(markTag)
+    .concat(each('rarer', RARER_STATE), each('no call', NO_CALL_STATE))
+  const [largest] = own
   return {
-    tokens: own
-      .toSorted((a, b) => sizeOf(b) - sizeOf(a))
-      .map(markTag)
-      .concat(each('rarer', RARER_STATE), each('no call', NO_CALL_STATE)),
+    tokens,
+    largest: largest
+      ? own.filter(m => printedSize(m) === printedSize(largest)).length
+      : Math.min(tokens.length, 1),
     shared: own.length < form.marks.length,
   }
 }
@@ -1066,7 +1090,10 @@ function ownTokens(
 /**
  * A form for a row label of about 20 characters: its largest change as
  * markTag gives it, then " +N" counting the rest describeForm names, as in
- * "del 18.4kb" or "ins 78kb +1"; "ref" where it makes no change. Given the
+ * "del 18.4kb" or "ins 78kb +1"; "ref" where it makes no change. Every change
+ * as large as the largest, as printed, is named, one drawn over R before one
+ * at a point: "del 32.7kb, ins 32.7kb". A replacement's size is its larger
+ * side. Given the
  * form's result, the tag leaves out the marks every form shares, so a form
  * with no other change is "shared": naming the change there would read as if
  * the other rows lacked it. Where other forms of the result would read the
@@ -1079,14 +1106,16 @@ export function formTag(
   result?: Pick<StructuralForms, 'sites'> &
     Partial<Pick<StructuralForms, 'forms'>>,
 ) {
-  const { tokens, shared } = ownTokens(form, result)
-  const [head = shared ? 'shared' : 'ref', ...rest] = tokens
-  const readAlike = (other: string[]) =>
-    other.length === tokens.length && other[0] === tokens[0]
+  const { tokens, largest, shared } = ownTokens(form, result)
+  const named = tokens.slice(0, largest)
+  const readAlike = (other: { tokens: string[]; largest: number }) =>
+    other.tokens.length === tokens.length &&
+    other.tokens.slice(0, other.largest).join('\n') === named.join('\n')
   let alike = (result?.forms ?? [])
     .filter(f => f !== form && f.key !== OTHER_STATE)
-    .map(f => ownTokens(f, result).tokens)
+    .map(f => ownTokens(f, result))
     .filter(readAlike)
+    .map(other => other.tokens)
   const lacking = (t: string) => alike.filter(other => !other.includes(t))
   const telling = (candidates: string[]) =>
     candidates.reduce<string | undefined>(
@@ -1096,8 +1125,8 @@ export function formTag(
           : best,
       undefined,
     )
-  const shown = [head]
-  let unshown = rest
+  const shown = named.length > 0 ? named : [shared ? 'shared' : 'ref']
+  let unshown = tokens.slice(largest)
   let told = telling(unshown)
   while (told !== undefined) {
     const t = told

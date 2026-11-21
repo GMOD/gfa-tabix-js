@@ -1077,6 +1077,24 @@ test('a replacement far smaller on one side is still a replacement, both sizes g
   expect(describeForm(loss)).toBe('repl 6.46kb->94bp')
 })
 
+// C4's 95: a 32.7 kb deletion and a 32.7 kb insertion had read
+// "ins 32.7kb +1" while the row drew the deletion
+test('a row names every change as large as its largest, one drawn over R first, a replacement by its larger side', () => {
+  const result = forms(
+    [
+      ...haps('R', 4),
+      ...haps('X', 4, [dep(10_000, 30_000, 0), dep(50_000, 50_000, 20_040)]),
+      ...haps('Y', 4, [dep(10_000, 15_000, 0), dep(60_000, 90_000, 28_000)]),
+    ],
+    { minCarriers: 2 },
+  )
+  const formOf = (name: string) =>
+    result.forms.find(f => f.members.includes(name))!
+  expect(formTag(formOf('X0#1'), result)).toBe('del 20kb, ins 20kb')
+  expect(describeForm(formOf('X0#1'))).toBe('del 20kb, ins 20kb')
+  expect(formTag(formOf('Y0#1'), result)).toBe('repl 30kb->28kb +1')
+})
+
 // C4: forms of one 32.7 kb deletion and a gain elsewhere had each read
 // "del 32.7kb +1"
 test('forms that would read alike are told apart by the changes they differ in', () => {
