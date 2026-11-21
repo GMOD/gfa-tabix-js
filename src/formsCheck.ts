@@ -10,7 +10,12 @@ import {
   agrees,
 } from './structuralForms.ts'
 
-import type { Form, Site, StructuralForms } from './structuralForms.ts'
+import type {
+  Form,
+  MarkKind,
+  Site,
+  StructuralForms,
+} from './structuralForms.ts'
 import type { Departure, HaplotypeDepartures } from './walkDepartures.ts'
 
 /**
@@ -29,12 +34,15 @@ import type { Departure, HaplotypeDepartures } from './walkDepartures.ts'
  *   changes agreeing in net change
  * - `size`: the same for the largest change at a summed site, and for each
  *   pair's size at a wider one
+ * - `kind`: the member's changes there and the form's agree in size, but not
+ *   in what they are named: a deletion against a replacement
  * - `unsited`: a change of the member's lies in no site
  */
 export type ContradictionKind =
   | 'call'
   | 'net'
   | 'size'
+  | 'kind'
   | 'rarer'
   | 'count'
   | 'place'
@@ -49,23 +57,28 @@ export interface Contradiction {
   own: number
 }
 
-// A run of a haplotype's departures, joined where nearer than joinBp on R
+// A run of a haplotype's departures that change R's length, walk it against
+// it or walk it again, joined where nearer than joinBp on R, with the bp of R
+// they leave out and of their own they run
 interface Piece {
   refStart: number
   refEnd: number
   delta: number
+  refBp: number
+  ownBp: number
   invertedBp: number
   repeatedBp: number
 }
 
 // A change a haplotype makes, as the tolerance compares it: its net change
-// and its size, the span of an inversion and the deletion of a shift.
-// `plain` changes insert, delete or replace
+// and its size, the span of an inversion and the deletion of a shift, and what
+// it is named. `plain` changes insert, delete or replace
 interface Change {
   refStart: number
   refEnd: number
   delta: number
   size: number
+  kind: MarkKind
   plain: boolean
 }
 
@@ -86,19 +99,39 @@ const halfCover = (a: Change, b: Change) => {
 
 const sum = (ns: number[]) => ns.reduce((s, n) => s + n, 0)
 
+// A deletion runs no bp of its own, an insertion leaves none of R out, and a
+// replacement does both
+const plainKind = (refBp: number, ownBp: number): MarkKind =>
+  ownBp === 0 ? 'deletion' : refBp === 0 ? 'insertion' : 'replacement'
+
+const kindsOf = (changes: Change[]) =>
+  changes
+    .map(c => c.kind)
+    .sort()
+    .join(' ')
+
 const largest = (changes: Change[]) =>
   changes.reduce((most, c) => Math.max(most, c.size), 0)
 
 function joined(departures: Departure[], joinBp: number) {
   const out: Piece[] = []
-  for (const d of departures.toSorted(
+  const structural = departures.filter(
+    d =>
+      d.altLength !== d.refEnd - d.refStart ||
+      d.invertedBp > 0 ||
+      d.repeatedBp > 0,
+  )
+  for (const d of structural.toSorted(
     (a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd,
   )) {
-    const delta = d.altLength - (d.refEnd - d.refStart)
+    const ref = d.refEnd - d.refStart
+    const delta = d.altLength - ref
     const last = out.at(-1)
     if (last && d.refStart - last.refEnd < joinBp) {
       last.refEnd = Math.max(last.refEnd, d.refEnd)
       last.delta += delta
+      last.refBp += ref
+      last.ownBp += d.altLength
       last.invertedBp += d.invertedBp
       last.repeatedBp += d.repeatedBp
     } else {
@@ -106,6 +139,8 @@ function joined(departures: Departure[], joinBp: number) {
         refStart: d.refStart,
         refEnd: d.refEnd,
         delta,
+        refBp: ref,
+        ownBp: d.altLength,
         invertedBp: d.invertedBp,
         repeatedBp: d.repeatedBp,
       })
@@ -134,22 +169,15 @@ function haplotypeChanges(
   const pieces = joined(departures, joinBp).filter(p =>
     touches(p, window.start, window.end),
   )
-  const kinds = pieces.map(p => {
-    const span = p.refEnd - p.refStart
-    const alt = Math.max(0, span + p.delta)
-    const size = Math.abs(p.delta)
-    return size < floorBp
+  const kinds = pieces.map((p): MarkKind | undefined =>
+    Math.abs(p.delta) < floorBp
       ? p.invertedBp >= floorBp
         ? 'inversion'
         : undefined
       : p.repeatedBp >= STRUCTURAL_BP && p.delta > 0
         ? 'duplication'
-        : alt > span && span < STRUCTURAL_BP
-          ? 'insertion'
-          : alt < span && alt < STRUCTURAL_BP
-            ? 'deletion'
-            : 'replacement'
-  })
+        : plainKind(p.refBp, p.ownBp),
+  )
   const paired = new Map<number, number>()
   const deletions = pieces
     .map((_, i) => i)
@@ -185,6 +213,7 @@ function haplotypeChanges(
           refEnd: Math.max(p.refEnd, g.refEnd),
           delta: p.delta + g.delta,
           size: -p.delta,
+          kind: 'shift',
           plain: false,
         })
       }
@@ -196,6 +225,7 @@ function haplotypeChanges(
         refEnd: p.refEnd,
         delta: p.delta,
         size: kind === 'inversion' ? p.refEnd - p.refStart : Math.abs(p.delta),
+        kind,
         plain: isPlain,
       })
       if (isPlain) {
@@ -216,6 +246,7 @@ const statedChanges = (site: Site, key: string): Change[] =>
       m.kind === 'inversion'
         ? m.refEnd - m.refStart
         : (m.shiftedBp ?? Math.abs(m.delta)),
+    kind: m.kind,
     plain:
       m.kind === 'insertion' ||
       m.kind === 'deletion' ||
@@ -261,9 +292,10 @@ function statedKey(result: StructuralForms, form: Form, site: number) {
  * `other`, the member's coverage against the form's call, and its changes
  * touching the site against the state's marks there. At a site at most
  * SUMMED_SITE_BP wide its plain pieces there add up to one change where they
- * reach the floor, and its net and largest change agree with the state's;
- * at a wider site its changes pair one-to-one with the state's marks, each
- * pair covering half of each other and agreeing in net change and size.
+ * reach the floor, and its net and largest change and the kinds of its
+ * changes agree with the state's; at a wider site its changes pair one-to-one
+ * with the state's marks, each pair covering half of each other and agreeing
+ * in net change, size and kind.
  * Agreement is structuralForms' `agrees`, the one definition the two share.
  */
 export function formContradictions(
@@ -287,6 +319,8 @@ export function formContradictions(
     agrees(a.delta, b.delta, floorBp, Math.max(a.size, b.size))
   const sizeAgrees = (a: Change, b: Change) =>
     netAgrees(a, b) && agrees(a.size, b.size, floorBp)
+  const kindAgrees = (a: Change, b: Change) =>
+    sizeAgrees(a, b) && a.kind === b.kind
   for (const form of result.forms) {
     for (const name of form.members) {
       const h = byName.get(name)
@@ -315,11 +349,10 @@ export function formContradictions(
           const called = h !== undefined && covers(h, site)
           const summed = site.refEnd - site.refStart <= SUMMED_SITE_BP
           const at = changes.filter(c => touches(c, site.refStart, site.refEnd))
-          const plainNet = sum(
-            plain
-              .filter(p => touches(p, site.refStart, site.refEnd))
-              .map(p => p.delta),
+          const plainHere = plain.filter(p =>
+            touches(p, site.refStart, site.refEnd),
           )
+          const plainNet = sum(plainHere.map(p => p.delta))
           const own = summed
             ? [
                 ...at.filter(c => !c.plain),
@@ -330,6 +363,10 @@ export function formContradictions(
                         refEnd: site.refEnd,
                         delta: plainNet,
                         size: Math.abs(plainNet),
+                        kind: plainKind(
+                          sum(plainHere.map(p => p.refBp)),
+                          sum(plainHere.map(p => p.ownBp)),
+                        ),
                         plain: true,
                       },
                     ]
@@ -361,6 +398,8 @@ export function formContradictions(
               add('net', i, statedNet, ownNet)
             } else if (!agrees(largest(stated), largest(own), floorBp)) {
               add('size', i, largest(stated), largest(own))
+            } else if (kindsOf(stated) !== kindsOf(own)) {
+              add('kind', i, statedNet, ownNet)
             }
           } else if (stated.length !== own.length) {
             add('count', i, stated.length, own.length)
@@ -370,6 +409,8 @@ export function formContradictions(
             add('net', i, statedNet, ownNet)
           } else if (!pairOneToOne(stated, own, sizeAgrees)) {
             add('size', i, largest(stated), largest(own))
+          } else if (!pairOneToOne(stated, own, kindAgrees)) {
+            add('kind', i, statedNet, ownNet)
           }
         }
       })

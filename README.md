@@ -936,7 +936,7 @@ result.forms.map(f => formTag(f, result))
   over `placed`
 - `form.onlyShifts` is true where every change outside the shared sites is a
   shift and every site has a call: the reference's length with a stretch aligned
-  elsewhere, as in AMY1's H3r
+  elsewhere, as in 95 of C4's haplotypes
 - `markTag`, `formTag` and `describeForm` label marks and forms, as
   [Labels](#labels) shows
 - Every result holds plain data, so a worker can post it, and regrouping at
@@ -966,17 +966,22 @@ result.forms.map(f => formTag(f, result))
 - A change is a deletion where it runs 0 bp of the haplotype's own, an insertion
   where it leaves out 0 bp of the reference, and a replacement where both sides
   have bp, at any ratio: no size threshold names one. A deletion or an insertion
-  gives its one size and a replacement both, the reference's first
-- A mark's two sides sum its departures that change length, so a SNP joined to a
-  deletion leaves it a deletion. `altLength` is the haplotype's side and
-  `altLength - delta` the reference's
+  gives its one size, and a replacement or a shift both, the reference's first
+- A mark is made of the departures that change the reference's length, walk it
+  backwards or walk it again, so a SNP beside a deletion neither widens it nor
+  names it. `refLength` is the reference's side, `altLength` the haplotype's,
+  and `delta` their difference
+- A state is one kind of change, so its name holds for every carrier: 119 bp
+  left out and 1 bp walked in place of 120 are two states
+- A shift pairs a deletion with an insertion or duplication; a replacement pairs
+  with nothing
 
 | Change                         | Token                                     |
 | ------------------------------ | ----------------------------------------- |
 | deletion, insertion            | `del 18.4kb`, `ins 22kb`                  |
-| replacement                    | `repl 32.7kb->58.7kb`, `repl 86.6kb->1bp` |
-| shift, inversion, duplication  | `shift 94.2kb`, `inv 12kb`, `dup 49kb`    |
-| shift that changes length      | `shift 94.2kb net +2.81kb`                |
+| replacement                    | `repl 32.7kb->58.7kb`, `repl 1bp->13.7kb` |
+| shift                          | `shift 32.7kb->32.7kb`                    |
+| inversion, duplication         | `inv 12kb`, `dup 49kb`                    |
 | no change, only shared changes | `ref`, `shared`                           |
 | rare change, no call           | `rarer`, `no call`                        |
 | more changes, in `formTag`     | `del 32.7kb +1`                           |

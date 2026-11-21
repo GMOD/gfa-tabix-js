@@ -215,6 +215,18 @@ test("the checker reports a wider site's change stated at its place and net with
   expect(reported(result)).toEqual(['size'])
 })
 
+test("the checker reports a summed site's change named other than the members' own", () => {
+  const { result, state } = edited()
+  state(70_000, 'W0#1').marks[0]!.kind = 'replacement'
+  expect(reported(result)).toEqual(['kind'])
+})
+
+test("the checker reports a wider site's change named other than the members' own", () => {
+  const { result, state } = edited()
+  state(10_000, 'D0#1').marks[0]!.kind = 'replacement'
+  expect(reported(result)).toEqual(['kind'])
+})
+
 test('the checker reports a change that lies in no site', () => {
   const { result, site } = edited()
   const i = site(60_000)
