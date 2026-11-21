@@ -3,11 +3,10 @@ import {
   OTHER_STATE,
   RARER_STATE,
   REFERENCE_STATE,
-  SHIFT_MIN_BP,
-  SHIFT_TOLERANCE,
   STRUCTURAL_BP,
   SUMMED_SITE_BP,
   agrees,
+  changeKind,
 } from './structuralForms.ts'
 
 import type {
@@ -71,8 +70,7 @@ interface Piece {
 }
 
 // A change a haplotype makes, as the tolerance compares it: its net change
-// and its size, the span of an inversion and the deletion of a shift, and what
-// it is named. `plain` changes insert, delete or replace
+// and its size, the span of an inversion, and what it is named. `plain` changes insert, delete or replace
 interface Change {
   refStart: number
   refEnd: number
@@ -99,11 +97,6 @@ const halfCover = (a: Change, b: Change) => {
 
 const sum = (ns: number[]) => ns.reduce((s, n) => s + n, 0)
 
-// A deletion runs no bp of its own, an insertion leaves none of R out, and a
-// replacement does both
-const plainKind = (refBp: number, ownBp: number): MarkKind =>
-  ownBp === 0 ? 'deletion' : refBp === 0 ? 'insertion' : 'replacement'
-
 const kindsOf = (changes: Change[]) =>
   changes
     .map(c => c.kind)
@@ -113,17 +106,9 @@ const kindsOf = (changes: Change[]) =>
 const largest = (changes: Change[]) =>
   changes.reduce((most, c) => Math.max(most, c.size), 0)
 
-function joined(departures: Departure[], joinBp: number) {
+function joinedRun(departures: Departure[], joinBp: number) {
   const out: Piece[] = []
-  const structural = departures.filter(
-    d =>
-      d.altLength !== d.refEnd - d.refStart ||
-      d.invertedBp > 0 ||
-      d.repeatedBp > 0,
-  )
-  for (const d of structural.toSorted(
-    (a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd,
-  )) {
+  for (const d of departures) {
     const ref = d.refEnd - d.refStart
     const delta = d.altLength - ref
     const last = out.at(-1)
@@ -149,16 +134,37 @@ function joined(departures: Departure[], joinBp: number) {
   return out
 }
 
+const isSmall = (d: Departure) =>
+  d.refEnd - d.refStart < STRUCTURAL_BP && d.altLength < STRUCTURAL_BP
+
+// Departures under STRUCTURAL_BP on both sides join only one another, and the
+// rest only one another
+function joined(departures: Departure[], joinBp: number) {
+  const structural = departures
+    .filter(
+      d =>
+        d.altLength !== d.refEnd - d.refStart ||
+        d.invertedBp > 0 ||
+        d.repeatedBp > 0,
+    )
+    .toSorted((a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd)
+  return joinedRun(structural.filter(isSmall), joinBp)
+    .concat(
+      joinedRun(
+        structural.filter(d => !isSmall(d)),
+        joinBp,
+      ),
+    )
+    .sort((a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd)
+}
+
 /**
  * A haplotype's changes of at least `floorBp` over the window, from its
  * departures: pieces joined where nearer than joinBp; one changing R's
  * length by floorBp or more changes it, and one that does not but walks
- * floorBp of R against it inverts that span. A
- * deletion of SHIFT_MIN_BP or more pairs with the first insertion or step
- * back in R order within SHIFT_TOLERANCE of its size and twice its size of
- * it, largest deletion first, into one shift. `plain` lists the pieces a
- * summed site adds up: those making no change other than an unpaired
- * insertion, deletion or replacement.
+ * floorBp of R against it inverts that span. `plain` lists the pieces a
+ * summed site adds up: those making no change other than an insertion,
+ * deletion or replacement.
  */
 function haplotypeChanges(
   departures: Departure[],
@@ -169,57 +175,20 @@ function haplotypeChanges(
   const pieces = joined(departures, joinBp).filter(p =>
     touches(p, window.start, window.end),
   )
-  const kinds = pieces.map((p): MarkKind | undefined =>
-    Math.abs(p.delta) < floorBp
-      ? p.invertedBp >= floorBp
-        ? 'inversion'
-        : undefined
-      : p.repeatedBp >= STRUCTURAL_BP && p.delta > 0
-        ? 'duplication'
-        : plainKind(p.refBp, p.ownBp),
-  )
-  const paired = new Map<number, number>()
-  const deletions = pieces
-    .map((_, i) => i)
-    .filter(i => kinds[i] === 'deletion' && -pieces[i]!.delta >= SHIFT_MIN_BP)
-    .sort((a, b) => pieces[a]!.delta - pieces[b]!.delta)
-  for (const i of deletions) {
-    const d = pieces[i]!
-    const size = -d.delta
-    const gain = pieces.findIndex(
-      (g, j) =>
-        !paired.has(j) &&
-        (kinds[j] === 'insertion' || kinds[j] === 'duplication') &&
-        Math.abs(g.delta - size) <= SHIFT_TOLERANCE * Math.max(g.delta, size) &&
-        Math.max(g.refStart - d.refEnd, d.refStart - g.refEnd) <= 2 * size,
-    )
-    if (gain >= 0) {
-      paired.set(gain, i)
-      paired.set(i, gain)
-    }
-  }
   const changes: Change[] = []
   const plain: Piece[] = []
-  pieces.forEach((p, i) => {
-    const kind = kinds[i]
-    const other = paired.get(i)
+  for (const p of pieces) {
+    const kind: MarkKind | undefined =
+      Math.abs(p.delta) < floorBp
+        ? p.invertedBp >= floorBp
+          ? 'inversion'
+          : undefined
+        : p.repeatedBp >= STRUCTURAL_BP && p.delta > 0
+          ? 'duplication'
+          : changeKind(p.refBp, p.ownBp)
     const isPlain =
       kind === 'insertion' || kind === 'deletion' || kind === 'replacement'
-    if (other !== undefined) {
-      if (kind === 'deletion') {
-        const g = pieces[other]!
-        changes.push({
-          refStart: Math.min(p.refStart, g.refStart),
-          refEnd: Math.max(p.refEnd, g.refEnd),
-          delta: p.delta + g.delta,
-          size: -p.delta,
-          kind: 'shift',
-          plain: false,
-        })
-      }
-    } else if (kind === undefined) {
-      plain.push(p)
-    } else {
+    if (kind !== undefined) {
       changes.push({
         refStart: p.refStart,
         refEnd: p.refEnd,
@@ -228,11 +197,11 @@ function haplotypeChanges(
         kind,
         plain: isPlain,
       })
-      if (isPlain) {
-        plain.push(p)
-      }
     }
-  })
+    if (kind === undefined || isPlain) {
+      plain.push(p)
+    }
+  }
   return { changes, plain }
 }
 
@@ -242,10 +211,7 @@ const statedChanges = (site: Site, key: string): Change[] =>
     refStart: m.refStart,
     refEnd: m.refEnd,
     delta: m.delta,
-    size:
-      m.kind === 'inversion'
-        ? m.refEnd - m.refStart
-        : (m.shiftedBp ?? Math.abs(m.delta)),
+    size: m.kind === 'inversion' ? m.refEnd - m.refStart : Math.abs(m.delta),
     kind: m.kind,
     plain:
       m.kind === 'insertion' ||
@@ -353,6 +319,10 @@ export function formContradictions(
             touches(p, site.refStart, site.refEnd),
           )
           const plainNet = sum(plainHere.map(p => p.delta))
+          const plainKind: MarkKind = changeKind(
+            sum(plainHere.map(p => p.refBp)),
+            sum(plainHere.map(p => p.ownBp)),
+          )
           const own = summed
             ? [
                 ...at.filter(c => !c.plain),
@@ -363,10 +333,7 @@ export function formContradictions(
                         refEnd: site.refEnd,
                         delta: plainNet,
                         size: Math.abs(plainNet),
-                        kind: plainKind(
-                          sum(plainHere.map(p => p.refBp)),
-                          sum(plainHere.map(p => p.ownBp)),
-                        ),
+                        kind: plainKind,
                         plain: true,
                       },
                     ]

@@ -6,22 +6,19 @@ import type { Departure, HaplotypeDepartures } from './walkDepartures.ts'
  * What a haplotype's change states against R. A `deletion` runs no bp of the
  * haplotype's own where it leaves R's out, an `insertion` leaves none of R's
  * out where it runs its own, and a `replacement` does both, at any size on
- * either side. An `inversion` walks R against it, a `duplication` walks a
- * stretch of R again, and a `shift` pairs a loss with a gain of about its size
- * near it.
+ * either side. An `inversion` walks R against it, and a `duplication` walks a
+ * stretch of R again.
  */
 export type MarkKind =
   | 'insertion'
   | 'deletion'
   | 'replacement'
   | 'inversion'
-  | 'shift'
   | 'duplication'
 
 // A mark's two sides: `refLength`, the bp of R its departures leave out, and
 // `altLength`, the bp they run, so `delta` is `altLength - refLength`. A
-// duplication states the bp it walks again and their span on R, and a shift
-// the size of its loss.
+// duplication states the bp it walks again and their span on R.
 export interface Mark {
   kind: MarkKind
   refStart: number
@@ -31,7 +28,6 @@ export interface Mark {
   delta: number
   repeatedBp?: number
   copied?: [number, number]
-  shiftedBp?: number
 }
 
 // A mark in a structuralForms result: `site` indexes its `sites`, and `state`
@@ -91,9 +87,7 @@ export interface Site {
  * too rare to stand alone that agrees with no common state; `key` joins them.
  * `marks` are its states' marks in R order, those of shared sites included,
  * and `net` sums them, counting at each site a piece that two summed sites
- * share. `onlyShifts` is true where every mark outside the shared sites is a
- * shift and every site has a call: R's length, with a stretch aligned
- * elsewhere. The `other` form, key `*` (OTHER_STATE), holds the haplotypes no
+ * share. The `other` form, key `*` (OTHER_STATE), holds the haplotypes no
  * common form fits and states nothing of them.
  */
 export interface Form {
@@ -102,7 +96,6 @@ export interface Form {
   states: string[]
   marks: SiteMark[]
   net: number
-  onlyShifts: boolean
 }
 
 export interface FormsOptions {
@@ -145,11 +138,6 @@ export const STRUCTURAL_BP = 50
 
 export const FLOOR_PRESETS = [50, 1000, 10_000] as const
 
-// The smallest loss a shift pairs, and how far apart in size its two sides may
-// be, as a share of the larger
-export const SHIFT_MIN_BP = 1000
-export const SHIFT_TOLERANCE = 0.1
-
 // A form's state at a site where it keeps R's structure, where its walks have
 // no call, where it makes a change too rare to stand alone that agrees with no
 // common state, and the `other` form's, which states nothing
@@ -189,29 +177,18 @@ const twoFigures = (n: number) => {
   return Math.round(Math.round(n / unit) * unit)
 }
 
-// Whether a shift's net change says more than its two-figure size can: at
-// least the floor, and at least that size's last figure
-const shiftChanges = (m: Mark, floorBp = 0) =>
-  Math.abs(m.delta) >= Math.max(floorBp, figureUnit(m.shiftedBp!))
-
 /**
- * A mark's state, its size change to two significant figures: one repeat
- * unit is one state wherever the walk's boundaries fall (22,201 and 22,204 bp
- * are both `+22000`), and two units another. An inversion keys on its
- * span. A shift keys on its size, and on
- * its net change where that reaches `floorBp` and the size's last figure:
- * `s94000` rounds to 1 kb, so a 94 kb shift 62 bp short is `s94000` and one
- * 2.8 kb longer `s94000+2800`.
+ * A mark's state, its kind and its size change to two significant figures:
+ * one repeat unit is one state wherever the walk's boundaries fall (22,201 and
+ * 22,204 bp are both `+22000`), and two units another. A deletion keys as `-`
+ * and an insertion as `+`, a replacement as `r-` or `r+` and a duplication as
+ * `d`. An inversion keys on its span.
  */
-export function stateKey(m: Mark, floorBp = STRUCTURAL_BP) {
+export function stateKey(m: Mark) {
   const sign = m.delta > 0 ? '+' : '-'
   switch (m.kind) {
     case 'inversion':
       return `v${twoFigures(Math.max(Math.abs(m.delta), m.refEnd - m.refStart, 1))}`
-    case 'shift':
-      return shiftChanges(m, floorBp)
-        ? `s${twoFigures(m.shiftedBp!)}${sign}${twoFigures(Math.abs(m.delta))}`
-        : `s${twoFigures(m.shiftedBp!)}`
     case 'replacement':
       return `r${sign}${twoFigures(Math.abs(m.delta))}`
     case 'duplication':
@@ -242,11 +219,13 @@ const deltaOf = (d: Departure) => d.altLength - refOf(d)
 const isStructural = (d: Departure) =>
   deltaOf(d) !== 0 || d.invertedBp > 0 || d.repeatedBp > 0
 
-// The structural departures nearer than `joinBp` on R joined, summing their
-// sides
-export function joinDepartures(departures: Departure[], joinBp: number) {
+// A departure under STRUCTURAL_BP on both sides, which no mark states alone
+const isSmall = (d: Departure) =>
+  refOf(d) < STRUCTURAL_BP && d.altLength < STRUCTURAL_BP
+
+function joinRun(departures: Departure[], joinBp: number) {
   const out: Joined[] = []
-  for (const d of departures.filter(isStructural)) {
+  for (const d of departures) {
     const last = out.at(-1)
     if (last && d.refStart - last.refEnd < joinBp) {
       last.refEnd = Math.max(last.refEnd, d.refEnd)
@@ -279,6 +258,22 @@ export function joinDepartures(departures: Departure[], joinBp: number) {
   return out
 }
 
+// The structural departures nearer than `joinBp` on R joined, summing their
+// sides. A small one joins only another small one, so an indel no mark states
+// alone neither names a change beside it nor widens it, while a repeat's
+// change that walks split into small pieces still adds up
+export function joinDepartures(departures: Departure[], joinBp: number) {
+  const structural = departures.filter(isStructural)
+  return joinRun(structural.filter(isSmall), joinBp)
+    .concat(
+      joinRun(
+        structural.filter(d => !isSmall(d)),
+        joinBp,
+      ),
+    )
+    .sort((a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd)
+}
+
 function markOf(d: Joined, floorBp: number): Mark | undefined {
   const size = Math.abs(d.delta)
   const kind: MarkKind | undefined =
@@ -303,49 +298,6 @@ function markOf(d: Joined, floorBp: number): Mark | undefined {
   )
 }
 
-/**
- * A deletion of 1 kb or more and an insertion or duplication within 10% of its
- * size, no further from it than twice that size, are R's length with the
- * sequence placed elsewhere: at C4, 95 haplotypes pair a 32.7 kb deletion with
- * a gain of its size. A replacement pairs with nothing
- */
-export function pairShifts(marks: Mark[]) {
-  const used = new Set<Mark>()
-  const shifts: Mark[] = []
-  const losses = marks
-    .filter(m => m.kind === 'deletion' && -m.delta >= SHIFT_MIN_BP)
-    .sort((a, b) => a.delta - b.delta)
-  for (const d of losses) {
-    const size = -d.delta
-    const gain = marks.find(
-      m =>
-        !used.has(m) &&
-        (m.kind === 'insertion' || m.kind === 'duplication') &&
-        Math.abs(m.delta - size) <= SHIFT_TOLERANCE * Math.max(m.delta, size) &&
-        Math.max(m.refStart - d.refEnd, d.refStart - m.refEnd) <= 2 * size,
-    )
-    if (gain) {
-      used.add(gain)
-      used.add(d)
-      const refStart = Math.min(d.refStart, gain.refStart)
-      const refEnd = Math.max(d.refEnd, gain.refEnd)
-      const delta = d.delta + gain.delta
-      shifts.push({
-        kind: 'shift',
-        refStart,
-        refEnd,
-        refLength: d.refLength + gain.refLength,
-        altLength: d.altLength + gain.altLength,
-        delta,
-        shiftedBp: size,
-      })
-    }
-  }
-  return [...marks.filter(m => !used.has(m)), ...shifts].sort(
-    (a, b) => a.refStart - b.refStart,
-  )
-}
-
 // The widest site whose plain changes sum into one per haplotype. The gate
 // windows' repeats that walks split run up to 600 bp, and the next wider
 // informative sites, 3.8 kb and up, hold separate changes
@@ -354,7 +306,7 @@ export const SUMMED_SITE_BP = 1000
 /**
  * A haplotype's departures joined and kept where they touch the window, its
  * marks, and its plain pieces: the joined departures that make no mark of
- * their own kind, an inversion, duplication or shift
+ * their own kind, an inversion or duplication
  */
 function haplotypePieces(
   departures: Departure[],
@@ -365,29 +317,18 @@ function haplotypePieces(
   const pieces = joinDepartures(departures, joinBp).filter(
     d => !window || (d.refEnd >= window.start && d.refStart <= window.end),
   )
-  const pieceOf = new Map<Mark, Joined>()
-  for (const d of pieces) {
-    const mark = markOf(d, floorBp)
-    if (mark) {
-      pieceOf.set(mark, d)
-    }
-  }
-  const marks = pairShifts([...pieceOf.keys()])
-  const kept = new Set(marks)
-  const ownKind = new Set(
-    [...pieceOf].flatMap(([m, d]) =>
-      kept.has(m) && PLAIN_KINDS.has(m.kind) ? [] : [d],
-    ),
-  )
+  const marked = pieces.map(d => ({ d, mark: markOf(d, floorBp) }))
   return {
-    marks,
-    plain: pieces.filter(d => !ownKind.has(d)),
+    marks: marked.flatMap(({ mark }) => (mark ? [mark] : [])),
+    plain: marked.flatMap(({ d, mark }) =>
+      mark && !PLAIN_KINDS.has(mark.kind) ? [] : [d],
+    ),
   }
 }
 
 /**
  * A haplotype's marks of at least `floorBp`: its departures nearer than
- * `joinBp` on R joined, those touching the window kept, and shifts paired.
+ * `joinBp` on R joined, and those touching the window kept.
  * structuralForms then sums the plain changes at each site, so these are the
  * marks the sites come from, not each haplotype's state.
  */
@@ -437,7 +378,7 @@ const sumDelta = (marks: Mark[]) => marks.reduce((s, m) => s + m.delta, 0)
 /**
  * Two net changes agree where both are under `floorBp`, or they differ by
  * under `floorBp`, under a tenth of the larger, or under the last figure a
- * state key gives a change of `size`: a shift of 32.7 kb keys its net to 1 kb
+ * state key gives a change of `size`
  */
 export const agrees = (a: number, b: number, floorBp: number, size = 0) =>
   Math.max(Math.abs(a), Math.abs(b)) < floorBp ||
@@ -449,9 +390,7 @@ export const agrees = (a: number, b: number, floorBp: number, size = 0) =>
     )
 
 const sizeOf = (m: Mark) =>
-  m.kind === 'inversion'
-    ? m.refEnd - m.refStart
-    : (m.shiftedBp ?? Math.abs(m.delta))
+  m.kind === 'inversion' ? m.refEnd - m.refStart : Math.abs(m.delta)
 
 export const largestChange = (marks: Mark[]) =>
   marks.reduce((most, m) => Math.max(most, sizeOf(m)), 0)
@@ -741,12 +680,12 @@ export function structuralForms(
   const placeEnds = new Map<string, Set<number>>()
   for (const m of marksBy.flat()) {
     const p = place.get(m)!
-    const key = `${stateKey(m, floorBp)}@${p.start}`
+    const key = `${stateKey(m)}@${p.start}`
     placeEnds.set(key, (placeEnds.get(key) ?? new Set()).add(p.end))
   }
   const placedKey = (m: Mark) => {
     const p = place.get(m)!
-    const key = `${stateKey(m, floorBp)}@${p.start}`
+    const key = `${stateKey(m)}@${p.start}`
     return placeEnds.get(key)!.size > 1 ? `${key}-${p.end}` : key
   }
   const marksAt = rawAt.map(
@@ -755,7 +694,7 @@ export function structuralForms(
         [...at].map(([site, ms]) => {
           ms.sort((a, b) => a.refStart - b.refStart || a.refEnd - b.refEnd)
           const state = ms
-            .map(m => (summed[site]! ? stateKey(m, floorBp) : placedKey(m)))
+            .map(m => (summed[site]! ? stateKey(m) : placedKey(m)))
             .join(';')
           return [site, ms.map((m): SiteMark => ({ ...m, site, state }))]
         }),
@@ -927,22 +866,15 @@ export function structuralForms(
   const forms = kept.map(({ states, members }): Form => {
     const marks = onceEach(
       spans,
-      floorBp,
       keyed.flatMap((i, k) => stateAt(i, states[k]!)),
     ).sort((a, b) => a.refStart - b.refStart)
-    const own = marks.filter(m => !sites[m.site]!.shared)
     const formStates = states.filter((_, k) => told[k]!)
-    const onlyShifts =
-      own.length > 0 &&
-      own.every(m => m.kind === 'shift') &&
-      !formStates.some(s => s === NO_CALL_STATE || s === RARER_STATE)
     return {
       members,
       key: formStates.join('|'),
       states: formStates,
       marks,
       net: sumDelta(marks),
-      onlyShifts,
     }
   })
   const otherForm: Form[] =
@@ -954,7 +886,6 @@ export function structuralForms(
             states: informative.map(() => OTHER_STATE),
             marks: [],
             net: 0,
-            onlyShifts: false,
           },
         ]
       : []
@@ -973,17 +904,13 @@ export function structuralForms(
 }
 
 // A rarer mark over several sites states itself at each, and counts once
-function onceEach(
-  spans: [number, number][],
-  floorBp: number,
-  marks: SiteMark[],
-) {
+function onceEach(spans: [number, number][], marks: SiteMark[]) {
   const seen = new Set<string>()
   return marks.filter(m => {
     const over = sitesOver(spans, m)
     const key =
       over.length > 1
-        ? `${stateKey(m, floorBp)} ${over.join(',')}`
+        ? `${stateKey(m)} ${over.join(',')}`
         : `${m.kind} ${m.refStart} ${m.refEnd} ${m.delta}`
     const fresh = !seen.has(key)
     seen.add(key)
@@ -1035,27 +962,34 @@ export function sizeTag(n: number) {
       : `${r}bp`
 }
 
+// A mark's two sides, R's first, or the one that has bp where the other has
+// none
+const sides = (m: Mark) =>
+  m.refLength === 0
+    ? sizeTag(m.altLength)
+    : m.altLength === 0
+      ? sizeTag(m.refLength)
+      : `${sizeTag(m.refLength)}->${sizeTag(m.altLength)}`
+
 /**
  * A mark as a short token: "del 18.4kb", "ins 22kb", "repl 32.7kb->58.7kb",
- * "inv 12kb", "dup 49kb", "shift 94.2kb->94.1kb". A deletion gives the bp of R
- * it leaves out, an insertion the bp of its own, and a replacement and a shift
- * both, R's first, at any ratio: "repl 86kb->1bp"
+ * "dup 94.1kb", "inv 12kb". A deletion gives the bp of R it leaves out, an
+ * insertion and a duplication at a point the bp they run, and a replacement,
+ * or a duplication that also leaves R out, both, R's first, at any ratio:
+ * "repl 2.65kb->1bp", "dup 113kb->207kb". An inversion gives its span
  */
 export function markTag(m: Mark | SiteMark) {
-  const span = m.refEnd - m.refStart
   switch (m.kind) {
     case 'insertion':
-      return `ins ${sizeTag(m.altLength)}`
+      return `ins ${sides(m)}`
     case 'deletion':
-      return `del ${sizeTag(m.refLength)}`
+      return `del ${sides(m)}`
     case 'duplication':
-      return `dup ${sizeTag(m.delta)}`
+      return `dup ${sides(m)}`
     case 'inversion':
-      return `inv ${sizeTag(span)}`
-    case 'shift':
-      return `shift ${sizeTag(m.refLength)}->${sizeTag(m.altLength)}`
+      return `inv ${sizeTag(m.refEnd - m.refStart)}`
     case 'replacement':
-      return `repl ${sizeTag(m.refLength)}->${sizeTag(m.altLength)}`
+      return `repl ${sides(m)}`
   }
 }
 
@@ -1109,37 +1043,73 @@ export function formStateAt(
         : (form.marks.find(m => m.site === site)?.state ?? REFERENCE_STATE)
 }
 
+// A form's tokens outside the shared sites, largest change first: each mark's
+// markTag, then "rarer" and "no call" once per site
+function ownTokens(
+  form: { marks: (Mark | SiteMark)[]; states: string[] },
+  result?: Pick<StructuralForms, 'sites'>,
+) {
+  const own = form.marks.filter(
+    m => !('site' in m && result?.sites[m.site]?.shared === true),
+  )
+  const each = (token: string, state: string) =>
+    form.states.filter(s => s === state).map(() => token)
+  return {
+    tokens: own
+      .toSorted((a, b) => sizeOf(b) - sizeOf(a))
+      .map(markTag)
+      .concat(each('rarer', RARER_STATE), each('no call', NO_CALL_STATE)),
+    shared: own.length < form.marks.length,
+  }
+}
+
 /**
  * A form for a row label of about 20 characters: its largest change as
  * markTag gives it, then " +N" counting the rest describeForm names, as in
  * "del 18.4kb" or "ins 78kb +1"; "ref" where it makes no change. Given the
  * form's result, the tag leaves out the marks every form shares, so a form
  * with no other change is "shared": naming the change there would read as if
- * the other rows lacked it.
+ * the other rows lacked it. Where other forms of the result would read the
+ * same, it names the changes that tell it from them, each the largest of those
+ * that the most of them lack: at C4, "del 32.7kb, del 6.37kb" and "del 32.7kb,
+ * repl 6.32kb->32.7kb" where both had read "del 32.7kb +1".
  */
 export function formTag(
   form: { marks: (Mark | SiteMark)[]; states: string[]; key?: string },
-  result?: Pick<StructuralForms, 'sites'>,
+  result?: Pick<StructuralForms, 'sites'> &
+    Partial<Pick<StructuralForms, 'forms'>>,
 ) {
-  const isShared = (m: Mark | SiteMark) =>
-    'site' in m && result?.sites[m.site]?.shared === true
-  const own = form.marks.filter(m => !isShared(m))
-  const [largest] = own.toSorted((a, b) => sizeOf(b) - sizeOf(a))
-  const rarer = form.states.filter(s => s === RARER_STATE).length
-  const uncalled = form.states.filter(s => s === NO_CALL_STATE).length
-  const head = largest
-    ? markTag(largest)
-    : rarer > 0
-      ? 'rarer'
-      : uncalled > 0
-        ? 'no call'
-        : own.length < form.marks.length
-          ? 'shared'
-          : 'ref'
-  const rest = own.length + rarer + uncalled - 1
+  const { tokens, shared } = ownTokens(form, result)
+  const [head = shared ? 'shared' : 'ref', ...rest] = tokens
+  const readAlike = (other: string[]) =>
+    other.length === tokens.length && other[0] === tokens[0]
+  let alike = (result?.forms ?? [])
+    .filter(f => f !== form && f.key !== OTHER_STATE)
+    .map(f => ownTokens(f, result).tokens)
+    .filter(readAlike)
+  const lacking = (t: string) => alike.filter(other => !other.includes(t))
+  const telling = (candidates: string[]) =>
+    candidates.reduce<string | undefined>(
+      (best, t) =>
+        lacking(t).length > (best === undefined ? 0 : lacking(best).length)
+          ? t
+          : best,
+      undefined,
+    )
+  const shown = [head]
+  let unshown = rest
+  let told = telling(unshown)
+  while (told !== undefined) {
+    const t = told
+    const at = unshown.indexOf(t)
+    shown.push(t)
+    unshown = unshown.filter((_, i) => i !== at)
+    alike = alike.filter(other => other.includes(t))
+    told = telling(unshown)
+  }
   return form.key === OTHER_STATE
     ? 'other'
-    : rest > 0
-      ? `${head} +${rest}`
-      : head
+    : unshown.length > 0
+      ? `${shown.join(', ')} +${unshown.length}`
+      : shown.join(', ')
 }

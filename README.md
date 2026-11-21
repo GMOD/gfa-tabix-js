@@ -926,7 +926,7 @@ result.forms.map(f => formTag(f, result))
   departure with no step on it; `walkDepartures` does the same for any cut
 - `structuralForms` groups the haplotypes that make the same changes at every
   informative site. Each change is a `Mark`: an insertion, deletion,
-  replacement, inversion, shift or duplication
+  replacement, inversion or duplication
 - Each mark in a result names its `site` in `sites` and its `state` key there. A
   site is `edge`, `shared` (no form differs there) or informative, and
   `formStateAt(result, form, site)` gives a form's state key at any of them.
@@ -934,9 +934,6 @@ result.forms.map(f => formTag(f, result))
   change, no call and a rare change among no-calls
 - `placed` counts the haplotypes in a form, so a form's share is its members
   over `placed`
-- `form.onlyShifts` is true where every change outside the shared sites is a
-  shift and every site has a call: the reference's length with a stretch aligned
-  elsewhere, as in 95 of C4's haplotypes
 - `markTag`, `formTag` and `describeForm` label marks and forms, as
   [Labels](#labels) shows
 - Every result holds plain data, so a worker can post it, and regrouping at
@@ -944,14 +941,14 @@ result.forms.map(f => formTag(f, result))
 - [docs/structural-forms.md](docs/structural-forms.md) gives the grouping rules
   and the measurements behind them
 
-| Option          | Effect                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `window`        | The region; marks must touch it, and `auto` reads its width                                                               |
-| `floorBp`       | The smallest change a form tells apart; `auto` gives 50 bp, 1 kb or 10 kb by width                                        |
-| `minCarriers`   | The fewest haplotypes a state or form needs; 1% of them, at least one, by default                                         |
-| `joinBp`        | Departures of one haplotype nearer than this on the reference join; default 50                                            |
-| `exclude`       | Samples to leave out, such as a second reference carried as a haplotype; none by default                                  |
-| `foldRareForms` | Fold states and forms under `minCarriers` into the nearest common one they agree with, else `~` or `other`; on by default |
+| Option          | Effect                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `window`        | The region; marks must touch it, and `auto` reads its width                                                                          |
+| `floorBp`       | The smallest change a form tells apart; `auto` gives 50 bp, 1 kb or 10 kb by width                                                   |
+| `minCarriers`   | The fewest haplotypes a state or form needs; 1% of them, at least one, by default                                                    |
+| `joinBp`        | Departures of one haplotype nearer than this on the reference join, one under 50 bp on both sides only with another such; default 50 |
+| `exclude`       | Samples to leave out, such as a second reference carried as a haplotype; none by default                                             |
+| `foldRareForms` | Fold states and forms under `minCarriers` into the nearest common one they agree with, else `~` or `other`; on by default            |
 
 ### Labels
 
@@ -959,32 +956,35 @@ result.forms.map(f => formTag(f, result))
   common change gives `del 6.37kb`
 - `formTag` names a form in about 20 characters for a row label: its largest
   change's `markTag`, then ` +N` counting the rest. Given the result, it leaves
-  out the changes every form shares
+  out the changes every form shares, and where two forms would read the same it
+  names the changes that tell them apart: C4's `del 32.7kb, del 6.37kb` and
+  `del 32.7kb, repl 6.32kb->32.7kb`
 - `describeForm` lists every change's `markTag`, largest first, comma-separated
 - Sizes take 3 significant figures with the unit attached (`94bp`, `6.46kb`,
   `1.2Mb`), as `sizeTag` writes them
 - A change is a deletion where it runs 0 bp of the haplotype's own, an insertion
   where it leaves out 0 bp of the reference, and a replacement where both sides
-  have bp, at any ratio: no size threshold names one. A deletion or an insertion
-  gives its one size, and a replacement or a shift both, the reference's first
+  have bp, at any ratio: no size threshold names one. A mark gives one size
+  where a side is 0 bp and both otherwise, the reference's first
 - A mark is made of the departures that change the reference's length, walk it
   backwards or walk it again, so a SNP beside a deletion neither widens it nor
-  names it. `refLength` is the reference's side, `altLength` the haplotype's,
-  and `delta` their difference
+  names it. A departure under 50 bp on both sides joins only another such, so a
+  small indel beside a change does not name it either, while a repeat's change
+  that the walks split into small pieces still adds up. `refLength` is the
+  reference's side, `altLength` the haplotype's, and `delta` their difference
 - A state is one kind of change, so its name holds for every carrier: 119 bp
   left out and 1 bp walked in place of 120 are two states
-- A shift pairs a deletion with an insertion or duplication; a replacement pairs
-  with nothing
+- A deletion and an insertion elsewhere stay two changes, whatever their sizes
 
-| Change                         | Token                                     |
-| ------------------------------ | ----------------------------------------- |
-| deletion, insertion            | `del 18.4kb`, `ins 22kb`                  |
-| replacement                    | `repl 32.7kb->58.7kb`, `repl 1bp->13.7kb` |
-| shift                          | `shift 32.7kb->32.7kb`                    |
-| inversion, duplication         | `inv 12kb`, `dup 49kb`                    |
-| no change, only shared changes | `ref`, `shared`                           |
-| rare change, no call           | `rarer`, `no call`                        |
-| more changes, in `formTag`     | `del 32.7kb +1`                           |
+| Change                         | Token                                                |
+| ------------------------------ | ---------------------------------------------------- |
+| deletion, insertion            | `del 18.4kb`, `ins 22kb`                             |
+| replacement                    | `repl 32.7kb->58.7kb`, `repl 37.2kb->6bp`            |
+| duplication                    | `dup 94.1kb`, and with R left out `dup 113kb->207kb` |
+| inversion                      | `inv 12kb`                                           |
+| no change, only shared changes | `ref`, `shared`                                      |
+| rare change, no call           | `rarer`, `no call`                                   |
+| more changes, in `formTag`     | `del 32.7kb +1`, `del 32.7kb, del 6.37kb`            |
 
 ## Contained cuts
 

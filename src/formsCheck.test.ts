@@ -133,23 +133,23 @@ test('a summed site states a net change, so pieces that cancel agree with ref', 
   expect(kinds(input, result)).toEqual([])
 })
 
-test("a shift's net agrees to the last figure its key gives it", () => {
-  const shift = (net: number) => [
+test("a change's net agrees to the last figure its key gives it", () => {
+  const changes = (net: number) => [
     dep(1000, 1000, 32_858),
     dep(12_000, 44_737 + net, 0),
   ]
-  const shifted = [
+  const sized = [
     ...haps('R', 4),
-    ...haps('S', 3, shift(0)),
-    ...haps('T', 2, shift(-120)),
+    ...haps('S', 3, changes(0)),
+    ...haps('T', 2, changes(-120)),
   ]
-  const result = structuralForms(shifted, {
+  const result = structuralForms(sized, {
     window: WINDOW,
     floorBp: 50,
     minCarriers: 3,
   })
   expect(result.forms.map(f => f.members.length)).toEqual([5, 4])
-  expect(kinds(shifted, result)).toEqual([])
+  expect(kinds(sized, result)).toEqual([])
 })
 
 // A result to hand-edit into a wrong one: `form` finds a member's form and
@@ -211,7 +211,7 @@ test("the checker reports a wider site's change stated at its place with another
 test("the checker reports a wider site's change stated at its place and net with another size", () => {
   const { result, state } = edited()
   const m = state(10_000, 'D0#1').marks[0]!
-  state(10_000, 'D0#1').marks[0] = { ...m, kind: 'shift', shiftedBp: 40_000 }
+  state(10_000, 'D0#1').marks[0] = { ...m, kind: 'inversion', refEnd: 50_000 }
   expect(reported(result)).toEqual(['size'])
 })
 
@@ -235,21 +235,21 @@ test('the checker reports a change that lies in no site', () => {
 })
 
 test("the checker reports a member's changes elsewhere in a wider site than the form's, though they touch", () => {
-  const shifted = [
+  const placed = [
     ...haps('R', 80),
     ...haps('A', 10, [dep(10_000, 20_000, 0)]),
     ...haps('B', 10, [dep(15_500, 25_500, 0)]),
   ]
-  const result = structuralForms(shifted, { window: WINDOW, floorBp: 50 })
+  const result = structuralForms(placed, { window: WINDOW, floorBp: 50 })
   expect(result.forms.map(f => f.key).sort()).toEqual([
     '-10000@10000',
     '-10000@15500',
     '0',
   ])
-  expect(formContradictions(shifted, result, { window: WINDOW })).toEqual([])
+  expect(formContradictions(placed, result, { window: WINDOW })).toEqual([])
   const into = result.forms.findIndex(f => f.members.includes('A0#1'))
   expect(
-    formContradictions(shifted, moved(result, 'B0#1', into), {
+    formContradictions(placed, moved(result, 'B0#1', into), {
       window: WINDOW,
     }).map(c => [c.kind, c.haplotype]),
   ).toEqual([['place', 'B0#1']])
@@ -282,15 +282,14 @@ test("the checker reports a member's changes in a wider site that the form does 
   ).toEqual([['count', 'X#1']])
 })
 
-// T#1 deletes 5 kb and inserts it again at the common 100 bp insertion's
-// site: a shift, whose insertion is no change of its own there
-test("a rare shift whose insertion lies at a summed site is that site's change, kept apart", () => {
-  const shifted = [
+// T#1 deletes 5 kb and inserts 5 kb at the common 100 bp insertion's site
+test("a rare deletion and an insertion at a summed site are two changes, the insertion that site's", () => {
+  const apart = [
     ...haps('R', 10),
     ...haps('S', 5, [dep(50_000, 50_000, 100)]),
     hap('T#1', [dep(40_000, 45_000, 0), dep(50_000, 50_000, 5000)]),
   ]
-  const result = structuralForms(shifted, {
+  const result = structuralForms(apart, {
     window: WINDOW,
     floorBp: 50,
     minCarriers: 3,
@@ -298,16 +297,16 @@ test("a rare shift whose insertion lies at a summed site is that site's change, 
   })
   expect(
     result.forms.find(f => f.members.includes('T#1'))!.marks.map(m => m.kind),
-  ).toEqual(['shift'])
-  expect(formContradictions(shifted, result, { window: WINDOW })).toEqual([])
+  ).toEqual(['deletion', 'insertion'])
+  expect(formContradictions(apart, result, { window: WINDOW })).toEqual([])
 })
 
-test('the checker takes only the tolerance and constants from structuralForms', () => {
+test('the checker takes only the tolerance, the naming rule and constants from structuralForms', () => {
   const source = readFileSync(new URL('formsCheck.ts', import.meta.url), 'utf8')
   const imported = [
     ...source.matchAll(/^import \{([^}]*)\} from '\.\/structuralForms\.ts'/gm),
   ].flatMap(([, names]) => names!.split(',').map(name => name.trim()))
   expect(
     imported.filter(name => name !== '' && name !== name.toUpperCase()),
-  ).toEqual(['agrees'])
+  ).toEqual(['agrees', 'changeKind'])
 })

@@ -6,14 +6,12 @@ import {
   REFERENCE_STATE,
   autoFloor,
   changeKind,
-  changeName,
   describeForm,
   formStateAt,
   formTag,
   haplotypeMarks,
   markTag,
   minCarriersFor,
-  pairShifts,
   stateKey,
   structuralForms,
 } from './structuralForms.ts'
@@ -117,7 +115,7 @@ test('a mark is named by the bp of R it leaves out and the bp of its own it runs
   ])
 })
 
-test('departures under 50 bp of R apart join, keeping their net change', () => {
+test('changes under 50 bp of R apart join, and an indel under 50 bp between them joins neither', () => {
   expect(
     haplotypeMarks(
       [dep(1000, 1400, 0), dep(1410, 1410, 2), dep(1420, 1500, 0)],
@@ -125,12 +123,12 @@ test('departures under 50 bp of R apart join, keeping their net change', () => {
     ),
   ).toEqual([
     {
-      kind: 'replacement',
+      kind: 'deletion',
       refStart: 1000,
       refEnd: 1500,
       refLength: 480,
-      altLength: 2,
-      delta: -478,
+      altLength: 0,
+      delta: -480,
     },
   ])
   expect(
@@ -157,7 +155,7 @@ test('a mark is built from the departures that change length: a SNP beside one n
     ['deletion', 1000, 13_152, 0, 'del 12.2kb'],
   ])
   expect(said([dep(985, 985, 2), dep(1000, 13_152, 0)])).toEqual([
-    ['replacement', 985, 13_152, 2, 'repl 12.2kb->2bp'],
+    ['deletion', 1000, 13_152, 0, 'del 12.2kb'],
   ])
 })
 
@@ -220,13 +218,50 @@ test("a summed site's change is named by the pieces it sums", () => {
   ])
 })
 
-test('a replacement pairs into no shift, however few bp of its own it runs', () => {
+test('a deletion and an insertion of one size are two changes, whatever the sizes', () => {
+  expect(
+    haplotypeMarks(
+      [dep(10_000, 30_000, 0), dep(50_000, 50_000, 20_000)],
+      {},
+    ).map(markTag),
+  ).toEqual(['del 20kb', 'ins 20kb'])
   expect(
     haplotypeMarks(
       [dep(10_000, 30_000, 12), dep(50_000, 50_000, 20_000)],
       {},
     ).map(markTag),
   ).toEqual(['repl 20kb->12bp', 'ins 20kb'])
+})
+
+// CYP2D6, 38 haplotypes: 12,156 and 1,564 bp of their own one base apart, and
+// 1 bp of R left out 7 bp on
+test('an indel under 50 bp on both sides joins no larger change, while such pieces still sum', () => {
+  const said = (departures: Departure[]) =>
+    haplotypeMarks(departures, {}).map(markTag)
+  expect(
+    said([dep(1000, 1000, 12_156), dep(1001, 1001, 1564), dep(1008, 1009, 0)]),
+  ).toEqual(['ins 13.7kb'])
+  expect(said([dep(1000, 1049, 0), dep(1060, 1109, 0)])).toEqual(['del 98bp'])
+  expect(
+    said([dep(1000, 1000, 30), dep(1010, 1010, 12_000), dep(1020, 1050, 0)]),
+  ).toEqual(['ins 12kb'])
+})
+
+// AMY1: a 94 kb deletion, then a step back over its end that walks 19 kb of R
+// reversed and 188 kb again, with a 2 bp insertion in the stretch walked again
+test('large departures that overlap on R join across a small one between them', () => {
+  const marks = haplotypeMarks(
+    [
+      dep(1000, 95_000, 0),
+      dep(40_000, 40_000, 2),
+      dep(94_000, 113_000, 19_000, { invertedBp: 19_000 }),
+      dep(112_990, 112_990, 188_000, { repeatedBp: 64_000 }),
+    ],
+    { floorBp: 1000 },
+  )
+  expect(marks.map(m => [m.kind, m.refStart, markTag(m)])).toEqual([
+    ['duplication', 1000, 'dup 113kb->207kb'],
+  ])
 })
 
 test('forms group the haplotypes that match at every informative site', () => {
@@ -343,65 +378,19 @@ test('describeForm lists every change, largest first', () => {
   ).toBe('ins 19kb, del 2kb, del 1kb')
 })
 
-// GSTM1: 77 haplotypes in the sidecar carry an 18 kb deletion over the gene
-// and an 18 kb insertion at its end, which is the reference's length
-test('a deletion and an insertion of one size pair into a shift', () => {
+test('a duplication gives the bp it walks, and both sides where it leaves R out too', () => {
   expect(
-    pairShifts([
-      mark('deletion', 100, 18_200, -18_100),
-      mark('insertion', 20_000, 20_000, 17_000),
-      mark('insertion', 30_000, 30_000, 300),
-    ]),
-  ).toEqual([
-    {
-      kind: 'shift',
-      refStart: 100,
-      refEnd: 20_000,
-      refLength: 18_100,
-      altLength: 17_000,
-      delta: -1100,
-      shiftedBp: 18_100,
-    },
-    mark('insertion', 30_000, 30_000, 300),
-  ])
-  // over 10% apart in size, far apart on R, or a replacement: no shift
+    markTag({ ...mark('duplication', 0, 0, 49_000), repeatedBp: 49_000 }),
+  ).toBe('dup 49kb')
   expect(
-    pairShifts([
-      mark('deletion', 100, 18_200, -18_100),
-      mark('insertion', 20_000, 20_000, 6400),
-    ]),
-  ).toHaveLength(2)
-  expect(
-    pairShifts([
-      mark('deletion', 100, 18_200, -18_100),
-      mark('insertion', 220_000, 220_000, 18_100),
-    ]),
-  ).toHaveLength(2)
-  expect(
-    pairShifts([
-      mark('replacement', 0, 800_000, -8000),
-      mark('insertion', 9000, 9000, 8000),
-    ]).map(m => m.kind),
-  ).toEqual(['replacement', 'insertion'])
+    markTag({
+      ...mark('duplication', 0, 113_000, 94_000),
+      repeatedBp: 64_000,
+    }),
+  ).toBe('dup 113kb->207kb')
 })
 
-test("a shift keys on its net change where that passes the floor and the size's last figure, and its tag gives both sides", () => {
-  const shift = (delta: number, shiftedBp = 94_000): Mark => ({
-    ...mark('shift', 0, 112_000, delta),
-    refLength: shiftedBp,
-    altLength: shiftedBp + delta,
-    shiftedBp,
-  })
-  expect(stateKey(shift(-62))).toBe('s94000')
-  expect(stateKey(shift(900))).toBe('s94000')
-  expect(stateKey(shift(2800))).toBe('s94000+2800')
-  expect(stateKey(shift(2800), 5000)).toBe('s94000')
-  expect(stateKey(shift(-150, 2000))).toBe('s2000-150')
-  expect(changeName(shift(-62))).toBe('shift 94kb->93.9kb')
-  expect(changeName(shift(2800))).toBe('shift 94kb->96.8kb')
-})
-
-test('a step back along R is a duplication, which shifts like an insertion', () => {
+test('a step back along R is a duplication, and a deletion beside it stays one', () => {
   const copy = dep(50_000, 50_000, 49_000, {
     repeatedBp: 49_000,
     copied: [1000, 50_000],
@@ -423,7 +412,7 @@ test('a step back along R is a duplication, which shifts like an insertion', () 
   )
   expect(
     haplotypeMarks([copy, dep(60_000, 108_000, 0)], {}).map(m => m.kind),
-  ).toEqual(['shift'])
+  ).toEqual(['duplication', 'deletion'])
 })
 
 test('a gain at a site wider than 50 bp replaces it', () => {
@@ -449,7 +438,6 @@ test('a window with no change is one form', () => {
       members: ['A#1', 'A#2'],
       marks: [],
       net: 0,
-      onlyShifts: false,
     },
   ])
 })
@@ -1062,14 +1050,6 @@ test('markTag says a change in a short token', () => {
   expect(
     markTag({ ...mark('duplication', 0, 0, 49_000), repeatedBp: 49_000 }),
   ).toBe('dup 49kb')
-  expect(
-    markTag({
-      ...mark('shift', 0, 5000, 0),
-      refLength: 2000,
-      altLength: 2000,
-      shiftedBp: 2000,
-    }),
-  ).toBe('shift 2kb->2kb')
   expect(markTag(mark('insertion', 0, 0, 1_234_567))).toBe('ins 1.23Mb')
   expect(markTag(mark('deletion', 0, 999_600, -999_600))).toBe('del 1Mb')
 })
@@ -1097,42 +1077,35 @@ test('a replacement far smaller on one side is still a replacement, both sizes g
   expect(describeForm(loss)).toBe('repl 6.46kb->94bp')
 })
 
-// AMY1's H3r: R's length with 94 kb aligned elsewhere
-test('a form whose only own changes are shifts says so', () => {
-  const shift = [dep(10_000, 30_000, 0), dep(50_000, 50_000, 20_000)]
-  const shared = dep(80_000, 82_000, 0)
+// C4: forms of one 32.7 kb deletion and a gain elsewhere had each read
+// "del 32.7kb +1"
+test('forms that would read alike are told apart by the changes they differ in', () => {
+  const del = dep(10_000, 30_000, 0)
   const result = forms(
     [
-      ...haps('S', 4, [...shift, shared]),
-      ...haps('T', 4, [dep(10_000, 30_000, 0), shared]),
-      ...haps('R', 4, [shared]),
+      ...haps('R', 4),
+      ...haps('S', 4, [del, dep(50_000, 50_000, 2000)]),
+      ...haps('U', 4, [del, dep(70_000, 70_000, 5000)]),
+      ...haps('T', 4, [del]),
+      ...haps('V', 4, [del, dep(50_000, 50_000, 2000), dep(90_000, 92_000, 0)]),
+      ...haps('W', 4, [del, dep(50_000, 50_000, 2000), dep(95_000, 98_000, 0)]),
     ],
     { minCarriers: 2 },
   )
-  expect(
-    result.forms.map(f => [f.members.length, f.onlyShifts, formTag(f, result)]),
-  ).toEqual([
-    [4, false, 'shared'],
-    [4, true, 'shift 20kb->20kb'],
-    [4, false, 'del 20kb'],
+  const tagOf = (name: string) =>
+    formTag(
+      result.forms.find(f => f.members.includes(name))!,
+      result,
+    )
+  expect(['S0#1', 'U0#1', 'T0#1', 'V0#1', 'W0#1'].map(tagOf)).toEqual([
+    'del 20kb, ins 2kb',
+    'del 20kb, ins 5kb',
+    'del 20kb',
+    'del 20kb, del 2kb +1',
+    'del 20kb, del 3kb +1',
   ])
-  const uncalled = forms(
-    [
-      ...haps('S', 4, shift),
-      ...haps('D', 4, [dep(70_000, 72_000, 0)]),
-      ...Array.from({ length: 2 }, (_, i) =>
-        hap(`N${i}#1`, shift, [[0, 60_000]]),
-      ),
-    ],
-    { minCarriers: 2 },
-  )
-  expect(
-    uncalled.forms.map(f => [f.members.length, f.onlyShifts, formTag(f)]),
-  ).toEqual([
-    [4, true, 'shift 20kb->20kb'],
-    [4, false, 'del 2kb'],
-    [2, false, 'shift 20kb->20kb +1'],
-  ])
+  const s = result.forms.find(f => f.members.includes('S0#1'))!
+  expect(formTag(s)).toBe('del 20kb +1')
 })
 
 test('formTag names the largest change of a form and counts the rest', () => {

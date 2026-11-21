@@ -71,7 +71,6 @@ export {
   haplotypeMarks,
   markTag,
   minCarriersFor,
-  pairShifts,
   sizeTag,
   stateKey,
   structuralForms,
