@@ -1149,6 +1149,82 @@ export function unloadedRow(
 export const refRows = (rows: string[][]) =>
   rows.filter(c => c[3] === 'ref').sort((a, b) => +a[6]! - +b[6]!)
 
+const tokenCount = (field: string) =>
+  field === '.' ? 0 : field.split(',').length
+
+// A walk row's first and last choices, as route index and flip
+function endChoices(field: string) {
+  let route = 0
+  const ends: { first?: [number, number]; last?: [number, number] } = {}
+  if (field !== '.') {
+    for (const token of field.split(',')) {
+      const delta = Number.parseInt(token, 10)
+      const flip = delta & 1
+      route += (delta - flip) / 2
+      ends.first ??= [route, flip]
+      ends.last = [route, flip]
+    }
+  }
+  return ends
+}
+
+/**
+ * The steps a cut surely keeps of a tile whose extent lies strictly inside
+ * the stretch it draws, from the tile's lines before any is decoded: the
+ * `nsteps` of each `ref` and `walk` row of a walk `keep` takes, less the
+ * steps off R before a walk row's first step on R and after its last. Every
+ * step a row places on R lies within its tile's extent, so a cut over the
+ * extent keeps each row from its first step on R to its last, and every step
+ * between, as one stretch of a fragment, whether it is contained or not. The
+ * steps off R at a row's ends are kept only if a neighbouring piece reaches
+ * the window, so they are not counted. An `abridged` row counts nothing,
+ * since a cut builds the piece from its blocks row with a placeholder for
+ * each run off R, in fewer steps than its `nsteps`. A departure's own steps
+ * are not counted either, nor a row naming a route its tile lacks, which its
+ * decode refuses. So the sum never exceeds the steps of the cut's fragments,
+ * which its step budget counts with the departures' own steps.
+ */
+export function surelyKeptSteps(
+  lines: string[],
+  keep: ((name: string) => boolean) | undefined,
+) {
+  const rows = lines.map(line => line.split('\t'))
+  const routes = rows
+    .filter(cols => cols[3] === 'route')
+    .map(cols => ({
+      noEntry: cols[4] === '.',
+      interior: tokenCount(cols[5] ?? '.'),
+      noExit: cols[6] === '.',
+    }))
+  const offEnd = (choice: [number, number] | undefined, leading: boolean) => {
+    const route = choice ? routes[choice[0]] : undefined
+    const open =
+      route !== undefined &&
+      (leading === (choice?.[1] === 1) ? route.noExit : route.noEntry)
+    return choice === undefined
+      ? 0
+      : route === undefined
+        ? Infinity
+        : open
+          ? route.interior
+          : 0
+  }
+  let steps = 0
+  for (const cols of rows) {
+    const kind = cols[3]
+    if ((kind === 'ref' || kind === 'walk') && (keep?.(cols[4]!) ?? true)) {
+      const n = +cols[8]!
+      if (kind === 'ref') {
+        steps += n
+      } else {
+        const { first, last } = endChoices(cols[10] ?? '.')
+        steps += Math.max(0, n - offEnd(first, true) - offEnd(last, false))
+      }
+    }
+  }
+  return steps
+}
+
 // A chunk's R and its nodes' lengths, which its detail records share
 export interface ChunkRef {
   path: RefPath

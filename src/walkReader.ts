@@ -15,6 +15,7 @@ import {
   tileLinks,
   parseBlocks,
   referenceNodes,
+  surelyKeptSteps,
   unloadedRow,
 } from './walkChunk.ts'
 import { WalkTally } from './walkCounts.ts'
@@ -41,6 +42,7 @@ import {
   runName,
   stepBudgetError,
   surelyKept,
+  surelyKeptError,
   walkCut,
   walkHeader,
   walksKept,
@@ -1107,6 +1109,21 @@ export class WalkReader {
         [...tiles, ...departureBlocks, ...jumps.map(x => x.unit)],
         reads.signal,
       )
+      if (Number.isFinite(stepBudget)) {
+        const overBudget = surelyKeptError(
+          tiles.map((unit, k) =>
+            unit.start > drawn.start && unit.end < drawn.end
+              ? { ...unit, steps: surelyKeptSteps(read[k]!, keep) }
+              : unit,
+          ),
+          stepBudget,
+          region,
+          filtered,
+        )
+        if (overBudget) {
+          throw overBudget
+        }
+      }
       const tilesAndRecords = tiles.length + departureBlocks.length
       jumps.forEach((x, k) => {
         extra.push(x)

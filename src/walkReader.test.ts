@@ -21,7 +21,7 @@ import {
 import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
 import type { GraphTables } from './util.ts'
-import type { AbridgedPiece } from './walkChunk.ts'
+import type { AbridgedPiece, ChunkRef } from './walkChunk.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { WalkUnit } from './walkFile.ts'
 import type { WalkGap } from './walkGaps.ts'
@@ -29,8 +29,11 @@ import type { WalkFragment } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 
-// the abridged pieces a cut makes a bp row of, those it did not build
+// the abridged pieces a cut makes a bp row of, those it did not build; how
+// many tiles cuts decode; and whether a cut counts the steps it surely keeps
+// before decoding, which off leaves the refusal to the finished cut
 const unbuilt = vi.hoisted(() => new Set<AbridgedPiece>())
+const decoding = vi.hoisted(() => ({ tiles: 0, countsFirst: true }))
 vi.mock(import('./walkChunk.ts'), async importOriginal => {
   const chunk = await importOriginal()
   return {
@@ -39,6 +42,20 @@ vi.mock(import('./walkChunk.ts'), async importOriginal => {
       unbuilt.add(piece)
       return chunk.bpRow(piece)
     },
+    decodeChunk: (
+      rows: string[][],
+      tileStart: number,
+      keep: ((name: string) => boolean) | undefined,
+      withSequences?: boolean,
+      ref?: ChunkRef,
+    ) => {
+      decoding.tiles++
+      return chunk.decodeChunk(rows, tileStart, keep, withSequences, ref)
+    },
+    surelyKeptSteps: (
+      lines: string[],
+      keep: ((name: string) => boolean) | undefined,
+    ) => (decoding.countsFirst ? chunk.surelyKeptSteps(lines, keep) : 0),
   }
 })
 
@@ -798,6 +815,140 @@ function inline(lines: string[], reversed = false, served: number[] = []) {
   }
   return WalkReader.fromFilehandles({ data, directory })
 }
+
+const keptSteps = (cut: {
+  fragments: WalkFragment[]
+  departures: WalkDeparture[]
+}) =>
+  cut.fragments.reduce((sum, f) => sum + f.ids.length, 0) +
+  cut.departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
+
+const refusal = (error: unknown) =>
+  error instanceof RegionTooLargeError
+    ? [
+        error.message,
+        error.limit,
+        error.windowBp,
+        error.fitsBp,
+        error.zoomHelps,
+      ]
+    : error
+
+// R over eight 4 bp nodes from 16 to 48, in 16 bp tiles, and three haplotypes
+// along it: 32 steps, all inside a window on 16-48 with 1 bp of context
+const alongR = [
+  '#walks format:i:8 tile:i:16',
+  '#reference R',
+  '#haplotype H#1',
+  '#haplotype H#2',
+  '#haplotype H#3',
+  '#hole R#0#chr 0 16',
+  'R#0#chr 16 ref R#0#chr 16 16 0 4 2,2,2,2 4,4,4,4 .',
+  'R#0#chr 32 ref R#0#chr 16 32 1 4 10,2,2,2 4,4,4,4 .',
+  ...[1, 2, 3].flatMap(h => [
+    `R#0#chr 16 walk H#${h}#h 0 0 0 4 2 .`,
+    `R#0#chr 32 walk H#${h}#h 0 16 1 4 10 .`,
+  ]),
+]
+
+test('a window whose tiles surely keep more steps than the budget is refused before any row is decoded, as the finished cut refuses it', async () => {
+  const cut = () =>
+    inline(alongR)
+      .cut('R#0#chr', { start: 16, end: 48 }, { context: 1, stepBudget: 31 })
+      .catch((e: unknown) => e)
+  decoding.tiles = 0
+  const early = await cut()
+  expect(decoding.tiles).toBe(0)
+  decoding.countsFirst = false
+  try {
+    const finished = await cut()
+    expect(decoding.tiles).toBe(2)
+    expect(early).toBeInstanceOf(RegionTooLargeError)
+    expect(refusal(early)).toEqual([
+      'Zoom in to about 31bp, or choose fewer haplotypes, to see the graph',
+      31,
+      32,
+      31,
+      true,
+    ])
+    expect(refusal(early)).toEqual(refusal(finished))
+  } finally {
+    decoding.countsFirst = true
+  }
+})
+
+test('a window whose tiles keep exactly the step budget is cut', async () => {
+  decoding.tiles = 0
+  const cut = await inline(alongR).cut(
+    'R#0#chr',
+    { start: 16, end: 48 },
+    { context: 1, stepBudget: 32 },
+  )
+  expect(keptSteps(cut)).toBe(32)
+  expect(decoding.tiles).toBe(2)
+})
+
+// Rows whose nsteps overstate what a cut keeps, each window cut with the
+// budget at what it keeps: H#1 starting its line with 10 steps off R before
+// node 1, which no fragment holds; the two haplotypes `keep` leaves out; and
+// H#1 abridged, >1>2, 30 steps off R, >3>4, built from its blocks row with
+// one placeholder for the 30, which its departure holds too
+test.each([
+  {
+    rows: 'a leading run off R',
+    lines: [
+      '#walks format:i:8 tile:i:16',
+      '#reference R',
+      '#haplotype H#1',
+      '#hole R#0#chr 0 16',
+      'R#0#chr 16 ref R#0#chr 16 16 0 4 2,2,2,2 4,4,4,4 .',
+      'R#0#chr 16 nodes 100,1,1,1,1,1,1,1,1,1 1,1,1,1,1,1,1,1,1,1',
+      'R#0#chr 16 route . 200,2,2,2,2,2,2,2,2,2 -216',
+      'R#0#chr 16 walk H#1#h 0 0 0 14 2 0',
+    ],
+    window: { start: 16, end: 32 },
+    keep: undefined,
+    kept: 8,
+  },
+  {
+    rows: 'haplotypes keep leaves out',
+    lines: alongR,
+    window: { start: 16, end: 48 },
+    keep: (name: string) => name === 'R#0#chr' || name === 'H#1#h',
+    kept: 16,
+  },
+  {
+    rows: 'an abridged piece',
+    lines: [
+      '#walks format:i:8 tile:i:16',
+      '#reference R',
+      '#haplotype H#1',
+      '#hole R#0#chr 0 16',
+      'R#0#chr 16 ref R#0#chr 16 16 0 4 2,2,2,2 4,4,4,4 .',
+      'R#0#chr 16 abridged H#1#h 0 0 0 34 46 0',
+      `R#0#chr 16:0 16 32 nodes 100${',1'.repeat(29)} 1${',1'.repeat(29)}`,
+      `R#0#chr 16:0 16 32 route 4 196${',2'.repeat(29)} -252`,
+      'R#0#chr 16:0 16 32 walk H#1#h 0 0 0 34 2 0',
+      'R#0#chr 16 16 32 blocks H#1#h 0 0 16+8,30,0+8',
+    ],
+    window: { start: 16, end: 32 },
+    keep: undefined,
+    kept: 10,
+  },
+])(
+  'a window of $rows, whose rows state more steps than its cut keeps, is cut with a budget of the $kept it keeps',
+  async ({ lines, window, keep, kept }) => {
+    const stated = lines
+      .map(line => line.split(' '))
+      .filter(cols => ['ref', 'walk', 'abridged'].includes(cols[2]!))
+      .reduce((sum, cols) => sum + Number(cols[7]), 0)
+    const cut = (stepBudget: number) =>
+      inline(lines).cut('R#0#chr', window, { context: 1, keep, stepBudget })
+    expect(stated).toBeGreaterThan(kept)
+    expect(keptSteps(await cut(kept))).toBe(kept)
+    await expect(cut(kept - 1)).rejects.toBeInstanceOf(RegionTooLargeError)
+  },
+)
 
 // Eight 4 bp reference nodes in 16 bp chunks:
 //   W R  0 chr >1>2>3>4>5>6>7>8
