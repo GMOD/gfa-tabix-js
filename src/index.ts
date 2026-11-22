@@ -140,3 +140,11 @@ export { abridgedText, abridgedWalks } from './abridgedWalks.ts'
 export type { AbridgedWalk } from './abridgedWalks.ts'
 export { GAP_KINDS } from './walkGaps.ts'
 export type { GapKind, GapSegment, WalkGap } from './walkGaps.ts'
+export { weightedLcs } from './lcs.ts'
+export { pairAlignments, pairCigar } from './pairAlignment.ts'
+export type {
+  PairChain,
+  PairEdit,
+  PairOp,
+  PairOptions,
+} from './pairAlignment.ts'

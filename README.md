@@ -1121,6 +1121,21 @@ const gfa = await rgfaCut(
   from its `detail` unit where the cut expands its walk, or, in a tile fetched
   to attach, from its `abridged` row and the record
 
+## Aligning walks
+
+- `pairAlignments({ query, target, sequenceOf })` aligns one walk to another,
+  each as handles, `2 * id + 1` where it passes the node reversed. Each
+  `PairChain` record is a collinear chain of the nodes both walks visit, with
+  its edits along the target and `strand` `-` where the query runs the other
+  way. `bases: false` writes what lies between shared nodes as an insertion and
+  a deletion, so `sequenceOf` may return any string of a node's length
+- `pairCigar(edits)` writes a record's edits as a CIGAR, `13=1X14=`
+- `weightedLcs(a, b, weight)` is the heaviest common subsequence of two walks,
+  each element weighing `weight(element)`, as the index pairs it matches and
+  their total weight
+- These came from @gmod/gbz-base 7.4.1 and align as they did there, so every
+  reader can align the walks it cuts
+
 ## License
 
 MIT
