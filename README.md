@@ -959,6 +959,12 @@ result.forms.map(f => formTag(f, result))
   one over the region, and its fragments' ends, so a haplotype that leaves the
   region and rejoins the reference far away, or jumps over it whole, is a
   departure with no step on it; `walkDepartures` does the same for any cut
+- A walk the graph stores back to front reads the other way round: one that
+  walks the reference only against it, or that leaves it behind where it
+  entered. A walk forward at its flanks keeps its orientation however much of
+  the region an inversion fills. A walk lying wholly inside an inverted block
+  cannot be told from one stored back to front, so a region inside an inversion
+  reports its carriers as reference
 - `structuralForms` groups the haplotypes that make the same changes at every
   informative site. Each change is a `Mark`: an insertion, deletion,
   replacement, inversion or duplication

@@ -73,13 +73,13 @@ const onR = (start: number) => !Number.isNaN(start)
  * fragments' first and last steps give where it is on R otherwise. A
  * fragment with the departures at its ends is a chain, as is a departure
  * touching no fragment, such as one jumping over the window; each reads in
- * its own orientation, mostly reversed reading reversed, and a stretch of R
- * walked against it reads as inverted, a jump back as a tandem copy, and
- * sequence between a contig's W lines as the path's own. R that two chains
- * of a haplotype reach, such as a contig's second visit to the window, has
- * no call. A piece the cut did not load reads as any other, from its steps
- * on R and the bp of its own between them. The walks on R's own haplotype
- * are left out.
+ * its own orientation, turned round where it leaves R behind where it
+ * entered, and a stretch of R walked against it reads as inverted, a jump
+ * back as a tandem copy, and sequence between a contig's W lines as the
+ * path's own. R that two chains of a haplotype reach, such as a contig's
+ * second visit to the window, has no call. A piece the cut did not load
+ * reads as any other, from its steps on R and the bp of its own between
+ * them. The walks on R's own haplotype are left out.
  */
 export function walkDepartures(
   { fragments, departures, nodes }: DepartureSource,
@@ -244,18 +244,39 @@ function chainEvents(items: Item[], length: (id: number) => number) {
 }
 
 /**
+ * Whether a chain reads R back to front. One that walks R only along it, or
+ * only against it, reads that way. One that does both is forward where it
+ * leaves R further along than it entered, so an inversion filling most of
+ * the window does not turn round a walk whose flanks run forward; the bp
+ * walked each way decide only for a chain that leaves R where it entered.
+ */
+function readsBackToFront(events: Event[]) {
+  const stretches = events.filter(e => e.kind === 'on')
+  const first = stretches[0]
+  const last = stretches.at(-1)
+  const bp = (reversed: boolean) =>
+    stretches
+      .filter(e => e.reversed === reversed)
+      .reduce((sum, e) => sum + (e.hi - e.lo || 1), 0)
+  const along = bp(false)
+  const against = bp(true)
+  const progress =
+    first && last
+      ? (last.reversed ? last.lo : last.hi) -
+        (first.reversed ? first.hi : first.lo)
+      : 0
+  return along === 0 || against === 0 || progress === 0
+    ? against > along
+    : progress < 0
+}
+
+/**
  * A path's departures in the forward view: its stretches along R in order,
- * reversed where it walks R mostly against its orientation, each stretch
- * against it or of its own between two along it making one departure.
+ * turned round where it reads R back to front, each stretch against it or of
+ * its own between two along it making one departure.
  */
 function readPath(events: Event[], h: HaplotypeDepartures) {
-  let bias = 0
-  for (const e of events) {
-    if (e.kind !== 'own') {
-      bias += (e.reversed ? 1 : -1) * (e.hi - e.lo || 1)
-    }
-  }
-  const flip = bias > 0
+  const flip = readsBackToFront(events)
   let first = NaN
   let prevEnd = NaN
   let reach = -Infinity

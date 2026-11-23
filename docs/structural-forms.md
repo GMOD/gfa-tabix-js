@@ -26,9 +26,19 @@ fragments' ends, in chains:
 - A chain is a fragment with the departures leaving its last step, rejoining its
   first or lying inside it, fragments that abut on the contig, or a departure
   touching no fragment, such as a contig that jumps over the window or rejoins
-  far outside it, which the window's chunks never held. Each chain reads in its
-  own orientation: one that reads R mostly reversed reads the other way round (5
-  of 3,740 fragments measured)
+  far outside it, which the window's chunks never held
+- Each chain reads in its own orientation, since a graph may store a contig back
+  to front. One that walks R only against it reads the other way round. One that
+  walks R both ways reads the other way round only where it leaves R behind
+  where it entered, measured in bp of R from its first step on R to its last. So
+  an inversion that fills most of the window, between flanks walked forward,
+  reads as an inversion (chr16:75,204,000-75,225,000 of the HPRC v2.1 GRCh38
+  graph: 439 of 463 haplotypes, 16.5 kb). The bp walked each way decide only for
+  a chain that leaves R where it entered
+- A chain lying wholly inside an inverted block walks R only against it, as a
+  contig stored back to front does, and the two cannot be told apart: it reads
+  as reference there. A window that reaches either flank by one step tells them
+  apart
 - Between a departure's rejoin and the next leave the path follows R. A rejoin
   that is not where the last stretch along R ended closes a departure. Its REF
   span runs from that end to the rejoin, and the path's own bp between, sequence

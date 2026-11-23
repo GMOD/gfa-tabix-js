@@ -1,6 +1,7 @@
 import { LocalFile } from 'generic-filehandle2'
 
 import { AmbiguousSequenceError } from './refNames.ts'
+import { describeForm, structuralForms } from './structuralForms.ts'
 import { walkFileOf } from './testing.ts'
 import { RegionTooLargeError, panSNHaplotypeOrSample } from './util.ts'
 import { formsCut, walkDepartures } from './walkDepartures.ts'
@@ -186,6 +187,75 @@ test('a walk reading R mostly reversed is read the other way round', () => {
     { refStart: 600, refEnd: 700, altLength: 300, ...plain },
   ])
   expect(a!.covered).toEqual([[0, 1700]])
+})
+
+const inversion = {
+  refStart: 100,
+  refEnd: 1700,
+  altLength: 1600,
+  invertedBp: 1600,
+  repeatedBp: 0,
+}
+
+test('a walk forward at its flanks reads an inversion over most of the window as inverted', () => {
+  const haplotypes = departuresOf([
+    walk('A#1#c', '+1 -4 -3 -2 +5'),
+    walk('B#1#c', '+1 +2 +3 +4 +5'),
+    walk('C#1#c', '-5 -4 -3 -2 -1'),
+    walk('D#1#c', '-5 +2 +3 +4 -1'),
+  ])
+  expect(haplotypes).toEqual([
+    { haplotype: 'A#1', covered: [[0, 1800]], departures: [inversion] },
+    { haplotype: 'B#1', covered: [[0, 1800]], departures: [] },
+    { haplotype: 'C#1', covered: [[0, 1800]], departures: [] },
+    { haplotype: 'D#1', covered: [[0, 1800]], departures: [inversion] },
+  ])
+  const { forms } = structuralForms(haplotypes, {
+    window: { start: 0, end: 1800 },
+  })
+  expect(forms.map(f => [describeForm(f), f.members])).toEqual([
+    ['ref', ['B#1', 'C#1']],
+    ['inv 1.6kb', ['A#1', 'D#1']],
+  ])
+})
+
+test('one flank is enough to tell an inversion from a walk stored back to front', () => {
+  const [a, b, c] = departuresOf([
+    walk('A#1#c', '+1 -4 -3 -2'),
+    walk('B#1#c', '+2 +3 +4 -1'),
+    walk('C#1#c', '-4 -3 -2 +5'),
+  ])
+  expect(a).toEqual({ haplotype: 'A#1', covered: [[0, 100]], departures: [] })
+  expect(b).toEqual({ haplotype: 'B#1', covered: [[0, 100]], departures: [] })
+  expect(c).toEqual({
+    haplotype: 'C#1',
+    covered: [[1700, 1800]],
+    departures: [],
+  })
+})
+
+test('a walk wholly inside an inversion reads as one stored back to front', () => {
+  expect(departuresOf([walk('A#1#c', '-4 -3 -2')])).toEqual([
+    { haplotype: 'A#1', covered: [[100, 1700]], departures: [] },
+  ])
+})
+
+test('a walk forward throughout that ends before where it began is not turned around', () => {
+  const [a] = departuresOf([walk('A#1#c', '+3 +4 +1 +2')])
+  expect(a).toEqual({
+    haplotype: 'A#1',
+    covered: [[600, 1700]],
+    departures: [
+      {
+        refStart: 1700,
+        refEnd: 1700,
+        altLength: 1700,
+        invertedBp: 0,
+        repeatedBp: 1700,
+        copied: [0, 1700],
+      },
+    ],
+  })
 })
 
 test('steps off R past either end of a walk are no departure', () => {
