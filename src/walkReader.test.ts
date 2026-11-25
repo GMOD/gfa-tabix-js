@@ -1234,54 +1234,88 @@ test('a window whose abridged pieces take it over the step budget is left to the
   expect(early.error).toEqual(finished.error)
 })
 
+// The cuts the sweep below makes of each fixture, over every reference
+// sequence it holds, and how many of them hold a piece the cut did not load,
+// stated so that a fixture the sweep stops cutting, or one that stops
+// abridging its walks, fails
+const ABRIDGED_SWEEPS = [
+  { fixture: 'blocks.R', cuts: 288, unloaded: 288 },
+  { fixture: 'between.R', cuts: 288, unloaded: 216 },
+  { fixture: 'hairpin.R', cuts: 96, unloaded: 96 },
+  { fixture: 'interleaved.R', cuts: 96, unloaded: 48 },
+  { fixture: 'edge.R', cuts: 288, unloaded: 192 },
+  { fixture: 'contained.R', cuts: 192, unloaded: 192 },
+  { fixture: 'adv.R', cuts: 432, unloaded: 318 },
+]
+
+test('the step budget sweep cuts every fixture, and meets unloaded pieces in each', () => {
+  expect(ABRIDGED_SWEEPS.every(sweep => sweep.cuts > 0)).toBe(true)
+  expect(ABRIDGED_SWEEPS.every(sweep => sweep.unloaded > 0)).toBe(true)
+  expect(ABRIDGED_SWEEPS.reduce((sum, sweep) => sum + sweep.unloaded, 0)).toBe(
+    1350,
+  )
+})
+
 // The early count never passes the steps the finished cut keeps: at a budget
 // of exactly those steps no window is refused for them, and one below or at
 // half of them, each is refused as the finished cut refuses it, some before
 // decoding
-test.each(['blocks.R', 'between.R', 'hairpin.R', 'interleaved.R', 'edge.R'])(
-  'every window of %s, which abridges its walks, is cut at a step budget of the steps it keeps and refused below it as the finished cut refuses it',
-  async fixture => {
+test.each(ABRIDGED_SWEEPS)(
+  'every window of $fixture, which abridges its walks, is cut at a step budget of the steps it keeps and refused below it as the finished cut refuses it: $cuts cuts, $unloaded of them with an unloaded piece',
+  async ({ fixture, ...stated }) => {
     const walks = reader(fixture)
-    const length = await walks.sequenceLength('R#0#c')
+    const swept = { cuts: 0, unloaded: 0 }
     let refusedEarly = 0
-    const run = async (
-      window: { start: number; end: number },
-      opts: WalkCutOptions,
-    ) => {
-      decoding.tiles = 0
-      const error = await walks.cut('R#0#c', window, opts).then(
-        () => undefined,
-        (e: unknown) => e,
-      )
-      return { error, decoded: decoding.tiles }
-    }
-    for (let start = 0; start < length; start += 5) {
-      for (const width of [20, 60, 120]) {
-        for (const opts of [
-          { context: 0 },
-          { context: 10 },
-          { context: 0, contained: true },
-          { context: 10, contained: true },
-        ]) {
-          const window = { start, end: start + width }
-          const kept = keptSteps(await walks.cut('R#0#c', window, opts))
-          const at = await run(window, { ...opts, stepBudget: kept })
-          expect(limitOf(at.error)).not.toBe(kept)
-          for (const stepBudget of [kept - 1, Math.floor(kept / 2)]) {
-            const early = await run(window, { ...opts, stepBudget })
-            decoding.countsFirst = false
-            const finished = await run(window, { ...opts, stepBudget }).finally(
-              () => {
-                decoding.countsFirst = true
-              },
+    for (const refName of await walks.referenceSequences()) {
+      const length = await walks.sequenceLength(refName)
+      const run = async (
+        window: { start: number; end: number },
+        opts: WalkCutOptions,
+      ) => {
+        decoding.tiles = 0
+        const error = await walks.cut(refName, window, opts).then(
+          () => undefined,
+          (e: unknown) => e,
+        )
+        return { error, decoded: decoding.tiles }
+      }
+      for (let start = 0; start < length; start += 5) {
+        for (const width of [20, 60, 120]) {
+          for (const opts of [
+            { context: 0 },
+            { context: 10 },
+            { context: 0, contained: true },
+            { context: 10, contained: true },
+          ]) {
+            const window = { start, end: start + width }
+            const cut = await walks.cut(refName, window, opts)
+            const kept = keptSteps(cut)
+            swept.cuts++
+            swept.unloaded += cut.fragments.some(
+              f => (f.abridged?.length ?? 0) > 0,
             )
-            expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
-            expect(fitsNarrower(early.error, window)).toBe(true)
-            refusedEarly += early.decoded === 0 ? 1 : 0
+              ? 1
+              : 0
+            const at = await run(window, { ...opts, stepBudget: kept })
+            expect(limitOf(at.error)).not.toBe(kept)
+            for (const stepBudget of [kept - 1, Math.floor(kept / 2)]) {
+              const early = await run(window, { ...opts, stepBudget })
+              decoding.countsFirst = false
+              const finished = await run(window, {
+                ...opts,
+                stepBudget,
+              }).finally(() => {
+                decoding.countsFirst = true
+              })
+              expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+              expect(fitsNarrower(early.error, window)).toBe(true)
+              refusedEarly += early.decoded === 0 ? 1 : 0
+            }
           }
         }
       }
     }
+    expect(swept).toEqual(stated)
     expect(refusedEarly).toBeGreaterThan(0)
   },
 )

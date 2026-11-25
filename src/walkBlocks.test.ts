@@ -856,49 +856,70 @@ test('a cut over its placeholder limit is refused as its pieces are built, befor
   ).rejects.toMatchObject({ limit: 1 })
 })
 
-const PLACEHOLDER_FIXTURES = [
-  'blocks.R',
-  'between.R',
-  'hairpin.R',
-  'ownends.R',
-  'interleaved.R',
-  'edge.R',
+// The cuts a sweep makes of each fixture, over every reference sequence it
+// holds, and how many of them keep a placeholder. A sweep that asked each
+// fixture for R#0#c made no cut of contained.R, on R#0#chrA, or of adv.R, on
+// R#0#c1 and R#0#c2, and passed: the counts are stated so that one which
+// stops cutting, or stops meeting placeholders, fails
+const PLACEHOLDER_SWEEPS = [
+  { fixture: 'blocks.R', cuts: 288, withPlaceholders: 210 },
+  { fixture: 'between.R', cuts: 288, withPlaceholders: 69 },
+  { fixture: 'hairpin.R', cuts: 96, withPlaceholders: 70 },
+  { fixture: 'ownends.R', cuts: 336, withPlaceholders: 128 },
+  { fixture: 'interleaved.R', cuts: 96, withPlaceholders: 43 },
+  { fixture: 'edge.R', cuts: 288, withPlaceholders: 160 },
+  { fixture: 'contained.R', cuts: 192, withPlaceholders: 168 },
+  { fixture: 'adv.R', cuts: 432, withPlaceholders: 169 },
 ]
 
+test('the placeholder sweep cuts every fixture, and meets placeholders in each', () => {
+  expect(PLACEHOLDER_SWEEPS.every(sweep => sweep.cuts > 0)).toBe(true)
+  expect(PLACEHOLDER_SWEEPS.every(sweep => sweep.withPlaceholders > 0)).toBe(
+    true,
+  )
+  expect(
+    PLACEHOLDER_SWEEPS.reduce((sum, sweep) => sum + sweep.withPlaceholders, 0),
+  ).toBe(1017)
+})
+
 // The count a cut refuses by as it builds its pieces never passes what the
-// finished cut keeps, so a limit of exactly that many refuses no window
-test.each(PLACEHOLDER_FIXTURES)(
-  'every window of %s is cut at a placeholder limit of the placeholders it keeps, and refused one below',
-  async fixture => {
+// finished cut keeps, so a limit of exactly that many refuses no window, and
+// one fewer refuses every window
+test.each(PLACEHOLDER_SWEEPS)(
+  'every window of $fixture is cut at a placeholder limit of the placeholders it keeps, and refused one below: $cuts cuts, $withPlaceholders of them with placeholders',
+  async ({ fixture, ...expected }) => {
     const walks = reader(fixture)
-    const length = await walks.sequenceLength(R)
-    let withPlaceholders = 0
-    for (let start = 0; start < length; start += 5) {
-      for (const width of [5, 20, 60]) {
-        for (const opts of [
-          { context: 0 },
-          { context: 10 },
-          { context: 0, contained: true },
-          { context: 10, contained: true },
-        ]) {
-          const window = { start, end: start + width }
-          const cut = await walks.cut(R, window, opts)
-          const within = await walks.cut(R, window, {
-            ...opts,
-            placeholderLimit: cut.placeholders,
-          })
-          expect(within.kept).toEqual(cut.kept)
-          withPlaceholders += cut.placeholders > 0 ? 1 : 0
-          await expect(
-            walks.cut(R, window, {
+    const swept = { cuts: 0, withPlaceholders: 0 }
+    for (const refName of await walks.referenceSequences()) {
+      const length = await walks.sequenceLength(refName)
+      for (let start = 0; start < length; start += 5) {
+        for (const width of [5, 20, 60]) {
+          for (const opts of [
+            { context: 0 },
+            { context: 10 },
+            { context: 0, contained: true },
+            { context: 10, contained: true },
+          ]) {
+            const window = { start, end: start + width }
+            const cut = await walks.cut(refName, window, opts)
+            const within = await walks.cut(refName, window, {
               ...opts,
-              placeholderLimit: cut.placeholders - 1,
-            }),
-          ).rejects.toMatchObject({ limit: cut.placeholders - 1 })
+              placeholderLimit: cut.placeholders,
+            })
+            expect(within.kept).toEqual(cut.kept)
+            await expect(
+              walks.cut(refName, window, {
+                ...opts,
+                placeholderLimit: cut.placeholders - 1,
+              }),
+            ).rejects.toMatchObject({ limit: cut.placeholders - 1 })
+            swept.cuts++
+            swept.withPlaceholders += cut.placeholders > 0 ? 1 : 0
+          }
         }
       }
     }
-    expect(withPlaceholders).toBeGreaterThan(0)
+    expect(swept).toEqual(expected)
   },
 )
 
