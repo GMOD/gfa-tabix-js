@@ -813,6 +813,95 @@ test('placeholders do not count towards the node limit, and a cut says how many 
   expect(loaded.placeholders).toBe(0)
 })
 
+test('a placeholder limit bounds the placeholders a cut keeps, whatever its nodes, and a cut that expands every walk keeps none to count', async () => {
+  const walks = reader('blocks.R')
+  const window = { start: 60, end: 120 }
+  const cut = await walks.cut(R, window, { context: 0 })
+  const within = await walks.cut(R, window, {
+    context: 0,
+    placeholderLimit: cut.placeholders,
+  })
+  expect(within.kept).toEqual(cut.kept)
+  const over = await walks
+    .cut(R, window, { context: 0, placeholderLimit: cut.placeholders - 1 })
+    .catch((e: unknown) => e)
+  expect(over).toBeInstanceOf(RegionTooLargeError)
+  expect(over).toMatchObject({ limit: cut.placeholders - 1, windowBp: 60 })
+  const loaded = await walks.cut(R, window, {
+    context: 0,
+    expand: all,
+    placeholderLimit: 0,
+  })
+  expect(loaded.placeholders).toBe(0)
+})
+
+// The finished cut refuses the steps kept before the placeholders, so a
+// refusal at the placeholder limit came before the cut was made
+test('a cut over its placeholder limit is refused as its pieces are built, before the finished cut counts its steps', async () => {
+  const walks = reader('blocks.R')
+  const window = { start: 60, end: 120 }
+  const cut = await walks.cut(R, window, { context: 0 })
+  const held =
+    cut.fragments.reduce((sum, f) => sum + f.ids.length, 0) +
+    cut.departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
+  await expect(
+    walks.cut(R, window, { context: 0, stepBudget: held - 1 }),
+  ).rejects.toMatchObject({ limit: held - 1 })
+  await expect(
+    walks.cut(R, window, {
+      context: 0,
+      stepBudget: held - 1,
+      placeholderLimit: 1,
+    }),
+  ).rejects.toMatchObject({ limit: 1 })
+})
+
+const PLACEHOLDER_FIXTURES = [
+  'blocks.R',
+  'between.R',
+  'hairpin.R',
+  'ownends.R',
+  'interleaved.R',
+  'edge.R',
+]
+
+// The count a cut refuses by as it builds its pieces never passes what the
+// finished cut keeps, so a limit of exactly that many refuses no window
+test.each(PLACEHOLDER_FIXTURES)(
+  'every window of %s is cut at a placeholder limit of the placeholders it keeps, and refused one below',
+  async fixture => {
+    const walks = reader(fixture)
+    const length = await walks.sequenceLength(R)
+    let withPlaceholders = 0
+    for (let start = 0; start < length; start += 5) {
+      for (const width of [5, 20, 60]) {
+        for (const opts of [
+          { context: 0 },
+          { context: 10 },
+          { context: 0, contained: true },
+          { context: 10, contained: true },
+        ]) {
+          const window = { start, end: start + width }
+          const cut = await walks.cut(R, window, opts)
+          const within = await walks.cut(R, window, {
+            ...opts,
+            placeholderLimit: cut.placeholders,
+          })
+          expect(within.kept).toEqual(cut.kept)
+          withPlaceholders += cut.placeholders > 0 ? 1 : 0
+          await expect(
+            walks.cut(R, window, {
+              ...opts,
+              placeholderLimit: cut.placeholders - 1,
+            }),
+          ).rejects.toMatchObject({ limit: cut.placeholders - 1 })
+        }
+      }
+    }
+    expect(withPlaceholders).toBeGreaterThan(0)
+  },
+)
+
 test('a step built for an unloaded piece counts towards the step budget as any step does', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }

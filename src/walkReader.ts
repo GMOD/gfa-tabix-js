@@ -210,8 +210,12 @@ export interface WalkCutOptions {
   sequences?: boolean
   // how a zoom-in notice names the budgets
   budgetNames?: BudgetNames
-  // the most nodes a cut keeps; Infinity, the default, has no limit
+  // the most nodes a cut keeps; Infinity, the default, has no limit. A
+  // placeholder is no node, and is not counted
   nodeLimit?: number
+  // the most placeholders a cut keeps, each a node in its tables that a
+  // layout places; Infinity, the default, has no limit
+  placeholderLimit?: number
   // keep the reference over the window and its context alone, and split each
   // walk where it steps onto the reference off them
   contained?: boolean
@@ -648,6 +652,7 @@ export class WalkReader {
       links = 'walked',
       contained = false,
       nodeLimit = Infinity,
+      placeholderLimit = Infinity,
       expand,
     } = opts
     checkRange(refName, region.start, region.end)
@@ -705,6 +710,7 @@ export class WalkReader {
     const decodedFor = (unit: WalkUnit, name: string) =>
       decodedBy.get(unit.offset)?.some(took => took(name)) === true
     const surely = new Set<number>()
+    const surelyPlaceholders = new Set<number>()
     const bounds = {
       contained,
       start: region.start - context,
@@ -752,19 +758,31 @@ export class WalkReader {
       chunk: { nodes: Map<number, unknown>; rows: WalkRow[] },
       readTo: number,
     ) => {
-      if (Number.isFinite(nodeLimit)) {
-        surelyKept(chunk, graph.nodes, bounds, surely)
-        if (surely.size > nodeLimit) {
+      if (Number.isFinite(nodeLimit) || Number.isFinite(placeholderLimit)) {
+        surelyKept(chunk, graph.nodes, bounds, surely, surelyPlaceholders)
+        if (
+          surely.size > nodeLimit ||
+          surelyPlaceholders.size > placeholderLimit
+        ) {
           surely.clear()
-          surelyKept({ nodes: graph.nodes, rows }, graph.nodes, bounds, surely)
+          surelyPlaceholders.clear()
+          surelyKept(
+            { nodes: graph.nodes, rows },
+            graph.nodes,
+            bounds,
+            surely,
+            surelyPlaceholders,
+          )
         }
-        const tooMany = keptNodesError(
-          surely.size,
-          nodeLimit,
-          region,
-          filtered,
-          readTo,
-        )
+        const tooMany =
+          keptNodesError(surely.size, nodeLimit, region, filtered, readTo) ??
+          keptNodesError(
+            surelyPlaceholders.size,
+            placeholderLimit,
+            region,
+            filtered,
+            readTo,
+          )
         if (tooMany) {
           throw tooMany
         }
@@ -1134,9 +1152,11 @@ export class WalkReader {
     // come, from its tiles' lines and records before any is decoded: a row
     // its decode refuses; its node limit, which no more nodes than the
     // tiles' ref rows and routes name can reach where no detail record or
-    // attach fetch brings more; the byte budget, over the blocks units it
-    // reads and every tile it can fetch to attach; and the read budget, over
-    // the most its rows and pieces can hold
+    // attach fetch brings more; its placeholder limit, which nothing reaches
+    // where no tile abridges a walk it keeps unexpanded and no attach fetch
+    // comes; the byte budget, over the blocks units it reads and every tile
+    // it can fetch to attach; and the read budget, over the most its rows
+    // and pieces can hold
     const noEarlierRefusal = (
       read: string[][],
       counted: (ReturnType<typeof tileSteps> | 'edge')[],
@@ -1187,6 +1207,9 @@ export class WalkReader {
             .slice(0, tiles.length)
             .reduce((ids, lines) => tileNodeIds(lines, ids), new Set<number>())
             .size <= nodeLimit)
+      const placeholdersFit =
+        !Number.isFinite(placeholderLimit) ||
+        (fetching.length === 0 && all.every(t => t?.blocks === false))
       const held = all.reduce(
         (sum, t) => ({
           n: sum.n + (t?.n ?? 0),
@@ -1200,6 +1223,7 @@ export class WalkReader {
         readSteps(held) <= stepBudget * READ_STEPS_PER_KEPT &&
         !(unread.length > 0 && overBytes(unread, false)) &&
         !(fetching.length > 0 && overBytes([...unread, ...fetching], true)) &&
+        placeholdersFit &&
         nodesFit()
       )
     }
@@ -1355,6 +1379,8 @@ export class WalkReader {
     } finally {
       signal?.removeEventListener('abort', stop)
     }
+    const nodes = keptNodes(cut.kept)
+    const placeholders = cut.kept.size - nodes
     const tooMany =
       keptStepsError(
         cut.fragments,
@@ -1362,7 +1388,9 @@ export class WalkReader {
         stepBudget,
         region,
         filtered,
-      ) ?? keptNodesError(keptNodes(cut.kept), nodeLimit, region, filtered)
+      ) ??
+      keptNodesError(nodes, nodeLimit, region, filtered) ??
+      keptNodesError(placeholders, placeholderLimit, region, filtered)
     if (tooMany) {
       throw tooMany
     }
@@ -1377,7 +1405,7 @@ export class WalkReader {
       get gaps() {
         return cut.gapsOf()
       },
-      placeholders: kept.size - keptNodes(kept),
+      placeholders,
     }
   }
 

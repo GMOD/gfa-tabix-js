@@ -316,7 +316,8 @@ const { tables, refName, sample } = await reader.cutRegion(
 | `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default                                          |
 | `attachBp`            | The most bp of own sequence a departure gets its steps attached for; default 65,536                            |
 | `attachFetches`       | Deprecated and ignored: the tiles of every record that gets its steps are fetched                              |
-| `nodeLimit`           | The most nodes a cut keeps; no limit by default                                                                |
+| `nodeLimit`           | The most nodes a cut keeps, placeholders not among them; no limit by default                                   |
+| `placeholderLimit`    | The most placeholders a cut keeps; no limit by default                                                         |
 | `contained`           | `true` keeps each walk within the window; see below                                                            |
 | `links`               | `'walked'` (default) the links the cut's walks take; `'between'` also other walks' between its nodes; `'none'` |
 | `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                                         |
@@ -334,6 +335,15 @@ const { tables, refName, sample } = await reader.cutRegion(
   fetched to attach are what takes the read over
 - The cut checks the node limit as it decodes each tile, against the nodes it
   keeps whatever else it reads, and stops decoding at the first tile over it
+- A placeholder is a node in the cut's tables that `nodeLimit` does not count
+  ([Abridged walks](#abridged-walks)), so where the file abridges walks, a cut
+  within its node limit can return far more table nodes than the limit: at a
+  `nodeLimit` of 30,000, 20 kb of HLA class II in the HPRC file returns 214,636,
+  of which 209,147 are placeholders. `placeholderLimit` bounds them. A cut that
+  keeps more throws a `RegionTooLargeError` whose `limit` is the placeholder
+  limit, when it builds the piece that takes it over, before it cuts. A reader
+  that lays out every node of the tables passes both limits. Expanding a walk
+  turns its placeholders into nodes, which `nodeLimit` counts
 - A window past `departureByteBudget` throws a `DepartureReadError`, which is
   not a `RegionTooLargeError`: a departure's record is filed over its whole
   stretch, so zooming in does not lower that read. A collapsed repeat that
@@ -368,30 +378,31 @@ const { tables, refName, sample } = await reader.cutRegion(
   steps than its routes hold, or an `abridged` row's numbers; the node limit,
   which no more nodes than the tiles' `ref` rows and routes name can reach,
   where no detail record `expand` reads or tile fetched to attach can bring
-  more; the byte budget, over the `blocks` units the cut reads and every tile
-  its records could fetch to attach; and the 8 times `stepBudget` the rows may
-  hold, over the most the rows and the pieces built from them can. Where it
-  can't rule one out, the finished cut refuses the window. A file malformed in
-  any other way, such as a `ref` row whose passes or a `walk` row whose `nsteps`
-  disagree with its steps, or a `blocks` or detail unit that disagrees with its
-  rows, may be refused here as too large before the cut would find the fault,
-  which a window narrow enough to cut then reports. The count takes each `ref`
-  and `walk` row of a walk `keep` takes at its steps, less a walk row's steps
-  off the reference before its first step on it and after its last. Every step a
-  row places on the reference lies in its tile's extent, so a cut over that
-  extent keeps the row from its first such step to its last and every step
-  between, contained or not; the steps off the reference at a row's ends are
-  kept only where a neighbouring piece reaches the window. An `abridged` row
-  counts nothing, since the cut builds its piece with a placeholder per run off
-  the reference, in fewer steps than its `nsteps`, and neither do departures'
-  own steps. So the count never passes the steps the cut's fragments keep. Its
-  `fitsBp` is worked out tile by tile from the start of the window's context,
-  each counted tile holding its count evenly over its extent, a tile not counted
-  holding the counted tiles' steps per bp and a stretch no tile covers none:
-  where those steps reach `stepBudget` is where the context of a window that
-  fits ends, so it is narrower than the window refused, as the finished cut's
-  is. Both are estimates, the finished cut's the window scaled by the steps it
-  kept
+  more; the placeholder limit, where no tile abridges a walk the cut keeps and
+  does not expand and no tile is fetched to attach; the byte budget, over the
+  `blocks` units the cut reads and every tile its records could fetch to attach;
+  and the 8 times `stepBudget` the rows may hold, over the most the rows and the
+  pieces built from them can. Where it can't rule one out, the finished cut
+  refuses the window. A file malformed in any other way, such as a `ref` row
+  whose passes or a `walk` row whose `nsteps` disagree with its steps, or a
+  `blocks` or detail unit that disagrees with its rows, may be refused here as
+  too large before the cut would find the fault, which a window narrow enough to
+  cut then reports. The count takes each `ref` and `walk` row of a walk `keep`
+  takes at its steps, less a walk row's steps off the reference before its first
+  step on it and after its last. Every step a row places on the reference lies
+  in its tile's extent, so a cut over that extent keeps the row from its first
+  such step to its last and every step between, contained or not; the steps off
+  the reference at a row's ends are kept only where a neighbouring piece reaches
+  the window. An `abridged` row counts nothing, since the cut builds its piece
+  with a placeholder per run off the reference, in fewer steps than its
+  `nsteps`, and neither do departures' own steps. So the count never passes the
+  steps the cut's fragments keep. Its `fitsBp` is worked out tile by tile from
+  the start of the window's context, each counted tile holding its count evenly
+  over its extent, a tile not counted holding the counted tiles' steps per bp
+  and a stretch no tile covers none: where those steps reach `stepBudget` is
+  where the context of a window that fits ends, so it is narrower than the
+  window refused, as the finished cut's is. Both are estimates, the finished
+  cut's the window scaled by the steps it kept
 
 ## Cut presets
 
@@ -418,9 +429,9 @@ const cut = await reader.cut(refName, region, {
 - `WALK_CONTEXT` is the context both keep
 - `CUT_PRESETS`, each preset and `WALK_BUDGETS` are frozen: a reader spreads one
   into its options, as above, so no reader changes them for another
-- `keep`, `expand`, `nodeLimit`, `links` and `sequences` stay each reader's own:
-  which walks it shows, which it reads in full, how many nodes its layout
-  places, and what it draws
+- `keep`, `expand`, `nodeLimit`, `placeholderLimit`, `links` and `sequences`
+  stay each reader's own: which walks it shows, which it reads in full, how many
+  nodes and placeholders its layout places, and what it draws
 
 | Option                | `browser` | `figure` |
 | --------------------- | --------- | -------- |

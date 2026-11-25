@@ -1331,13 +1331,15 @@ function pieceBounds(run: WalkRun) {
  * with no step onto the reference off the window between them in a contained
  * cut. A node placed later at a reference position off the window can split a
  * contained walk, so the count holds for the placements at the time. A
- * placeholder is no node, and is not counted.
+ * placeholder is no node, and is counted in `placeholders` where a row steps
+ * on it between two such steps.
  */
 export function surelyKept(
   chunk: { nodes: Map<number, unknown>; rows: WalkRow[] },
   nodes: Map<number, WalkNode>,
   { contained, start, end }: { contained: boolean; start: number; end: number },
   into: Set<number>,
+  placeholders?: Set<number>,
 ) {
   for (const id of chunk.nodes.keys()) {
     if (nodes.get(id)?.onWindow === true) {
@@ -1359,8 +1361,11 @@ export function surelyKept(
       ) {
         if (last >= 0) {
           for (let j = last + 1; j < i; j++) {
-            if (!isPlaceholder(ids[j]!)) {
-              into.add(ids[j]!)
+            const id = ids[j]!
+            if (!isPlaceholder(id)) {
+              into.add(id)
+            } else if (id !== SKIPPED) {
+              placeholders?.add(id)
             }
           }
         }
