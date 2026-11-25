@@ -745,7 +745,9 @@ export class WalkReader {
     const decodedFor = (unit: WalkUnit, name: string) =>
       decodedBy.get(unit.offset)?.some(took => took(name)) === true
     const surely = new Set<number>()
-    const surelyPlaceholders = new Set<number>()
+    const surelyPlaceholders = Number.isFinite(placeholderLimit)
+      ? new Set<number>()
+      : undefined
     const bounds = {
       contained,
       start: region.start - context,
@@ -797,10 +799,10 @@ export class WalkReader {
         surelyKept(chunk, graph.nodes, bounds, surely, surelyPlaceholders)
         if (
           surely.size > nodeLimit ||
-          surelyPlaceholders.size > placeholderLimit
+          (surelyPlaceholders?.size ?? 0) > placeholderLimit
         ) {
           surely.clear()
-          surelyPlaceholders.clear()
+          surelyPlaceholders?.clear()
           surelyKept(
             { nodes: graph.nodes, rows },
             graph.nodes,
@@ -812,7 +814,7 @@ export class WalkReader {
         const tooMany =
           keptNodesError(surely.size, nodeLimit, region, filtered, readTo) ??
           keptNodesError(
-            surelyPlaceholders.size,
+            surelyPlaceholders?.size ?? 0,
             placeholderLimit,
             region,
             filtered,
