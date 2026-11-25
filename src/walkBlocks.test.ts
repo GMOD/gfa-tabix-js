@@ -25,7 +25,7 @@ import type { WalkFragment } from './walkRows.ts'
 // What a cut states of an abridged piece it did not load, from the piece's
 // `blocks` row (gfa-to-tabix's ADR 0012), against what the cut that loads it
 // states. The cases are those of that repo's
-// docs/handoff/2026-11-11-abridged-pieces.md, each on a fixture every walk of
+// docs/walks-container/abridged/README.md, each on a fixture every walk of
 // which the writer abridged.
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
