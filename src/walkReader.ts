@@ -75,8 +75,12 @@ const READ_STEPS_PER_KEPT = 8
 // bp of reference a cut keeps past each end of the window
 export const WALK_CONTEXT = 1000
 
-// detail records an expanding cut reads at once
+// reads of detail records an expanding cut makes at once
 const DETAIL_READS = 16
+
+// the most compressed bytes of detail records one of those reads fetches,
+// but for a record larger than that alone
+const DETAIL_READ_BYTES = 2_000_000
 
 // The budgets a cut keeps to unless its caller passes others: what a browser
 // window can hold. Infinity lifts one
@@ -150,6 +154,35 @@ export async function readInOrder<T, R>(
     signal.throwIfAborted()
     use(items[i]!, await reads[i]!)
   }
+}
+
+// `items` as runs to read at once: those whose units' bytes touch in the
+// file, in file order, up to `maxBytes` a run, the runs in the order of
+// their first item among `items`
+export function touchingRuns<T extends { unit: WalkUnit }>(
+  items: T[],
+  maxBytes: number,
+) {
+  const runs: { items: T[]; bytes: number; first: number }[] = []
+  const place = new Map(items.map((item, k) => [item, k]))
+  for (const item of [...items].sort((a, b) => a.unit.offset - b.unit.offset)) {
+    const run = runs.at(-1)
+    const last = run?.items.at(-1)
+    const at = place.get(item) ?? 0
+    if (
+      run &&
+      last &&
+      last.unit.offset + last.unit.length === item.unit.offset &&
+      run.bytes + item.unit.length <= maxBytes
+    ) {
+      run.items.push(item)
+      run.bytes += item.unit.length
+      run.first = Math.min(run.first, at)
+    } else {
+      runs.push({ items: [item], bytes: item.unit.length, first: at })
+    }
+  }
+  return runs.sort((a, b) => a.first - b.first).map(run => run.items)
 }
 
 // The links from each piece's last step to the first of its line's next
@@ -852,10 +885,11 @@ export class WalkReader {
       }
       place(tileCut, unit.end)
     }
-    const readDetail = async ({ unit }: Detail) => {
-      const [lines = []] = await this.file.read([unit], reads.signal)
-      return lines.map(line => line.split('\t'))
-    }
+    const readDetails = (run: Detail[]) =>
+      this.file.read(
+        run.map(detail => detail.unit),
+        reads.signal,
+      )
     const decodeDetail = (
       { unit, ref, piece, into, pieces }: Detail,
       held: string[][],
@@ -1080,12 +1114,22 @@ export class WalkReader {
         fromBlocks.map(({ read }) => read),
         built.filter(expanding),
       )
+      const wanted = [...details.values()]
+      const held = new Map<Detail, string[]>()
+      let decoded = 0
       await readInOrder(
-        [...details.values()],
+        touchingRuns(wanted, DETAIL_READ_BYTES),
         DETAIL_READS,
         reads.signal,
-        readDetail,
-        decodeDetail,
+        readDetails,
+        (run, fetched) => {
+          run.forEach((detail, k) => held.set(detail, fetched[k] ?? []))
+          while (decoded < wanted.length && held.has(wanted[decoded]!)) {
+            const detail = wanted[decoded++]!
+            decodeDetail(detail, split(held.get(detail) ?? []))
+            held.delete(detail)
+          }
+        },
       )
       const starts = attaching ? pieceStarts(attachRows) : pieceStarts(rows)
       for (const { piece } of batch) {

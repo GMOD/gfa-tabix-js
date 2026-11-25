@@ -3,8 +3,10 @@ import { BlobFile, LocalFile } from 'generic-filehandle2'
 import { AmbiguousSequenceError } from './refNames.ts'
 import {
   bgzf,
+  bytesRead,
   digestOf,
   graphTablesGFA,
+  readsOf,
   walkFileOf,
   walkPlaces,
 } from './testing.ts'
@@ -17,6 +19,7 @@ import {
   WALK_BUDGETS,
   WalkReader,
   readInOrder,
+  touchingRuns,
 } from './walkReader.ts'
 import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
@@ -2208,8 +2211,10 @@ test('detail records read at once, finishing in reverse, cut as reads one at a t
   let queue = Promise.resolve()
   let reading = 0
   let most = 0
+  let reads = 0
   const serial = await expandedCut(
     await heldDetails(read => {
+      reads++
       const turn = queue.then(async () => {
         most = Math.max(most, ++reading)
         const bytes = await read()
@@ -2221,6 +2226,8 @@ test('detail records read at once, finishing in reverse, cut as reads one at a t
     }),
   )
   expect(most).toBe(1)
+  expect(reads).toBeGreaterThan(1)
+  expect(reads).toBeLessThan(details)
   const waiting: (() => void)[] = []
   const finished: number[] = []
   const concurrent = await expandedCut(
@@ -2231,7 +2238,7 @@ test('detail records read at once, finishing in reverse, cut as reads one at a t
           finished.push(start)
           resolve()
         })
-        if (waiting.length === details) {
+        if (waiting.length === reads) {
           for (const release of waiting.toReversed()) {
             release()
           }
@@ -2240,7 +2247,7 @@ test('detail records read at once, finishing in reverse, cut as reads one at a t
       return bytes
     }),
   )
-  expect(finished).toHaveLength(details)
+  expect(finished).toHaveLength(reads)
   expect(finished).not.toEqual(finished.toSorted((a, b) => a - b))
   expect(concurrent).toEqual(serial)
 })
@@ -2265,6 +2272,69 @@ test('aborting an expanding cut stops its detail reads', async () => {
   )
   expect(signals).toHaveLength(3)
   expect(signals.every(signal => signal.aborted)).toBe(true)
+})
+
+test('an expanding cut reads the detail units that touch in the file by one read, for the bytes and the tables of a file whose detail units lie apart', async () => {
+  const expanded = async (apart: boolean) => {
+    const { data, directory, units } = walkFileOf(threeAbridgedAt16, { apart })
+    const reads = readsOf(data)
+    const { tables } = await WalkReader.fromFilehandles({
+      data,
+      directory,
+    }).cutRegion(
+      { refName: 'chr', start: 16, end: 32 },
+      { context: 1, expand: () => true },
+    )
+    const details = units.filter(u => u.kind === 'detail')
+    const detailReads = reads.filter(({ position, length }) =>
+      details.some(u => u.offset >= position && u.offset < position + length),
+    )
+    return {
+      tables,
+      reads: detailReads.length,
+      bytes: bytesRead(detailReads),
+      unitBytes: bytesRead(details),
+    }
+  }
+  const apart = await expanded(true)
+  const touching = await expanded(false)
+  expect(apart).toMatchObject({ reads: 3, bytes: apart.unitBytes })
+  expect(touching).toMatchObject({ reads: 1, bytes: apart.unitBytes })
+  expect(touching.tables.walks.steps).toHaveLength(4 + 3 * 34)
+  expect(touching.tables).toEqual(apart.tables)
+})
+
+test('touchingRuns groups the units whose bytes touch, in file order, up to its byte limit, the runs in the order their first item was given', () => {
+  const item = (offset: number, length: number) => ({
+    unit: {
+      refName: 'R',
+      start: 0,
+      end: 1,
+      kind: 'detail',
+      name: String(offset),
+      offset,
+      length,
+    },
+  })
+  const [a, b, c, d, e] = [
+    item(0, 10),
+    item(10, 10),
+    item(20, 10),
+    item(40, 10),
+    item(50, 10),
+  ]
+  const offsets = (runs: ReturnType<typeof item>[][]) =>
+    runs.map(run => run.map(({ unit }) => unit.offset))
+  expect(offsets(touchingRuns([e, c, a, d, b], Infinity))).toEqual([
+    [40, 50],
+    [0, 10, 20],
+  ])
+  expect(offsets(touchingRuns([a, b, c, d, e], 20))).toEqual([
+    [0, 10],
+    [20],
+    [40, 50],
+  ])
+  expect(offsets(touchingRuns([a, b], 5))).toEqual([[0], [10]])
 })
 
 test('readInOrder keeps at most its limit reading, and uses results in order', async () => {

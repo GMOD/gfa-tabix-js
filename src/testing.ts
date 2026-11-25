@@ -258,12 +258,13 @@ const spanOf = (cols: string[]) =>
  * ref rows. A detail or blocks unit's extent
  * is its rows' span, and its units follow the sequence's tiles and
  * departure blocks. `reversed` writes a sequence's tiles and departure
- * blocks last first, and `gap` puts that many bytes the file never reads
- * between the header and the first unit.
+ * blocks last first, `gap` puts that many bytes the file never reads
+ * between the header and the first unit, and `apart` a unit of a kind no
+ * reader knows after each detail unit, so no two of them touch.
  */
 export function walkFileOf(
   lines: string[],
-  { reversed = false, gap = 0 } = {},
+  { reversed = false, gap = 0, apart = false } = {},
 ) {
   const rows = lines.map(line => line.split(' '))
   const header = rows.filter(r => r[0]!.startsWith('#')).map(r => r.join('\t'))
@@ -365,6 +366,17 @@ export function walkFileOf(
       const text = [['#unit', seq, lo, hi, kind, name], ...unitRows]
       const at = write(`${text.map(c => c.join('\t')).join('\n')}\n`)
       held.push({ refName: seq, start: lo, end: hi, kind, name, ...at })
+      if (apart && kind === 'detail') {
+        const filler = write(`#unit\t${seq}\t${lo}\t${hi}\tfiller\t${name}\n`)
+        held.push({
+          refName: seq,
+          start: lo,
+          end: hi,
+          ...filler,
+          kind: 'filler',
+          name,
+        })
+      }
     }
     for (const unit of held) {
       units.push(unit)

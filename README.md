@@ -748,7 +748,11 @@ A cut reads these units, each once:
   ([Abridged walks](#abridged-walks)), and checks every row it reads against its
   `abridged` row's `hapBp`
 - **Detail units:** with `expand`, those of the pieces it builds of the walks
-  named, among the window's tiles and then among the tiles fetched to attach
+  named, among the window's tiles and then among the tiles fetched to attach.
+  Those whose bytes touch in the file are fetched by one read, up to 2 MB a
+  read, and 16 reads at a time: expanding every walk over 90 kb of HLA class II
+  in the HPRC file reads 519 detail units, back to back in two stretches of the
+  file, by 4 reads, the same bytes
 - **Tiles fetched to attach:** for each record within `attachBp` that leaves or
   rejoins on the window or its context ([Departures](#departures)) and whose
   leave piece or rejoin piece the window's tiles lack, the tiles its `ownTiles`
