@@ -393,8 +393,8 @@ const { tables, refName, sample } = await reader.cutRegion(
   in its tile's extent, so a cut over that extent keeps the row from its first
   such step to its last and every step between, contained or not; the steps off
   the reference at a row's ends are kept only where a neighbouring piece reaches
-  the window. An `abridged` row counts nothing, since the cut builds its piece
-  with a placeholder per run off the reference, in fewer steps than its
+  the window. An `abridged` row counts nothing there, since the cut builds its
+  piece with a placeholder per run off the reference, in fewer steps than its
   `nsteps`, and neither do departures' own steps. So the count never passes the
   steps the cut's fragments keep. Its `fitsBp` is worked out tile by tile from
   the start of the window's context, each counted tile holding its count evenly
@@ -403,6 +403,25 @@ const { tables, refName, sample } = await reader.cutRegion(
   where the context of a window that fits ends, so it is narrower than the
   window refused, as the finished cut's is. Both are estimates, the finished
   cut's the window scaled by the steps it kept
+- Where the rows' count fits `stepBudget` and the `nsteps` of the window's
+  `abridged` rows could take it over, the cut reads the window's `blocks` units
+  before it decodes, the same units it reads after decoding when it goes on, and
+  adds what it surely keeps of each abridged piece it does not expand, in every
+  tile of the window: the steps on the reference under each block of its
+  `blocks` row that lies wholly inside the window and its context, and one
+  placeholder for each run off the reference between two such blocks. The cut
+  builds those blocks whole and keeps every step it places on that stretch with
+  every step between two of them, so this count too never passes the steps the
+  fragments keep. Over `stepBudget`, and with no earlier refusal to come, it
+  refuses there: 90 kb of HLA class II in the HPRC file, where 332 of 464 walks
+  are abridged, is refused in 0.7 s where the finished cut took 7 s to refuse
+  it. A piece without a `blocks` row, or with one that does not add up to its
+  `abridged` row or cover whole steps of the reference, leaves the window to the
+  finished cut, which reports it. A piece the cut expands counts nothing, since
+  the steps off the reference at its ends are in its detail record. For
+  `fitsBp`, a tile at the edge of the window and its context holds its pieces'
+  count and, as an estimate, its rows' count scaled to the part of its extent
+  the cut draws
 
 ## Cut presets
 

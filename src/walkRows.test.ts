@@ -6,6 +6,7 @@ import {
   byteBudgetError,
   joinPieces,
   stepBudgetError,
+  surelyKeptError,
   walkCut,
   walkHeader,
   walkNameFilter,
@@ -1612,4 +1613,25 @@ describe('the stretches between and past a walk’s fragments', () => {
       [0, 200, 300, [['read', 100]]],
     ])
   })
+})
+
+test('a tile counted in part is refused by the steps counted, with fitsBp from the steps it is likely to keep', () => {
+  const window = { start: 0, end: 100 }
+  const tile = { start: 0, end: 100, steps: 60 }
+  expect(surelyKeptError([tile], 50, window, 0, false)).toMatchObject({
+    limit: 50,
+    fitsBp: 83,
+  })
+  expect(
+    surelyKeptError([{ ...tile, likely: 120 }], 50, window, 0, false),
+  ).toMatchObject({ limit: 50, fitsBp: 41 })
+  expect(
+    surelyKeptError(
+      [{ ...tile, steps: 40, likely: 120 }],
+      50,
+      window,
+      0,
+      false,
+    ),
+  ).toBeUndefined()
 })

@@ -1968,20 +1968,24 @@ function zoomInError(
  * tiles' steps per bp, and a stretch no tile covers holds none. Where those
  * steps reach the budget is where the context of the span that fits ends,
  * before the last counted tile ends and so before the window's context does:
- * the span is narrower than the window.
+ * the span is narrower than the window. A tile's `likely`, no fewer than its
+ * `steps`, is what the cut is expected to keep of it where `steps` counts a
+ * part: the span is worked out from it, and the refusal from `steps` alone.
  */
 export function surelyKeptError(
-  tiles: { start: number; end: number; steps?: number }[],
+  tiles: { start: number; end: number; steps?: number; likely?: number }[],
   budget: number,
   window: { start: number; end: number },
   context: number,
   filtered: boolean,
 ) {
   let steps = 0
+  let likely = 0
   let bp = 0
   for (const tile of tiles) {
     if (tile.steps !== undefined) {
       steps += tile.steps
+      likely += Math.max(tile.steps, tile.likely ?? 0)
       bp += tile.end - tile.start
     }
   }
@@ -1991,7 +1995,16 @@ export function surelyKeptError(
   }
   return steps > budget
     ? zoomInError(
-        budgetReach(tiles, bp > 0 ? steps / bp : 0, budget, drawn) -
+        budgetReach(
+          tiles.map(tile =>
+            tile.steps === undefined
+              ? tile
+              : { ...tile, steps: Math.max(tile.steps, tile.likely ?? 0) },
+          ),
+          bp > 0 ? likely / bp : 0,
+          budget,
+          drawn,
+        ) -
           context -
           window.start,
         budget,

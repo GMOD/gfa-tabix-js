@@ -1200,11 +1200,12 @@ const COUNTED_KINDS = new Set(['ref', 'walk', 'abridged'])
  * every step between, as one stretch of a fragment, whether it is contained
  * or not. The steps off R at a row's ends are kept only if a neighbouring
  * piece reaches the window, so they are not counted. An `abridged` row
- * counts nothing, since a cut builds the piece from its blocks row with a
- * placeholder for each run off R, in fewer steps than its `nsteps`, and a
- * departure's own steps are not counted either. So `kept` never exceeds the
- * steps of the cut's fragments, which its step budget counts with the
- * departures' own steps.
+ * counts nothing here, since a cut builds the piece from its blocks row with
+ * a placeholder for each run off R, in fewer steps than its `nsteps`
+ * (blocksSteps counts those from the blocks row), and a departure's own
+ * steps are not counted either. So `kept` never exceeds the steps of the
+ * cut's fragments, which its step budget counts with the departures' own
+ * steps.
  *
  * `n` and `interior` bound the steps the decode's rows give the read budget,
  * and those of them off R: each `ref` and `walk` row's own, and an abridged
@@ -1255,6 +1256,99 @@ export function tileSteps(
     }
   }
   return sound ? tally : undefined
+}
+
+const takes = (
+  cols: string[],
+  keep: ((name: string) => boolean) | undefined,
+  expand: ((name: string) => boolean) | undefined,
+) =>
+  cols[3] === 'abridged' &&
+  (keep?.(cols[4]!) ?? true) &&
+  expand?.(cols[4]!) !== true
+
+// The steps a tile's `abridged` rows state for the pieces a cut builds from
+// their blocks rows, which is no fewer than it builds of them
+export function statedAbridgedSteps(
+  lines: string[],
+  keep: ((name: string) => boolean) | undefined,
+  expand: ((name: string) => boolean) | undefined,
+) {
+  let steps = 0
+  for (const line of lines) {
+    const cols = line.split('\t', 9)
+    const stated = takes(cols, keep, expand) ? Number(cols[8]) : 0
+    steps += Number.isFinite(stated) ? stated : 0
+  }
+  return steps
+}
+
+/**
+ * The steps a cut over `drawn` surely keeps of the pieces a tile abridges
+ * and the cut builds from their blocks rows, from the tile's lines and its
+ * blocks unit's before any is decoded; undefined where a piece has no
+ * blocks row, or one the cut refuses.
+ *
+ * A cut builds whole each block of such a piece that lies over the stretch
+ * it draws, a step for each step of R under the block, and a placeholder
+ * for the run off R between two blocks it builds whole. It keeps every step
+ * a row places on that stretch, and every step between two of them with no
+ * step onto R off the stretch between, contained or not. So the count is
+ * the steps of R under each block wholly inside `drawn`, and one for each
+ * run off R between two such blocks, one after the other. A run off R at a
+ * piece's end is kept only where a neighbouring piece reaches the window,
+ * so it is not counted.
+ */
+export function blocksSteps(
+  lines: string[],
+  blocksLines: string[],
+  drawn: { start: number; end: number },
+  keep: ((name: string) => boolean) | undefined,
+  expand: ((name: string) => boolean) | undefined,
+) {
+  const kinds = new Set(['ref', 'abridged'])
+  const rows = lines
+    .filter(line => kinds.has(line.split('\t', 4)[3] ?? ''))
+    .map(line => line.split('\t'))
+  const listed = new Map(
+    blocksLines.map(line => {
+      const cols = line.split('\t')
+      return [`${cols[4]}\t${cols[5]}\t${cols[6]}`, cols]
+    }),
+  )
+  const inside = (blocks: PieceBlocks, k: number) =>
+    blockLow(blocks, k) >= drawn.start &&
+    blockLow(blocks, k) + blocks.lengths[k]! <= drawn.end
+  let steps = 0
+  let sound = true
+  try {
+    const { path } = chunkRef(rows)
+    for (const cols of rows.filter(row => takes(row, keep, expand))) {
+      const piece = abridgedPiece(cols, 0)
+      const row = listed.get(
+        `${piece.name}\t${piece.fragStart}\t${piece.piece}`,
+      )
+      const blocks = row ? parseBlocks(row) : undefined
+      if (blocks && blocks.before + blocks.bp + blocks.after === piece.hapBp) {
+        const { from, to } = blockPositions(piece, blocks, path)
+        for (let k = 0; k < from.length; k++) {
+          if (inside(blocks, k)) {
+            steps += to[k]! - from[k]!
+            steps +=
+              k > 0 && blocks.off[k]! > 0 && inside(blocks, k - 1) ? 1 : 0
+          }
+        }
+      } else {
+        sound = false
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof WalkRowError)) {
+      throw error
+    }
+    sound = false
+  }
+  return sound ? steps : undefined
 }
 
 // The ids of a column of delta tokens, from `previous.id`, which ends on the

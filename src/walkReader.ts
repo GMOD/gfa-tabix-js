@@ -6,6 +6,7 @@ import { panSNHaplotypeOrSample } from './util.ts'
 import {
   blockLinks,
   blocksOver,
+  blocksSteps,
   bpRow,
   canonicalLink,
   chunkRef,
@@ -15,6 +16,7 @@ import {
   tileLinks,
   parseBlocks,
   referenceNodes,
+  statedAbridgedSteps,
   tileNodeIds,
   tileSteps,
   unloadedRow,
@@ -954,6 +956,17 @@ export class WalkReader {
             ]
           : []
       })
+    const readBlocks = async (wanted: Needed[]) => {
+      const unread = wanted.filter(w => !blocksRead.has(w.unit))
+      const fetched = await this.file.read(
+        unread.map(w => w.unit),
+        reads.signal,
+      )
+      unread.forEach((w, k) => {
+        extra.push(w)
+        blocksRead.set(w.unit, fetched[k]!)
+      })
+    }
     const blocksOf = async (items: Met[], attaching: boolean) => {
       const tilesMet = new Map<WalkUnit, number>()
       for (const { unit, from } of items) {
@@ -972,14 +985,7 @@ export class WalkReader {
       if (unread.length > 0) {
         checkBytes(bytesWith(unread), attaching)
       }
-      const fetched = await this.file.read(
-        unread.map(w => w.unit),
-        reads.signal,
-      )
-      unread.forEach((w, k) => {
-        extra.push(w)
-        blocksRead.set(w.unit, fetched[k]!)
-      })
+      await readBlocks(unread)
       const listed = new Map<WalkUnit, Map<string, string[]>>()
       for (const [k, tileUnit] of [...tilesMet.keys()].entries()) {
         const byPiece = new Map<string, string[]>()
@@ -1159,14 +1165,10 @@ export class WalkReader {
     // and pieces can hold
     const noEarlierRefusal = (
       read: string[][],
-      counted: (ReturnType<typeof tileSteps> | 'edge')[],
+      all: ReturnType<typeof tileSteps>[],
       records: WalkDeparture[],
       ownTiles: Map<WalkDeparture, number[]>,
     ) => {
-      const all = tiles.map((_, k) => {
-        const tally = counted[k]
-        return tally === 'edge' ? tileSteps(read[k]!, keep, expand) : tally
-      })
       const blocks = tiles
         .filter((_, k) => all[k]?.blocks === true)
         .map(unit => ({ unit: blocksUnits.get(unit.name), from: unit.start }))
@@ -1228,10 +1230,14 @@ export class WalkReader {
       )
     }
     // keptStepsError's notice, given before any tile is decoded where the
-    // steps the tiles strictly inside the drawn stretch surely keep
-    // (tileSteps in walkChunk.ts) pass the step budget and no earlier
-    // refusal can come, so the finished cut would throw it
-    const earlyRefusal = (
+    // steps the cut surely keeps pass the step budget and no earlier refusal
+    // can come, so the finished cut would throw it. The count is the rows'
+    // (tileSteps in walkChunk.ts) of the tiles strictly inside the drawn
+    // stretch; where that fits and the steps the tiles' abridged rows state
+    // could take it over, the cut reads the blocks units it would read
+    // anyway and adds what it builds of each abridged piece on the drawn
+    // stretch (blocksSteps), in any tile of the window
+    const earlyRefusal = async (
       read: string[][],
       records: WalkDeparture[],
       ownTiles: Map<WalkDeparture, number[]>,
@@ -1241,23 +1247,93 @@ export class WalkReader {
           ? tileSteps(read[k]!, keep, expand)
           : 'edge',
       )
-      const kept = counted.reduce(
-        (sum, tally) => sum + (tally === 'edge' ? 0 : (tally?.kept ?? 0)),
-        0,
+      const rowSteps = counted.map(tally =>
+        tally === 'edge' ? undefined : tally?.kept,
       )
-      return kept > stepBudget &&
-        noEarlierRefusal(read, counted, records, ownTiles)
-        ? surelyKeptError(
-            tiles.map((unit, k) => {
-              const tally = counted[k]
-              return tally === 'edge' ? unit : { ...unit, steps: tally?.kept }
-            }),
-            stepBudget,
-            region,
-            context,
-            filtered,
+      const kept = rowSteps.reduce<number>((sum, n) => sum + (n ?? 0), 0)
+      const all = () =>
+        tiles.map((_, k) => {
+          const tally = counted[k]
+          return tally === 'edge' ? tileSteps(read[k]!, keep, expand) : tally
+        })
+      // an edge tile's `steps` are those of its abridged pieces on the drawn
+      // stretch, and `whole` what its rows keep where the cut draws all of it
+      const refusal = (
+        steps: (number | undefined)[],
+        whole: (number | undefined)[] = [],
+      ) =>
+        surelyKeptError(
+          tiles.map((unit, k) => {
+            const start = Math.max(unit.start, drawn.start)
+            const end = Math.min(unit.end, drawn.end)
+            const drawnShare =
+              unit.end > unit.start
+                ? (end - start) / (unit.end - unit.start)
+                : 1
+            const count = steps[k]
+            return count === undefined
+              ? unit
+              : counted[k] === 'edge'
+                ? {
+                    start,
+                    end,
+                    steps: count,
+                    likely: count + (whole[k] ?? 0) * drawnShare,
+                  }
+                : { ...unit, steps: count }
+          }),
+          stepBudget,
+          region,
+          context,
+          filtered,
+        )
+      const fromBlocks = async () => {
+        const tallies = all()
+        const abridging = tiles.flatMap((windowTile, k) => {
+          const unit = blocksUnits.get(windowTile.name)
+          return tallies[k]?.blocks === true && unit
+            ? [{ unit, from: windowTile.start, k }]
+            : []
+        })
+        const builtOf = async () => {
+          await readBlocks(abridging)
+          return abridging.map(({ unit, k }) =>
+            blocksSteps(
+              read[k]!,
+              blocksRead.get(unit) ?? [],
+              bounds,
+              keep,
+              expand,
+            ),
           )
-        : undefined
+        }
+        const built = noEarlierRefusal(read, tallies, records, ownTiles)
+          ? await builtOf()
+          : undefined
+        const steps = [...rowSteps]
+        abridging.forEach(({ k }, i) => {
+          steps[k] = (steps[k] ?? 0) + (built?.[i] ?? 0)
+        })
+        return built?.every(n => n !== undefined) === true
+          ? refusal(
+              steps,
+              tallies.map(tally => tally?.kept),
+            )
+          : undefined
+      }
+      return kept > stepBudget
+        ? noEarlierRefusal(read, all(), records, ownTiles)
+          ? refusal(rowSteps)
+          : undefined
+        : kept +
+              tiles.reduce(
+                (sum, _, k) =>
+                  sum + statedAbridgedSteps(read[k]!, keep, expand),
+                0,
+              ) >
+            stepBudget
+          ? fromBlocks()
+          : undefined
     }
     let cut: ReturnType<typeof walkCut>
     try {
@@ -1291,7 +1367,7 @@ export class WalkReader {
         }
       }
       const early = Number.isFinite(stepBudget)
-        ? earlyRefusal(read, records, ownTiles)
+        ? await earlyRefusal(read, records, ownTiles)
         : undefined
       if (early) {
         throw early

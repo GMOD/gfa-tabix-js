@@ -1136,6 +1136,153 @@ test('a window whose blocks unit takes it past the byte budget gets the byte ref
   )
 })
 
+// abridgedAt16 with three haplotypes abridged the same way, each built as
+// four steps on R and a placeholder between its two blocks: 19 steps in the
+// fragments with R's four, of which the tile's rows alone count R's, and the
+// placeholder again in each walk's departure
+const threeAbridgedAt16 = [
+  '#walks format:i:8 tile:i:16',
+  '#reference R',
+  '#haplotype H#1',
+  '#haplotype H#2',
+  '#haplotype H#3',
+  '#hole R#0#chr 0 16',
+  'R#0#chr 16 ref R#0#chr 16 16 0 4 2,2,2,2 4,4,4,4 .',
+  ...[1, 2, 3].flatMap(h => [
+    `R#0#chr 16 abridged H#${h}#h 0 0 0 34 46 ${h - 1}`,
+    `R#0#chr 16:${h - 1} 16 32 nodes 100${',1'.repeat(29)} 1${',1'.repeat(29)}`,
+    `R#0#chr 16:${h - 1} 16 32 route 4 196${',2'.repeat(29)} -252`,
+    `R#0#chr 16:${h - 1} 16 32 walk H#${h}#h 0 0 0 34 2 0`,
+    `R#0#chr 16 16 32 blocks H#${h}#h 0 0 16+8,30,0+8`,
+  ]),
+]
+
+// A tile at the drawn stretch's edge counts its abridged pieces' 15 steps and
+// not R's four, which its rows count only strictly inside
+test.each([
+  { tile: 'strictly inside the drawn stretch', context: 1, counted: 19 },
+  {
+    tile: 'strictly inside it, contained',
+    context: 1,
+    contained: true,
+    counted: 19,
+  },
+  { tile: 'at its edge', context: 0, counted: 15 },
+  { tile: 'at its edge, contained', context: 0, contained: true, counted: 15 },
+])(
+  'a window whose abridged pieces take it over the step budget is refused before decoding, by the steps their blocks rows build, with the tile $tile',
+  async ({ context, contained = false, counted }) => {
+    const window = { start: 16, end: 32 }
+    const opts = { context, contained }
+    const cut = await inline(threeAbridgedAt16).cut('R#0#chr', window, opts)
+    expect(cut.fragments.reduce((sum, f) => sum + f.ids.length, 0)).toBe(19)
+    expect(keptSteps(cut)).toBe(22)
+    const at = await earlyAndFinished(inline(threeAbridgedAt16), window, {
+      ...opts,
+      stepBudget: 22,
+    })
+    expect(at.early).toEqual({ error: undefined, decoded: 1 })
+    const below = await earlyAndFinished(inline(threeAbridgedAt16), window, {
+      ...opts,
+      stepBudget: counted,
+    })
+    expect(below.early.decoded).toBe(1)
+    expect(below.early.error).toMatchObject({ limit: counted })
+    const { early, finished } = await earlyAndFinished(
+      inline(threeAbridgedAt16),
+      window,
+      { ...opts, stepBudget: counted - 1 },
+    )
+    expect(early.decoded).toBe(0)
+    expect(finished.decoded).toBe(1)
+    expect(finished.error).toMatchObject({ limit: counted - 1 })
+    expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+    expect(fitsNarrower(early.error, window)).toBe(true)
+  },
+)
+
+test('a window whose abridged pieces take it over the step budget is left to the finished cut where a walk is expanded under a node limit, a placeholder limit is set, or a blocks row does not add up to its abridged row', async () => {
+  const window = { start: 16, end: 32 }
+  for (const opts of [
+    { nodeLimit: 1000, expand: (name: string) => name === 'H#1#h' },
+    { placeholderLimit: 1000 },
+  ]) {
+    const { early, finished } = await earlyAndFinished(
+      inline(threeAbridgedAt16),
+      window,
+      { context: 1, stepBudget: 18, ...opts },
+    )
+    expect(early.decoded).toBeGreaterThan(0)
+    expect(early.error).toBeInstanceOf(RegionTooLargeError)
+    expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+  }
+  const short = threeAbridgedAt16.map(line =>
+    line.replace(
+      'blocks H#3#h 0 0 16+8,30,0+8',
+      'blocks H#3#h 0 0 16+8,29,0+8',
+    ),
+  )
+  const { early, finished } = await earlyAndFinished(inline(short), window, {
+    context: 1,
+    stepBudget: 18,
+  })
+  expect(early.decoded).toBe(1)
+  expect(early.error).toBeInstanceOf(WalkFormatError)
+  expect(early.error).toEqual(finished.error)
+})
+
+// The early count never passes the steps the finished cut keeps: at a budget
+// of exactly those steps no window is refused for them, and one below or at
+// half of them, each is refused as the finished cut refuses it, some before
+// decoding
+test.each(['blocks.R', 'between.R', 'hairpin.R', 'interleaved.R', 'edge.R'])(
+  'every window of %s, which abridges its walks, is cut at a step budget of the steps it keeps and refused below it as the finished cut refuses it',
+  async fixture => {
+    const walks = reader(fixture)
+    const length = await walks.sequenceLength('R#0#c')
+    let refusedEarly = 0
+    const run = async (
+      window: { start: number; end: number },
+      opts: WalkCutOptions,
+    ) => {
+      decoding.tiles = 0
+      const error = await walks.cut('R#0#c', window, opts).then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      return { error, decoded: decoding.tiles }
+    }
+    for (let start = 0; start < length; start += 5) {
+      for (const width of [20, 60, 120]) {
+        for (const opts of [
+          { context: 0 },
+          { context: 10 },
+          { context: 0, contained: true },
+          { context: 10, contained: true },
+        ]) {
+          const window = { start, end: start + width }
+          const kept = keptSteps(await walks.cut('R#0#c', window, opts))
+          const at = await run(window, { ...opts, stepBudget: kept })
+          expect(limitOf(at.error)).not.toBe(kept)
+          for (const stepBudget of [kept - 1, Math.floor(kept / 2)]) {
+            const early = await run(window, { ...opts, stepBudget })
+            decoding.countsFirst = false
+            const finished = await run(window, { ...opts, stepBudget }).finally(
+              () => {
+                decoding.countsFirst = true
+              },
+            )
+            expect(butFitsBp(early.error)).toEqual(butFitsBp(finished.error))
+            expect(fitsNarrower(early.error, window)).toBe(true)
+            refusedEarly += early.decoded === 0 ? 1 : 0
+          }
+        }
+      }
+    }
+    expect(refusedEarly).toBeGreaterThan(0)
+  },
+)
+
 // attachmany.R over 300-400: 52 steps on its tiles strictly inside, and the
 // records of all ten haplotypes rejoining there, whose own steps lie in
 // tiles 0 to 90
