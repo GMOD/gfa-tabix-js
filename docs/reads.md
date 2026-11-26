@@ -83,7 +83,7 @@ A cut reads these units of the file, each once:
   keeps and does not expand
 - **Detail units,** with `expand`, for the pieces of the walks named
 - **Tiles fetched to attach,** for each departure that leaves or rejoins on the
-  window or its context ([Departures](api.md#departures)) and has its own steps
+  window or its context ([Departures](cut.md#departures)) and has its own steps
   in a tile outside the window's
 
 A departure that only lies over the window, with both ends elsewhere, adds its

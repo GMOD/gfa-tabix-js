@@ -67,15 +67,8 @@ const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
 
 ## Docs
 
-- [API reference](docs/api.md): every method, option, returned field and error
-- [Large genomic regions and abridged walks](docs/reads.md): the size limits,
-  `RegionTooLargeError` and `expand`
-- [Runs](docs/runs.md): `getRunsForRange`, each walk as stretches of reference
-  and the DNA between them
-- [Counts](docs/counts.md): `getCountsForRange`, how many haplotypes pass
-  through each node and link
-- [Structural forms](docs/structural-forms.md): `getFormsForRange`, haplotypes
-  grouped by the structural changes they make
+- [API reference](docs/api.md): start here for options, the returned tables and
+  errors. It links to the pages on the other methods
 
 ## License
 
