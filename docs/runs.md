@@ -10,7 +10,7 @@ window's tiles and departure blocks and those tiles' `blocks` units: no detail
 unit, and no tile fetched to attach.
 
 ```ts
-import { WalkFile, fragmentRuns } from '@gmod/gfa-tabix'
+import { WalkFile } from '@gmod/gfa-tabix'
 
 const walks = new WalkFile({ walksUrl })
 const runs = await walks.getRunsForRange('chr6', 32_510_000, 32_600_000)
@@ -54,13 +54,6 @@ or read from a departure record between pieces:
 
 `pos`, `reversed`, `ownBp` and `missingBp` are the departure's.
 
-## Departures
-
-`runDepartures(runs, p)` reads fragment `p`'s departures as `walkDepartures`
-reads a chain, both through one reading of stretches and runs: where it leaves a
-stretch along its way and rejoins the next, with its own bp between, the bp of
-the stretches it takes the other way, and whether every run between is loaded.
-
 ## What runs refuse
 
 A file whose header does not state `revisited:i:0` is refused with a
@@ -70,8 +63,7 @@ is refused as a cut refuses it.
 
 ## How runs are checked
 
-`fragmentRuns(tables, refName, holes)` reads a cut's tables back as runs.
-`getRunsForRange` equals it for every fixture window, plain and contained, and
-over the hosted GRCh38 file (`scripts/runs-equality.ts`), and
-`scripts/runs-mutants.ts` breaks the reader on purpose and holds each break to
-failing.
+`getRunsForRange` equals `getCutForRange`'s tables read back as runs for every
+fixture window, plain and contained, and over the hosted GRCh38 file
+(`scripts/runs-equality.ts`), and `scripts/runs-mutants.ts` breaks the reader on
+purpose and holds each break to failing.
