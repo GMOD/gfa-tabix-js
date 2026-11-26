@@ -1538,7 +1538,7 @@ export class WalkReader {
    * piece the cut builds whole, and each piece holding the own steps of a
    * record the cut attaches, while it decodes the rows, keeping no step and
    * building no graph. Every count states why it may fall short, or that it
-   * is exact (README, Counts)
+   * is exact (docs/counts.md)
    */
   async counts(
     refName: string,
