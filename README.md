@@ -40,22 +40,6 @@ const { tables } = await walks.getGraphForRange(
 - `gfa-to-tabix --walks` writes the walk file, `<prefix>.<sample>.walks.gz`, and
   its directory
 
-## Methods
-
-Each `WalkFile` method below takes a contig and a range.
-
-| Method              | Returns                                                      | Docs                                         |
-| ------------------- | ------------------------------------------------------------ | -------------------------------------------- |
-| `getGraphForRange`  | The graph and walks over the range, as tables                | [API reference](docs/api.md#tables)          |
-| `getRunsForRange`   | Each walk as stretches of reference and the DNA between      | [Runs](docs/runs.md)                         |
-| `getCountsForRange` | How many haplotypes pass through each node and link          | [Counts](docs/counts.md)                     |
-| `getFormsForRange`  | The input for grouping haplotypes that make the same change  | [Structural forms](docs/structural-forms.md) |
-| `getCutForRange`    | The cut as objects, for a caller that needs more than tables | [API reference](docs/api.md#fragments)       |
-
-The [API reference](docs/api.md) lists every method, option and error.
-[Large genomic regions and abridged walks](docs/reads.md) covers the size
-limits, `RegionTooLargeError` and `expand`.
-
 ## The GFA tabix file
 
 `GfaTabixFile` reads gfa-to-tabix's segments and links, Tabix-indexed BED, as
@@ -80,6 +64,18 @@ const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
 - **Walk:** the route one haplotype takes through the nodes and links
 - **Window:** a stretch of the reference, also called a region or range
 - **Cut:** the nodes, links and walks under a window
+
+## Docs
+
+- [API reference](docs/api.md): every method, option, returned field and error
+- [Large genomic regions and abridged walks](docs/reads.md): the size limits,
+  `RegionTooLargeError` and `expand`
+- [Runs](docs/runs.md): `getRunsForRange`, each walk as stretches of reference
+  and the DNA between them
+- [Counts](docs/counts.md): `getCountsForRange`, how many haplotypes pass
+  through each node and link
+- [Structural forms](docs/structural-forms.md): `getFormsForRange`, haplotypes
+  grouped by the structural changes they make
 
 ## License
 
