@@ -4,10 +4,13 @@ import { crc32, deflateRawSync } from 'node:zlib'
 import { BlobFile } from 'generic-filehandle2'
 
 import { WalkFile } from './walkFile.ts'
+import { GAP_KINDS } from './walkGaps.ts'
 import { isPlaceholder, runName } from './walkRows.ts'
+import { END_KINDS } from './walkRuns.ts'
 
 import type { GraphTables } from './util.ts'
 import type { WalkFilehandle, WalkUnit } from './walkContainer.ts'
+import type { WalkRuns } from './walkRuns.ts'
 import type { FilehandleOptions } from 'generic-filehandle2'
 import type { Hash } from 'node:crypto'
 
@@ -420,4 +423,223 @@ export function walkFileOf(
     directory: new BlobFile(new Blob([index])),
     units,
   }
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+const isList = (value: unknown): value is unknown[] => Array.isArray(value)
+
+const listOf = (value: unknown) =>
+  isList(value)
+    ? value
+    : value instanceof Float64Array ||
+        value instanceof Int32Array ||
+        value instanceof Uint8Array
+      ? Array.from(value)
+      : undefined
+
+// The first place two values differ, as a path and the two values there
+export function firstDifference(
+  a: unknown,
+  b: unknown,
+  path = '',
+): string | undefined {
+  const listA = listOf(a)
+  const listB = listOf(b)
+  let found: string | undefined
+  if (listA && listB) {
+    for (
+      let k = 0;
+      found === undefined && k < Math.max(listA.length, listB.length);
+      k++
+    ) {
+      found = firstDifference(listA[k], listB[k], `${path}[${k}]`)
+    }
+  } else if (isObject(a) && isObject(b) && !listA && !listB) {
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      found ??= firstDifference(a[key], b[key], `${path}.${key}`)
+    }
+  } else if (!Object.is(a, b)) {
+    found = `${path}: ${JSON.stringify(a)} against ${JSON.stringify(b)}`
+  }
+  return found
+}
+
+// A fragment's first stretch's rejoin breakpoint and its last's leave
+export function runsBreaks({ walks, stretches }: WalkRuns, p: number) {
+  const first = walks.offsets[p]!
+  const last = walks.offsets[p + 1]! - 1
+  const end = (k: number) => stretches.starts[k]! + stretches.bp[k]!
+  return {
+    first:
+      stretches.against[first] === 1 ? end(first) : stretches.starts[first]!,
+    last: stretches.against[last] === 1 ? stretches.starts[last]! : end(last),
+  }
+}
+
+interface Segment {
+  kind: string
+  start: number
+  end: number
+  missingBp: number
+  before: number
+  after: number
+}
+
+/**
+ * Each fragment end of `runs` held to the cut's gap rows beside it: an end
+ * that rejoins covers its own bp past the fragment with that row, every
+ * `own` segment there of its missingBp, and where an `unread` segment
+ * follows that bp, the row states the end's breakpoint there; an end where
+ * the walk ends has only bp the cut read and kept out past it; at the drawn
+ * edge, an `unread` segment beside the fragment starts at its breakpoint
+ */
+export function endsAgainstGaps(runs: WalkRuns, tables: GraphTables) {
+  const gaps = tables.gaps!
+  const checked = new Map<string, number>()
+  const mismatches: string[] = []
+  const tally = (what: string, holds: boolean, where: string) => {
+    checked.set(what, (checked.get(what) ?? 0) + 1)
+    if (!holds) {
+      mismatches.push(`${what}: ${where}`)
+    }
+  }
+  const segmentsOf = (g: number) => {
+    const out: Segment[] = []
+    let at = gaps.starts[g]!
+    for (
+      let s = gaps.segmentOffsets[g]!;
+      s < gaps.segmentOffsets[g + 1]!;
+      s++
+    ) {
+      const bp = gaps.segments.bp[s]!
+      out.push({
+        kind: GAP_KINDS[gaps.segments.kinds[s]!]!,
+        start: at,
+        end: at + bp,
+        missingBp: gaps.segments.missingBp[s]!,
+        before: gaps.segments.before[s]!,
+        after: gaps.segments.after[s]!,
+      })
+      at += bp
+    }
+    return out
+  }
+  const rowOf = (p: number, edge: (e: number) => boolean) => {
+    const g = gaps.names.findIndex(
+      (_, k) => gaps.walks[k] === p && edge(gaps.edges[k]!),
+    )
+    return g < 0 ? undefined : g
+  }
+  const { walks } = runs
+  walks.names.forEach((name, p) => {
+    if (name !== runs.refName) {
+      const where = `${name} ${walks.starts[p]}-${walks.ends[p]}`
+      const breaks = runsBreaks(runs, p)
+      const firstOfWalk = p === 0 || walks.names[p - 1] !== name
+      const rows = {
+        after: rowOf(p, e => e === 0 || e === 2),
+        before: firstOfWalk
+          ? rowOf(p, e => e === 1)
+          : rowOf(p - 1, e => e === 0),
+      }
+      for (const side of ['before', 'after'] as const) {
+        const ends = walks[side]
+        const kind = END_KINDS[ends.kinds[p]!]!
+        const g = rows[side]
+        const segments = g === undefined ? [] : segmentsOf(g)
+        const after = side === 'after'
+        const edge = after ? walks.ends[p]! : walks.starts[p]!
+        const held = after ? walks.tailBp[p]! : walks.leadBp[p]!
+        const trimmed = after ? walks.trimmedAfter[p]! : walks.trimmedBefore[p]!
+        const label = `${side} ${kind} ${where}`
+        if (kind === 'beyond' || kind === 'elsewhere') {
+          const past = ends.ownBp[p]! - held
+          const far = after ? edge + past : edge - past
+          const lo = Math.min(edge, far)
+          const hi = Math.max(edge, far)
+          if (past > 0) {
+            const neighbour = after ? p + 1 : p - 1
+            const beside =
+              walks.names[neighbour] === name ? neighbour : undefined
+            const rowEdge =
+              g === undefined ? edge : after ? gaps.ends[g]! : gaps.starts[g]!
+            const reach =
+              beside === undefined
+                ? rowEdge
+                : after
+                  ? walks.starts[beside] === rowEdge
+                    ? rowEdge + walks.leadBp[beside]!
+                    : rowEdge
+                  : walks.ends[beside] === rowEdge
+                    ? rowEdge - walks.tailBp[beside]!
+                    : rowEdge
+            tally(
+              'a rejoining end covered by its gap row and the next fragment’s lead or tail',
+              (g === undefined ||
+                (after ? gaps.starts[g] === edge : gaps.ends[g] === edge)) &&
+                (after ? reach >= far : reach <= far),
+              label,
+            )
+            const own = segments.filter(
+              x => x.kind === 'own' && x.start < hi && x.end > lo,
+            )
+            if (own.length > 0) {
+              tally(
+                "a rejoining end's missingBp",
+                own.every(x => x.missingBp === ends.missingBp[p]),
+                label,
+              )
+            }
+          }
+          const unread = segments.find(
+            x =>
+              x.kind === 'unread' && (after ? x.start === far : x.end === far),
+          )
+          if (unread) {
+            const stated = after ? unread.before : unread.after
+            tally(
+              "a rejoining end's breakpoint",
+              ends.ownBp[p]! > 0
+                ? stated === ends.pos[p]
+                : stated === (after ? breaks.last : breaks.first),
+              label,
+            )
+          }
+        } else if (kind === 'ends') {
+          tally(
+            'an end where the walk ends holds only bp read past it',
+            ends.ownBp[p] === held + trimmed &&
+              segments.every(x => x.kind === 'read') &&
+              (trimmed === 0
+                ? g === undefined
+                : g !== undefined &&
+                  (after
+                    ? gaps.ends[g] === edge + trimmed
+                    : gaps.starts[g] === edge - trimmed)),
+            label,
+          )
+        } else {
+          const beside = segments.find(x =>
+            after ? x.start === edge : x.end === edge,
+          )
+          tally(
+            'an end at the drawn edge has no own bp beside it',
+            beside?.kind !== 'own',
+            label,
+          )
+          if (beside?.kind === 'unread') {
+            tally(
+              'an end at the drawn edge leaves unread steps at its breakpoint',
+              (after ? beside.before : beside.after) ===
+                (after ? breaks.last : breaks.first),
+              label,
+            )
+          }
+        }
+      }
+    }
+  })
+  return { checked, mismatches }
 }

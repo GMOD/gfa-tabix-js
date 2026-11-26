@@ -49,7 +49,8 @@ range: the reference, each haplotype's walk through it, and the nodes and links
 they visit, as typed arrays. `refName` is a contig of the reference sample
 (`chr6`) or the file's full name (`GRCh38#0#chr6`). `getCutForRange`,
 `getCountsForRange` and `getFormsForRange` give the cut itself, per-node
-haplotype counts and structural forms.
+haplotype counts and structural forms. `getRunsForRange` gives a range's walks
+as runs of reference stretches, without decoding a step.
 
 ## The GFA tabix file
 
@@ -72,6 +73,8 @@ const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
   departures, the GFA tabix file
 - [Reads, budgets and abridged walks](docs/reads.md): what a cut fetches
 - [Counts](docs/counts.md): haplotypes per node and link
+- [Runs](docs/runs.md): a range's walks as reference stretches and the bp
+  between
 - [Structural forms](docs/structural-forms.md): grouping haplotypes by change
 - [Migrating to 10](docs/migrating-to-10.md): from @jbrowse/graph-walks
 - [Migrating to graph-walks 8](docs/migrating-to-8.md): changes in 7 and 8

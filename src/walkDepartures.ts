@@ -39,10 +39,13 @@ export interface DepartureSource {
 }
 
 // What a path does along its contig: follows R over [lo, hi), along or
-// against it, or runs `bp` of its own
-type Event =
+// against it, or runs `bp` of its own, `loaded` false where the read did not
+// load all of it
+export type ChainEvent =
   | { kind: 'on'; lo: number; hi: number; reversed: boolean }
-  | { kind: 'own'; bp: number }
+  | { kind: 'own'; bp: number; loaded?: boolean }
+
+type Event = ChainEvent
 
 // A point on a path's contig: where it is on R until (a fragment's last step
 // or a departure's leave, `order` 0) or from (a fragment's first step or a
@@ -270,47 +273,84 @@ function readsBackToFront(events: Event[]) {
 }
 
 /**
- * A path's departures in the forward view: its stretches along R in order,
- * turned round where it reads R back to front, each stretch against it or of
- * its own between two along it making one departure.
+ * A chain's crossings in the forward view: its stretches along R in order,
+ * turned round where it reads R back to front, and between each two, from
+ * where the one leaves R to where the next takes it, a crossing wherever
+ * they do not follow on or the path runs bp between them: those of its own
+ * and those of the stretches it takes against its way. `first` and `reach`
+ * span R from the first stretch along it to the furthest any reaches.
  */
-function readPath(events: Event[], h: HaplotypeDepartures) {
+export function chainCrossings(events: ChainEvent[]) {
   const flip = readsBackToFront(events)
-  let first = NaN
-  let prevEnd = NaN
+  const crossings: {
+    from: number
+    to: number
+    ownBp: number
+    invertedBp: number
+    loaded: boolean
+  }[] = []
+  let first = Number.NaN
+  let prevEnd = Number.NaN
   let reach = -Infinity
-  let alt = 0
+  let own = 0
   let inverted = 0
+  let loaded = true
   for (const e of flip ? events.toReversed() : events) {
     if (e.kind === 'own') {
-      alt += e.bp
+      own += e.bp
+      loaded &&= e.loaded !== false
     } else if (e.reversed !== flip) {
-      alt += e.hi - e.lo
       inverted += e.hi - e.lo
     } else {
-      const start = e.lo
       if (Number.isNaN(prevEnd)) {
-        first = start
-      } else if (start !== prevEnd || alt > 0) {
-        const repeated = start < prevEnd ? prevEnd - start : 0
-        h.departures.push({
-          refStart: prevEnd,
-          refEnd: repeated > 0 ? prevEnd : start,
-          altLength: alt + repeated,
+        first = e.lo
+      } else if (e.lo !== prevEnd || own + inverted > 0) {
+        crossings.push({
+          from: prevEnd,
+          to: e.lo,
+          ownBp: own,
           invertedBp: inverted,
-          repeatedBp: repeated,
-          ...(repeated > 0 ? { copied: [start, prevEnd] } : {}),
+          loaded,
         })
       }
       prevEnd = e.hi
       reach = Math.max(reach, e.hi)
-      alt = 0
+      own = 0
       inverted = 0
+      loaded = true
     }
+  }
+  return { flip, crossings, first, reach }
+}
+
+/**
+ * A path's departures in the forward view: its chain's crossings, each a
+ * departure from where it leaves R to where it rejoins, a jump back a point
+ * at the junction with the bp walked again as `repeatedBp`.
+ */
+function readPath(events: Event[], h: HaplotypeDepartures) {
+  const { crossings, first, reach } = chainCrossings(events)
+  for (const c of crossings) {
+    const repeated = c.to < c.from ? c.from - c.to : 0
+    h.departures.push({
+      refStart: c.from,
+      refEnd: repeated > 0 ? c.from : c.to,
+      altLength: c.ownBp + c.invertedBp + repeated,
+      invertedBp: c.invertedBp,
+      repeatedBp: repeated,
+      ...(repeated > 0 ? { copied: [c.to, c.from] } : {}),
+    })
   }
   if (!Number.isNaN(first)) {
     h.covered.push([first, reach])
   }
+}
+
+// One chain's departures and the R it covers, as walkDepartures reads them
+export function chainDepartures(events: ChainEvent[]) {
+  const h: HaplotypeDepartures = { haplotype: '', covered: [], departures: [] }
+  readPath(events, h)
+  return h
 }
 
 /**

@@ -212,10 +212,16 @@ export interface WalkRun {
   own?: OwnSteps[]
 }
 
-export function joinPieces(rows: WalkRow[]) {
-  const byPath = new Map<string, WalkRow[]>()
-  const runs: WalkRun[] = []
-  for (const row of rows) {
+/**
+ * Each line's pieces in runs of consecutive piece numbers, in piece order,
+ * the lines in the order `pieces` first names them: a WalkRun's rows, and a
+ * run of walkRuns.ts's pieces
+ */
+export function consecutivePieces<
+  T extends { name: string; fragStart: number; piece: number },
+>(pieces: T[]) {
+  const byPath = new Map<string, T[]>()
+  for (const row of pieces) {
     const key = `${row.name}\t${row.fragStart}`
     const list = byPath.get(key)
     if (list) {
@@ -224,20 +230,22 @@ export function joinPieces(rows: WalkRow[]) {
       byPath.set(key, [row])
     }
   }
-  for (const pieces of byPath.values()) {
-    pieces.sort((a, b) => a.piece - b.piece)
+  const runs: T[][] = []
+  for (const line of byPath.values()) {
+    line.sort((a, b) => a.piece - b.piece)
     let from = 0
-    for (let i = 1; i <= pieces.length; i++) {
-      if (
-        i === pieces.length ||
-        pieces[i]!.piece !== pieces[i - 1]!.piece + 1
-      ) {
-        runs.push(decodeRun(pieces.slice(from, i)))
+    for (let i = 1; i <= line.length; i++) {
+      if (i === line.length || line[i]!.piece !== line[i - 1]!.piece + 1) {
+        runs.push(line.slice(from, i))
         from = i
       }
     }
   }
   return runs
+}
+
+export function joinPieces(rows: WalkRow[]) {
+  return consecutivePieces(rows).map(decodeRun)
 }
 
 function decodeRun(pieces: WalkRow[]): WalkRun {

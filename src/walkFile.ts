@@ -60,6 +60,13 @@ import {
   walkHeader,
   walksKept,
 } from './walkRows.ts'
+import {
+  blocksPiece,
+  refuseRevisited,
+  runsTile,
+  skippedPiece,
+  windowRuns,
+} from './walkRuns.ts'
 
 import type {
   AbridgedPiece,
@@ -74,6 +81,7 @@ import type { WalkFilehandle, WalkUnit } from './walkContainer.ts'
 import type { CountUnit, CountWalk } from './walkCounts.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
 import type { BudgetNames, WalkHeader, WalkRow } from './walkRows.ts'
+import type { RunsPiece } from './walkRuns.ts'
 
 // A window reads whole tiles and keeps the steps on it, so a narrow window
 // reads several times what it keeps: 464 haplotypes across the 1.5 kb ABCA7
@@ -295,6 +303,23 @@ export interface GraphForRangeOptions
 }
 
 export interface CountsForRangeOptions extends WalkCountOptions, OnReference {}
+
+export type WalkRunsOptions = Pick<
+  WalkCutOptions,
+  | 'signal'
+  | 'keep'
+  | 'context'
+  | 'contained'
+  | 'byteBudget'
+  | 'departureByteBudget'
+  | 'budgetNames'
+>
+
+export interface RunsForRangeOptions extends WalkRunsOptions, OnReference {
+  // the `sample#haplotype` walks to keep beside the reference, where `keep`
+  // is not given; every walk when undefined or empty
+  haplotypes?: string[]
+}
 
 export interface BytesForRangeOptions extends OnReference {
   signal?: AbortSignal
@@ -2101,6 +2126,212 @@ export class WalkFile {
   }
 
   /**
+   * The walks getCutForRange returns for the range with the same options, as
+   * runs (walkRuns.ts), read from the rows without decoding a step: each
+   * walk row's route choices and each abridged piece's blocks row, from the
+   * tiles and departure blocks over the window and its context and those
+   * tiles' blocks units, with no detail unit and no tile past them. Walks
+   * are those `keep` accepts, or of the `haplotypes` asked for beside the
+   * reference's, every one by default. It refuses a file whose header does
+   * not state revisited:i:0 with a RunsRefusedError, and a window past the
+   * byte budgets as a cut does.
+   */
+  async getRunsForRange(
+    refName: string,
+    start: number,
+    end: number,
+    opts: RunsForRangeOptions = {},
+  ) {
+    const { haplotypes, ...rest } = opts
+    const sequence = await this.resolve(refName, opts)
+    return this.runs(
+      sequence.refName,
+      { start, end },
+      {
+        ...rest,
+        keep: rest.keep ?? walksKept(haplotypes, sequence.refName),
+      },
+    )
+  }
+
+  private async runs(
+    refName: string,
+    region: { start: number; end: number },
+    opts: WalkRunsOptions = {},
+  ) {
+    const {
+      signal,
+      keep,
+      context = WALK_CONTEXT,
+      contained = false,
+      byteBudget = WALK_BUDGETS.byteBudget,
+      departureByteBudget = WALK_BUDGETS.departureByteBudget,
+    } = opts
+    checkRange(refName, region.start, region.end)
+    const [header, units] = await Promise.all([
+      this.getHeader({ signal }),
+      this.getUnits(refName, { signal }),
+    ])
+    const refused = refuseRevisited(header.revisited)
+    if (refused) {
+      throw refused
+    }
+    const drawn = drawnSpan(region, context)
+    const { tiles, departureBlocks } = windowUnits(units, drawn)
+    const tileBytesTo = (end: number) =>
+      bytesOf(tiles.filter(u => u.start < end + context))
+    const checkBytes = (bytesTo: (end: number) => number) => {
+      const tooLarge = Number.isFinite(byteBudget)
+        ? byteBudgetError(
+            bytesTo,
+            byteBudget,
+            region,
+            header.tile,
+            opts.budgetNames,
+          )
+        : undefined
+      if (tooLarge) {
+        throw tooLarge
+      }
+    }
+    checkBytes(tileBytesTo)
+    checkDepartureBytes(departureBlocks, departureByteBudget)
+    const read = await this.container.read(
+      [...tiles, ...departureBlocks],
+      signal,
+    )
+    const { records } = departureRecords(
+      read.slice(tiles.length).flat(),
+      drawn,
+      keep,
+    )
+    const decoded = tiles.map((unit, k) =>
+      runsTile(split(read[k]!), Number(unit.name), keep),
+    )
+    const blocksUnits = new Map(
+      units.filter(u => u.kind === 'blocks').map(u => [u.name, u]),
+    )
+    const wanted = tiles.flatMap((tileUnit, k) => {
+      const unit = blocksUnits.get(tileUnit.name)
+      if (decoded[k]!.abridged.length > 0 && !unit) {
+        throw new WalkFormatError(
+          `${refName}'s unit table lists no blocks unit ${tileUnit.name}, which the abridged rows of that tile need`,
+        )
+      }
+      return unit && decoded[k]!.abridged.length > 0
+        ? [{ unit, from: tileUnit.start, k }]
+        : []
+    })
+    checkBytes(
+      end =>
+        tileBytesTo(end) +
+        bytesOf(wanted.filter(x => x.from < end + context).map(x => x.unit)),
+    )
+    const blocksRead = await this.container.read(
+      wanted.map(x => x.unit),
+      signal,
+    )
+    const blocksRows = new Map<number, Map<string, string[]>>()
+    wanted.forEach(({ k }, w) => {
+      blocksRows.set(
+        k,
+        new Map(
+          split(blocksRead[w]!).map(cols => [
+            pieceKey(cols[4] ?? '', cols[5] ?? '', cols[6] ?? ''),
+            cols,
+          ]),
+        ),
+      )
+    })
+    // the drawn stretch as far as the reference's passes over it reach, and
+    // the window and its context as walkCut widens them
+    const over = { ...drawn }
+    const bounds = {
+      start: region.start - context,
+      end: region.end + context,
+    }
+    const window = { ...bounds }
+    for (const { path } of decoded) {
+      const hull = path.hull(drawn)
+      over.start = Math.min(over.start, hull?.start ?? over.start)
+      over.end = Math.max(over.end, hull?.end ?? over.end)
+      const reach = path.hull(bounds)
+      window.start = Math.min(window.start, reach?.start ?? window.start)
+      window.end = Math.max(window.end, reach?.end ?? window.end)
+    }
+    const onOver = (span: { start: number; end: number }) =>
+      span.start < over.end && span.end > over.start
+    const abridged = decoded.flatMap((tile, k) =>
+      tile.abridged.map(piece => ({ piece, k })),
+    )
+    const lines = new Map<string, LinePiece<AbridgedPiece>[]>()
+    for (const { piece } of abridged) {
+      const key = `${piece.name}\t${piece.fragStart}`
+      const line = lines.get(key) ?? []
+      lines.set(key, line)
+      line.push({ piece: piece.piece, on: onOver(piece.span), item: piece })
+    }
+    for (const tile of decoded) {
+      for (const piece of tile.pieces) {
+        lines.get(`${piece.name}\t${piece.fragStart}`)?.push({
+          piece: piece.piece,
+          on: piece.span === undefined || onOver(piece.span),
+        })
+      }
+    }
+    const inOrder = [...lines.values()].map(line =>
+      line.sort((a, b) => a.piece - b.piece),
+    )
+    const drawnPieces = new Set(betweenDrawn(inOrder).map(held => held.item))
+    const reached = new Set(
+      contained && context > 0 ? beforeDrawn(inOrder) : [],
+    )
+    const ownRecords = new Map<string, WalkDeparture[]>()
+    for (const d of records) {
+      if (d.ownBp > 0) {
+        ownRecords.set(d.name, [...(ownRecords.get(d.name) ?? []), d])
+      }
+    }
+    const built = (piece: AbridgedPiece) => {
+      const runs = (ownRecords.get(piece.name) ?? []).flatMap(d => {
+        const stretch = ownStretch(piece, d)
+        return stretch
+          ? [{ ...stretch, attached: attachesOwnSteps(d, drawn, ATTACH_BP) }]
+          : []
+      })
+      return (
+        drawnPieces.has(piece) ||
+        runs.some(run => run.attached) ||
+        (reached.has(piece) && runs.some(run => run.trailing))
+      )
+    }
+    const pieces: RunsPiece[] = decoded.flatMap(tile => tile.pieces)
+    for (const { piece, k } of abridged) {
+      const cols = blocksRows.get(k)?.get(keyOf(piece))
+      if (built(piece) && !cols) {
+        throw new WalkFormatError(
+          `${refName}'s blocks unit ${tiles[k]!.name} holds no row for piece ${piece.piece} of ${piece.name}, which its tile abridges`,
+        )
+      }
+      pieces.push(
+        cols && built(piece)
+          ? blocksPiece(piece, cols, decoded[k]!.path)
+          : skippedPiece(piece),
+      )
+    }
+    return windowRuns({
+      refName,
+      pieces,
+      records,
+      window,
+      contained,
+      context,
+      holes: header.holes,
+      revisited: header.revisited ?? Number.NaN,
+    })
+  }
+
+  /**
    * Every haplotype's departures over the range, for structuralForms, from
    * one cut without links that expands no walk. A haplotype the header names
    * with no walk in the cut is listed with nothing covered.
@@ -2153,3 +2384,5 @@ export class WalkFile {
 export type CutForRange = Awaited<ReturnType<WalkFile['getCutForRange']>>
 
 export type GraphForRange = Awaited<ReturnType<WalkFile['getGraphForRange']>>
+
+export type RunsForRange = Awaited<ReturnType<WalkFile['getRunsForRange']>>

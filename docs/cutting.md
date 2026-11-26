@@ -48,6 +48,9 @@ options object with `signal`. `refName` is a contig of the reference sample,
   `kept`, `fragments`, `departures`, `gaps`, `placeholders`, the `refName` it
   cut, and `tables()`, which writes all of them as the tables. It takes `keep`
   in place of `haplotypes`
+- `getRunsForRange(refName, start, end, opts)` is the walks the cut returns, as
+  runs of reference stretches and the bp between, read without decoding a step
+  ([Runs](runs.md)). It takes `keep` or `haplotypes`
 - `getCountsForRange(refName, start, end, opts)` is how many of the file's
   haplotypes step each node and link over the range, and how often, with each
   count exact or stated as a lower bound and why ([Counts](counts.md))
@@ -81,8 +84,8 @@ options object with `signal`. `refName` is a contig of the reference sample,
 
 | Option                | Effect                                                                                                         |
 | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `haplotypes`          | `getGraphForRange`'s walks to keep beside the reference, by PanSN prefix; every one by default                 |
-| `keep`                | `getCutForRange`'s walks to decode, the reference's among them, by `sample#haplotype#contig`; every one        |
+| `haplotypes`          | `getGraphForRange`'s and `getRunsForRange`'s walks to keep beside the reference, by PanSN prefix; every one    |
+| `keep`                | `getCutForRange`'s and `getRunsForRange`'s walks to decode, by `sample#haplotype#contig`; every one            |
 | `referenceSample`     | The sample whose contig `refName` names; the header's first reference by default                               |
 | `context`             | bp of reference kept past each end of the region; default 1000, `WALK_CONTEXT`                                 |
 | `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default                               |
