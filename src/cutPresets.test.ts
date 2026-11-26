@@ -7,19 +7,19 @@ import {
   CUT_PRESETS,
   WALK_BUDGETS,
   WALK_CONTEXT,
-  WalkReader,
-} from './walkReader.ts'
+  WalkFile,
+} from './walkFile.ts'
 
-import type { WalkCutOptions } from './walkReader.ts'
+import type { WalkCutOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 const CUTTING_DOC = new URL('../docs/cutting.md', import.meta.url).pathname
 
 function open(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
 }
 
@@ -76,11 +76,9 @@ async function tablesOf(
   { fixture, refName, start, end }: (typeof CUTS)[number],
   opts: WalkCutOptions,
 ) {
-  const { graph, kept, fragments, departures, gaps } = await open(fixture).cut(
-    refName,
-    { start, end },
-    opts,
-  )
+  const { graph, kept, fragments, departures, gaps } = await open(
+    fixture,
+  ).getCutForRange(refName, start, end, opts)
   return graph.tables(kept, fragments, departures, gaps)
 }
 

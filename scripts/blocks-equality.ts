@@ -71,7 +71,6 @@ import { LocalFile, RemoteFile } from 'generic-filehandle2'
 
 import {
   WalkFile,
-  WalkReader,
   isPlaceholder,
   structuralForms,
   walkDepartures,
@@ -87,15 +86,16 @@ import {
   readsOf,
   unitsRead,
 } from '../src/testing.ts'
+import { WalkContainer } from '../src/walkContainer.ts'
 
 import type {
+  CutForRange,
   GraphTables,
   WalkFragment,
   WalkGap,
   WalkUnit,
 } from '../src/index.ts'
 
-type Cut = Awaited<ReturnType<WalkReader['cut']>>
 type Rows = Map<string, string[]>
 
 interface Window {
@@ -164,7 +164,7 @@ const add = (rows: Rows, key: string, row: string) => {
 
 // A fragment as compared: its steps collapsed, and the bp of its first and
 // last steps as cut
-function fragmentOf(cut: Cut, f: WalkFragment) {
+function fragmentOf(cut: CutForRange, f: WalkFragment) {
   const length = (i: number) => {
     const node = cut.graph.nodes.get(f.ids[i]!)
     return node ? node.end - node.start : 0
@@ -248,7 +248,7 @@ interface HeldStep {
 }
 
 function linkRows(
-  cut: Cut,
+  cut: CutForRange,
   { nodes, links }: GraphTables,
   inside: (name: string, id: number, start: number) => boolean,
 ) {
@@ -476,7 +476,7 @@ const stretches = (spans: [number, number][]) => {
 // piece's list where it starts at the record's hapStart, and the run that
 // starts one where it ends at hapStart + ownBp. Each tile and its blocks unit
 // is read once
-function ownRunsByBlocks(file: WalkFile) {
+function ownRunsByBlocks(file: WalkContainer) {
   const tiles = new Map<string, Promise<Map<string, [number, number][]>>>()
   // each path's runs off R at the ends of its abridged pieces in a tile, the
   // trailing ones by their start and the leading ones by their end
@@ -581,7 +581,11 @@ const attachedBy = (d: RecordEnds, drawn: Span) =>
 // The ownTiles of each record over `drawn`, by the record's path, hapStart
 // and ownBp, and the tiles named by the records within the attach limit that
 // leave or rejoin there, each with the paths whose records name it
-async function ownTilesOver(file: WalkFile, units: WalkUnit[], drawn: Span) {
+async function ownTilesOver(
+  file: WalkContainer,
+  units: WalkUnit[],
+  drawn: Span,
+) {
   const bins = units.filter(
     u =>
       u.kind === 'departures' &&
@@ -658,7 +662,11 @@ function fetchedOff(
 // The departures of a cut that hold own steps against the attach rule, or
 // lack them under it: steps are held where the own bp are within the limit
 // and the walk leaves or rejoins on `drawn`, and nowhere else
-function ownStepsOff(cut: Cut, drawn: Span, ownTiles: OwnTiles['byRecord']) {
+function ownStepsOff(
+  cut: CutForRange,
+  drawn: Span,
+  ownTiles: OwnTiles['byRecord'],
+) {
   const off: string[] = []
   for (const d of cut.departures) {
     const attaches = attachedBy(d, drawn)
@@ -682,7 +690,7 @@ function ownStepsOff(cut: Cut, drawn: Span, ownTiles: OwnTiles['byRecord']) {
 // The records of the unloaded cut whose placeholders do not cover the
 // stretches their tiles' blocks rows give
 async function attachOff(
-  cut: Cut,
+  cut: CutForRange,
   window: Window,
   drawn: Span,
   units: WalkUnit[],
@@ -722,7 +730,7 @@ async function attachOff(
 // Whether a step on `id` at `start` on its walk's contig lies inside a run
 // the unloaded cut holds as a placeholder, on a node of the reference
 const insideRun =
-  (cut: Cut, unloaded: Unloaded | undefined) =>
+  (cut: CutForRange, unloaded: Unloaded | undefined) =>
   (name: string, id: number, start: number) => {
     const node = cut.graph.nodes.get(id)
     const end = start + (node ? node.end - node.start : 0)
@@ -736,7 +744,7 @@ const insideRun =
 
 // Each walk's stretches of its contig that the unloaded cut holds as
 // placeholders, and the reference nodes it keeps
-function unloadedRuns(cut: Cut) {
+function unloadedRuns(cut: CutForRange) {
   const runs = new Map<string, [number, number][]>()
   for (const node of cut.graph.nodes.values()) {
     if (node.placeholder) {
@@ -805,7 +813,7 @@ function uncounted({ nodes, walks, departures, gaps }: GraphTables) {
 
 // Where a loaded cut holds a placeholder: in a fragment, a departure's
 // steps, a gap's steps or the nodes it keeps
-function placeholdersIn(cut: Cut) {
+function placeholdersIn(cut: CutForRange) {
   const out: string[] = []
   for (const f of cut.fragments) {
     if (f.abridged !== undefined || f.ids.some(isPlaceholder)) {
@@ -835,7 +843,7 @@ function placeholdersIn(cut: Cut) {
 // A fragment whose unloadedSteps is not a count of its steps: one with no
 // unloaded piece that states it, or one whose count is under its
 // placeholders or over its steps
-function unloadedStepsOff(cut: Cut) {
+function unloadedStepsOff(cut: CutForRange) {
   return cut.fragments.flatMap(f => {
     const placeholders = f.ids.filter(isPlaceholder).length
     const fits =
@@ -853,7 +861,7 @@ function unloadedStepsOff(cut: Cut) {
 // What a cut states, as rows to compare; the cut itself is let go. Given
 // what the unloaded cut of the same window holds, the reference nodes only a
 // loaded cut can keep are set aside, with their links
-function summary(cut: Cut, window: Window, unloaded?: Unloaded) {
+function summary(cut: CutForRange, window: Window, unloaded?: Unloaded) {
   const tables = cut.graph.tables(
     cut.kept,
     cut.fragments,
@@ -1260,7 +1268,7 @@ function linksNoStepWalks(unloaded: Rows, loaded: Rows, walked: Set<string>) {
 const found = new Map<string, number>()
 const differing = new Set<string>()
 // A cut's tables, and everything it returns with them, each as a digest
-function digests(cut: Cut) {
+function digests(cut: CutForRange) {
   const facts = cutFacts(cut)
   return { tables: digestOf(facts.tables), cut: digestOf(facts) }
 }
@@ -1290,7 +1298,7 @@ async function compare(
   window: Window,
   where: string,
   mode: Mode,
-  cut: (expanding: boolean, fresh?: boolean) => Promise<Cut>,
+  cut: (expanding: boolean, fresh?: boolean) => Promise<CutForRange>,
   revisited: boolean,
   io: {
     reads: { position: number; length: number }[]
@@ -1303,8 +1311,9 @@ async function compare(
   },
 ) {
   const drawn = drawnOf(window, mode)
-  const summarize = (held: Cut, runs?: Unloaded) => summary(held, window, runs)
-  const digested = (held: Cut) => ({
+  const summarize = (held: CutForRange, runs?: Unloaded) =>
+    summary(held, window, runs)
+  const digested = (held: CutForRange) => ({
     digests: digests(held),
     ...summarize(held),
   })
@@ -1454,13 +1463,13 @@ async function compare(
   return unloaded.placeholderNames
 }
 
-async function abridgedTiles(reader: WalkReader) {
-  const sequences = (await reader.referenceSequences()).filter(
+async function abridgedTiles(reader: WalkFile) {
+  const sequences = (await reader.getReferenceSequences()).filter(
     name => onlySequence === undefined || name === onlySequence,
   )
   const tiles: Window[] = []
   for (const refName of sequences) {
-    const units = await reader.units(refName)
+    const units = await reader.getUnits(refName)
     const abridged = new Set(
       units.filter(u => u.kind === 'blocks').map(u => u.name),
     )
@@ -1478,12 +1487,15 @@ const open = (location: string) =>
 
 async function main() {
   const data = open(path)
-  const file = new WalkFile(data, open(path.replace(/(?=$|[?#])/, '.idx')))
-  const reader = new WalkReader(file)
+  const idx = open(path.replace(/(?=$|[?#])/, '.idx'))
+  const file = new WalkContainer(data, idx)
+  const walkFile = () =>
+    new WalkFile({ walksFilehandle: data, idxFilehandle: idx })
+  const reader = walkFile()
   const byBlocks = ownRunsByBlocks(file)
   const reads = readsOf(data)
   const tiles = await abridgedTiles(reader)
-  const { haplotypes, revisited = 0 } = await reader.header()
+  const { haplotypes, revisited = 0 } = await reader.getHeader()
   const batches =
     perCut > 0 && haplotypes.length > perCut
       ? Array.from({ length: Math.ceil(haplotypes.length / perCut) }, (_, b) =>
@@ -1517,19 +1529,25 @@ async function main() {
       for (const mode of MODES) {
         for (const [b, batch] of batches.entries()) {
           const where = `${window.refName}:${window.start}-${window.end} ${mode.name}${batches.length > 1 ? ` haplotypes ${b * perCut + 1}-${b * perCut + batch.length}` : ''}`
-          const units = await reader.units(window.refName)
-          const said = await reader.bytesFor(window.refName, window, {
-            context: mode.context,
-            departureByteBudget: Infinity,
-          })
+          const units = await reader.getUnits(window.refName)
+          const said = await reader.getBytesForRange(
+            window.refName,
+            window.start,
+            window.end,
+            {
+              context: mode.context,
+              departureByteBudget: Infinity,
+            },
+          )
           const names = await compare(
             window,
             where,
             mode,
             (expanding, fresh = false) =>
-              (fresh ? new WalkReader(file) : reader).cut(
+              (fresh ? walkFile() : reader).getCutForRange(
                 window.refName,
-                window,
+                window.start,
+                window.end,
                 {
                   keep:
                     batches.length > 1

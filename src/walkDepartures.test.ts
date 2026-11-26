@@ -2,10 +2,10 @@ import { LocalFile } from 'generic-filehandle2'
 
 import { AmbiguousSequenceError } from './refNames.ts'
 import { describeForm, structuralForms } from './structuralForms.ts'
-import { walkFileOf } from './testing.ts'
+import { walkFileFrom, walkFileOf } from './testing.ts'
 import { RegionTooLargeError, panSNHaplotypeOrSample } from './util.ts'
-import { formsCut, walkDepartures } from './walkDepartures.ts'
-import { DepartureReadError, WalkReader } from './walkReader.ts'
+import { walkDepartures } from './walkDepartures.ts'
+import { DepartureReadError, WalkFile } from './walkFile.ts'
 import { walkCut } from './walkRows.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
@@ -379,7 +379,7 @@ test("a fragment's ends lie where their pass does, where R passes a node again",
 // A graph of P lines named `sample#contig`, with no haplotype field: the
 // header lists H#c and H#d under H, and R#chr2 is the reference's
 test('paths named with no haplotype field are their sample’s, so a forms cut lists the header’s haplotypes and no other', async () => {
-  const walks = WalkReader.fromFilehandles(
+  const walks = walkFileFrom(
     walkFileOf([
       '#walks format:i:8 tile:i:100',
       '#reference R',
@@ -390,8 +390,8 @@ test('paths named with no haplotype field are their sample’s, so a forms cut l
       'R#chr1 0 walk R#chr2 0 0 0 2 2 .',
     ]),
   )
-  expect((await walks.header()).haplotypes).toEqual(['H'])
-  const forms = await formsCut(walks, { refName: 'chr1', start: 0, end: 18 })
+  expect((await walks.getHeader()).haplotypes).toEqual(['H'])
+  const forms = await walks.getFormsForRange('chr1', 0, 18)
   expect(forms.map(h => [h.haplotype, h.covered])).toEqual([['H', [[0, 12]]]])
   expect(panSNHaplotypeOrSample('H#c')).toBe('H')
   expect(panSNHaplotypeOrSample('H#1#c')).toBe('H#1')
@@ -403,9 +403,9 @@ describe('a forms cut', () => {
   const DATA = new URL('../test_data/', import.meta.url).pathname
   const reader = (name: string) => {
     const path = `${DATA}${name}.walks.gz`
-    return WalkReader.fromFilehandles({
-      data: new LocalFile(path),
-      directory: new LocalFile(`${path}.idx`),
+    return new WalkFile({
+      walksFilehandle: new LocalFile(path),
+      idxFilehandle: new LocalFile(`${path}.idx`),
     })
   }
   const region = { refName: 'chr', start: 0, end: 30 }
@@ -426,9 +426,9 @@ describe('a forms cut', () => {
     window: { refName: string; start: number; end: number },
   ) => {
     const walks = reader(name)
-    const { references } = await walks.header()
-    const refName = await walks.sequenceFor(references[0]!, window.refName)
-    const cut = await walks.cut(refName!, window, {
+    const { references } = await walks.getHeader()
+    const refName = await walks.getSequenceName(references[0]!, window.refName)
+    const cut = await walks.getCutForRange(refName!, window.start, window.end, {
       links: 'none',
       expand: () => true,
     })
@@ -446,7 +446,14 @@ describe('a forms cut', () => {
   const unloaded = async (
     name: string,
     window: { refName: string; start: number; end: number },
-  ) => byHaplotype(await formsCut(reader(name), window))
+  ) =>
+    byHaplotype(
+      await reader(name).getFormsForRange(
+        window.refName,
+        window.start,
+        window.end,
+      ),
+    )
 
   test('reads unloaded pieces as the unabridged file gives them', async () => {
     const whole = await unloaded('unabridged.R', region)
@@ -458,7 +465,7 @@ describe('a forms cut', () => {
     const path = `${DATA}abridged.R.walks.gz`
     const data = new LocalFile(path)
     const details = new Set(
-      (await reader('abridged.R').units('R#0#chr'))
+      (await reader('abridged.R').getUnits('R#0#chr'))
         .filter(u => u.kind === 'detail')
         .map(u => u.offset),
     )
@@ -468,21 +475,29 @@ describe('a forms cut', () => {
       detailReads += details.has(position) ? 1 : 0
       return read(length, position, opts)
     }
-    await formsCut(
-      WalkReader.fromFilehandles({
-        data,
-        directory: new LocalFile(`${path}.idx`),
-      }),
-      region,
-    )
+    await new WalkFile({
+      walksFilehandle: data,
+      idxFilehandle: new LocalFile(`${path}.idx`),
+    }).getFormsForRange(region.refName, region.start, region.end)
     expect(details.size).toBeGreaterThan(0)
     expect(detailReads).toBe(0)
   })
 
   test('keeps to FORMS_STEP_BUDGET steps at least, whatever smaller budget its caller gives', async () => {
     expect(
-      await formsCut(reader('abridged.R'), region, { stepBudget: 3 }),
-    ).toEqual(await formsCut(reader('abridged.R'), region))
+      await reader('abridged.R').getFormsForRange(
+        region.refName,
+        region.start,
+        region.end,
+        { stepBudget: 3 },
+      ),
+    ).toEqual(
+      await reader('abridged.R').getFormsForRange(
+        region.refName,
+        region.start,
+        region.end,
+      ),
+    )
   })
 
   test('reads an unloaded walk as its loaded one when a piece of it lies in another tile', async () => {
@@ -531,7 +546,12 @@ describe('a forms cut', () => {
     })
     expect(await unloaded('contigends.R', window)).toEqual(whole)
     const fragments = async (expand?: () => boolean) => {
-      const cut = await reader('contigends.R').cut('R#0#c', window, { expand })
+      const cut = await reader('contigends.R').getCutForRange(
+        'R#0#c',
+        window.start,
+        window.end,
+        { expand },
+      )
       return cut.fragments.map(f => [
         f.name,
         f.hapStart,
@@ -583,34 +603,71 @@ describe('a forms cut', () => {
 
   test('throws RegionTooLargeError past its byte budget', async () => {
     await expect(
-      formsCut(reader('abridged.R'), region, { byteBudget: 1 }),
+      reader('abridged.R').getFormsForRange(
+        region.refName,
+        region.start,
+        region.end,
+        { byteBudget: 1 },
+      ),
     ).rejects.toBeInstanceOf(RegionTooLargeError)
     expect(
-      await formsCut(reader('abridged.R'), region, { byteBudget: 1e9 }),
-    ).toEqual(await formsCut(reader('abridged.R'), region))
+      await reader('abridged.R').getFormsForRange(
+        region.refName,
+        region.start,
+        region.end,
+        { byteBudget: 1e9 },
+      ),
+    ).toEqual(
+      await reader('abridged.R').getFormsForRange(
+        region.refName,
+        region.start,
+        region.end,
+      ),
+    )
   })
 
   test('throws on a contig both haplotypes of a diploid reference sample hold', async () => {
     const window = { refName: 'chr1', start: 0, end: 40 }
-    await expect(formsCut(reader('dip.HG002'), window)).rejects.toThrow(
-      AmbiguousSequenceError,
+    await expect(
+      reader('dip.HG002').getFormsForRange(
+        window.refName,
+        window.start,
+        window.end,
+      ),
+    ).rejects.toThrow(AmbiguousSequenceError)
+    const named = await reader('dip.HG002').getFormsForRange(
+      'HG002#1#chr1',
+      window.start,
+      window.end,
     )
-    const named = await formsCut(reader('dip.HG002'), {
-      ...window,
-      refName: 'HG002#1#chr1',
-    })
     expect(named.map(h => h.haplotype)).toEqual(['HG00097#1'])
   })
 
   test('throws DepartureReadError past its departure byte budget', async () => {
     const window = { refName: 'chr1', start: 50, end: 55 }
     await expect(
-      formsCut(reader('span.GRCh38'), window, { departureByteBudget: 1 }),
+      reader('span.GRCh38').getFormsForRange(
+        window.refName,
+        window.start,
+        window.end,
+        { departureByteBudget: 1 },
+      ),
     ).rejects.toBeInstanceOf(DepartureReadError)
     expect(
-      await formsCut(reader('span.GRCh38'), window, {
-        departureByteBudget: 1e9,
-      }),
-    ).toEqual(await formsCut(reader('span.GRCh38'), window))
+      await reader('span.GRCh38').getFormsForRange(
+        window.refName,
+        window.start,
+        window.end,
+        {
+          departureByteBudget: 1e9,
+        },
+      ),
+    ).toEqual(
+      await reader('span.GRCh38').getFormsForRange(
+        window.refName,
+        window.start,
+        window.end,
+      ),
+    )
   })
 })

@@ -1,7 +1,7 @@
 {
-  "name": "@jbrowse/graph-walks",
-  "version": "9.2.0",
-  "description": "Read gfa-to-tabix walk files by range requests and cut a window of a pangenome graph: the reference, every haplotype's walk through it, and the nodes and links they visit",
+  "name": "@gmod/gfa-tabix",
+  "version": "10.0.0",
+  "description": "The reader for gfa-to-tabix's GFA tabix and walk files: a pangenome graph's segments and links, and every haplotype's walk through a range of the reference, by range requests",
   "license": "MIT",
   "author": {
     "name": "Colin Diesh",
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/GMOD/graph-walks.git"
+    "url": "https://github.com/GMOD/gfa-tabix-js.git"
   },
   "keywords": [
     "pangenome",

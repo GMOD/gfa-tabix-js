@@ -1,6 +1,12 @@
 import { LocalFile } from 'generic-filehandle2'
 
-import { walkFileOf, walkPlaces } from './testing.ts'
+import {
+  cutFacts,
+  digestOf,
+  walkFileFrom,
+  walkFileOf,
+  walkPlaces,
+} from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import {
   RefPath,
@@ -14,12 +20,12 @@ import {
   tileLinks,
   unloadedRow,
 } from './walkChunk.ts'
-import { formsCut, walkDepartures } from './walkDepartures.ts'
-import { WalkFormatError } from './walkFile.ts'
-import { WalkReader } from './walkReader.ts'
+import { WalkFormatError } from './walkContainer.ts'
+import { walkDepartures } from './walkDepartures.ts'
+import { WalkFile } from './walkFile.ts'
 import { isPlaceholder } from './walkRows.ts'
 
-import type { WalkCutOptions } from './walkReader.ts'
+import type { CutForRange, WalkCutOptions } from './walkFile.ts'
 import type { WalkFragment } from './walkRows.ts'
 
 // What a cut states of an abridged piece it did not load, from the piece's
@@ -30,20 +36,20 @@ import type { WalkFragment } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 
-type Cut = Awaited<ReturnType<WalkReader['cut']>>
+type Cut = CutForRange
 
 // A reader of a fixture and the kinds of the units each of its reads fetched
 function counted(name: string) {
   const path = `${DATA}${name}.walks.gz`
   const data = new LocalFile(path)
-  const reader = WalkReader.fromFilehandles({
-    data,
-    directory: new LocalFile(`${path}.idx`),
+  const reader = new WalkFile({
+    walksFilehandle: data,
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
   const fetched: string[] = []
   const read = data.read.bind(data)
   const watch = async (refName: string) => {
-    const units = await reader.units(refName)
+    const units = await reader.getUnits(refName)
     data.read = (length, position = 0, opts = {}) => {
       for (const u of units) {
         if (u.offset >= position && u.offset < position + length) {
@@ -186,8 +192,15 @@ async function cuts(start: number, end: number, opts: WalkCutOptions = {}) {
   const walks = reader('blocks.R')
   const window = { start, end }
   return {
-    unloaded: await walks.cut(R, window, { context: 0, ...opts }),
-    loaded: await walks.cut(R, window, { context: 0, ...opts, expand: all }),
+    unloaded: await walks.getCutForRange(R, window.start, window.end, {
+      context: 0,
+      ...opts,
+    }),
+    loaded: await walks.getCutForRange(R, window.start, window.end, {
+      context: 0,
+      ...opts,
+      expand: all,
+    }),
   }
 }
 
@@ -286,11 +299,20 @@ test('a contained cut splits an unloaded piece where it steps off the window, as
 // walks 5 to 9 and OFF 11 and 12
 test('the forms cut covers a window with every haplotype stepping on it, whatever its end steps span', async () => {
   const region = { refName: 'c', start: 6000, end: 6500 }
-  const forms = await formsCut(reader('cover.R'), region)
-  const loaded = await reader('cover.R').cut(R, region, {
-    links: 'none',
-    expand: all,
-  })
+  const forms = await reader('cover.R').getFormsForRange(
+    region.refName,
+    region.start,
+    region.end,
+  )
+  const loaded = await reader('cover.R').getCutForRange(
+    R,
+    region.start,
+    region.end,
+    {
+      links: 'none',
+      expand: all,
+    },
+  )
   expect(forms.filter(h => h.covered.length > 0)).toEqual(haplotypes(loaded, R))
   expect(forms.map(h => [h.haplotype, h.covered])).toEqual([
     ['FAR#1', [[5000, 8000]]],
@@ -381,8 +403,13 @@ test('a piece that reaches the cut only as placeholders among a record’s own s
 test('a piece that turns back, runs off R and jumps back is its list in path order, with its bp off R at either end', async () => {
   const walks = reader('hairpin.R')
   const window = { start: 0, end: 36 }
-  const unloaded = await walks.cut(R, window, { context: 0 })
-  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  const unloaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    expand: all,
+  })
   expect(rows(unloaded, 'H#1#c')).toEqual([
     [7, 59, '>1@0 >2@6 <2@6 <1@0 off:10 >5@24 >6@30 >3@12'],
   ])
@@ -398,13 +425,9 @@ test('a piece that turns back, runs off R and jumps back is its list in path ord
 })
 
 test('a placeholder step is off the reference, and the steps a blocks row gives state their passes', async () => {
-  const cut = await reader('hairpin.R').cut(
-    R,
-    { start: 0, end: 36 },
-    {
-      context: 0,
-    },
-  )
+  const cut = await reader('hairpin.R').getCutForRange(R, 0, 36, {
+    context: 0,
+  })
   expect(
     walkPlaces(cut.graph.tables(cut.kept, cut.fragments, cut.departures)),
   ).toEqual([
@@ -433,8 +456,13 @@ test('a piece’s bp off R after its last step on R are read, the next piece unr
 test('a piece’s bp off R before its first step on R and after its last are read at a contig’s ends', async () => {
   const walks = reader('contigends.R')
   const window = { start: 12, end: 18 }
-  const unloaded = await walks.cut(R, window, { context: 0 })
-  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  const unloaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    expand: all,
+  })
   expect(
     unloaded.fragments
       .filter(f => f.name !== R)
@@ -452,9 +480,25 @@ test('a piece’s bp off R before its first step on R and after its last are rea
   ])
   expect(stated(unloaded, R)).toEqual(stated(loaded, R))
   const whole = { start: 0, end: 36 }
-  expect(stated(await walks.cut(R, whole), R)).toEqual(
-    stated(await walks.cut(R, whole, { expand: all }), R),
+  expect(
+    stated(await walks.getCutForRange(R, whole.start, whole.end), R),
+  ).toEqual(
+    stated(
+      await walks.getCutForRange(R, whole.start, whole.end, { expand: all }),
+      R,
+    ),
   )
+})
+
+test('expand reads the walks under a list of PanSN prefixes as a function naming them would', async () => {
+  const walks = reader('ownends.R')
+  const facts = async (expand: WalkCutOptions['expand']) =>
+    digestOf(
+      cutFacts(await walks.getCutForRange(R, 24, 30, { context: 0, expand })),
+    )
+  const byList = await facts(['X#1'])
+  expect(byList).toBe(await facts(name => name.startsWith('X#1#')))
+  expect(byList).not.toBe(await facts(undefined))
 })
 
 // ownends.R.gfa: W X 1 c >1>2>11>12>13>5>6 leaves R after 2 for 30 bp of its
@@ -468,11 +512,11 @@ test.each([
   async ({ expand, held }) => {
     const { reader: walks, fetched, watch } = counted('ownends.R')
     await watch(R)
-    const cut = await walks.cut(
-      R,
-      { start: 24, end: 30 },
-      { context: 0, keep: name => name === 'X#1#c' || name === R, expand },
-    )
+    const cut = await walks.getCutForRange(R, 24, 30, {
+      context: 0,
+      keep: name => name === 'X#1#c' || name === R,
+      expand,
+    })
     const [record] = cut.departures
     expect(departures(cut, 'X#1#c')).toEqual([
       {
@@ -601,14 +645,24 @@ test.each([
     const { reader: walks, fetched, watch } = counted(fixture)
     await watch(refName)
     const tilesRead = () => fetched.filter(u => !u.startsWith('departures'))
-    const unloaded = await walks.cut(refName, window, { context: 0 })
+    const unloaded = await walks.getCutForRange(
+      refName,
+      window.start,
+      window.end,
+      { context: 0 },
+    )
     expect(ownSteps(unloaded)).toEqual(held)
     expect(tilesRead()).toContain('tile 0')
     expect(tilesRead().filter(u => u.startsWith('blocks'))).toEqual(
       windowBlocks,
     )
     fetched.length = 0
-    const loaded = await walks.cut(refName, window, { context: 0, expand: all })
+    const loaded = await walks.getCutForRange(
+      refName,
+      window.start,
+      window.end,
+      { context: 0, expand: all },
+    )
     expect(ownSteps(loaded)).toEqual(nodes)
     expect(tilesRead().filter(u => u.startsWith('blocks'))).toEqual([])
     expect(loaded.placeholders).toBe(0)
@@ -621,11 +675,21 @@ test.each([
 test('a record’s own steps in two pieces of a window’s tile are each piece’s run at one end, by its blocks row and by its abridged row alike', async () => {
   const walks = reader('twopiecesonetile.R')
   const window = { start: 0, end: 12 }
-  const unloaded = await walks.cut('R#0#chr1', window, { context: 0 })
-  const loaded = await walks.cut('R#0#chr1', window, {
-    context: 0,
-    expand: all,
-  })
+  const unloaded = await walks.getCutForRange(
+    'R#0#chr1',
+    window.start,
+    window.end,
+    { context: 0 },
+  )
+  const loaded = await walks.getCutForRange(
+    'R#0#chr1',
+    window.start,
+    window.end,
+    {
+      context: 0,
+      expand: all,
+    },
+  )
   expect(
     unloaded.departures.map(d =>
       [...(d.steps?.ids ?? [])].map(id => nameOf(unloaded, id)),
@@ -647,8 +711,16 @@ test.each([{ attachBp: 1 }, { attachBp: undefined }])(
     const walks = reader('edge.R')
     const window = { start: 60, end: 80 }
     const opts = { context: 10, contained: true, attachBp }
-    const unloaded = await walks.cut(R, window, opts)
-    const loaded = await walks.cut(R, window, { ...opts, expand: all })
+    const unloaded = await walks.getCutForRange(
+      R,
+      window.start,
+      window.end,
+      opts,
+    )
+    const loaded = await walks.getCutForRange(R, window.start, window.end, {
+      ...opts,
+      expand: all,
+    })
     expect(rows(loaded, 'LEAD#1#c')).toEqual([[20, 45, 'off:5 >7@60 >8@70']])
     expect(rows(loaded, 'TRAIL#1#c')).toEqual([[0, 23, '>7@60 >8@70 off:3']])
     expect(
@@ -665,8 +737,19 @@ test('a cut that expands a walk attaches the steps its unexpanded cut holds as p
   const walks = reader('ownends.R')
   for (const start of [0, 6, 12, 18, 24, 30]) {
     const window = { start, end: start + 6 }
-    expect(stated(await walks.cut(R, window, { context: 0 }), R)).toEqual(
-      stated(await walks.cut(R, window, { context: 0, expand: all }), R),
+    expect(
+      stated(
+        await walks.getCutForRange(R, window.start, window.end, { context: 0 }),
+        R,
+      ),
+    ).toEqual(
+      stated(
+        await walks.getCutForRange(R, window.start, window.end, {
+          context: 0,
+          expand: all,
+        }),
+        R,
+      ),
     )
   }
 })
@@ -735,8 +818,13 @@ test('a contained cut keeps a placeholder within its context whole, as the loade
 test('a placeholder is no node: it is flagged, as long as its run, placed on its walk’s contig and named for both', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const unloaded = await walks.cut(R, window, { context: 0 })
-  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  const unloaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    expand: all,
+  })
   const placeholders = unloaded.fragments.flatMap(f =>
     [...f.ids].filter(isPlaceholder).map(id => ({ id, name: f.name })),
   )
@@ -798,36 +886,52 @@ test('a placeholder is no node: it is flagged, as long as its run, placed on its
 test('placeholders do not count towards the node limit, and a cut says how many it returns', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const cut = await walks.cut(R, window, { context: 0 })
+  const cut = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
   const placeholders = [...cut.kept].filter(isPlaceholder).length
   const nodes = cut.kept.size - placeholders
   expect(placeholders).toBeGreaterThan(4)
   expect(cut.placeholders).toBe(placeholders)
   expect([...cut.kept].every(id => cut.graph.nodes.has(id))).toBe(true)
-  const within = await walks.cut(R, window, { context: 0, nodeLimit: nodes })
+  const within = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    nodeLimit: nodes,
+  })
   expect(within.kept.size).toBe(cut.kept.size)
   await expect(
-    walks.cut(R, window, { context: 0, nodeLimit: nodes - 1 }),
+    walks.getCutForRange(R, window.start, window.end, {
+      context: 0,
+      nodeLimit: nodes - 1,
+    }),
   ).rejects.toThrow('Zoom in')
-  const loaded = await walks.cut(R, window, { context: 0, expand: all })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    expand: all,
+  })
   expect(loaded.placeholders).toBe(0)
 })
 
 test('a placeholder limit bounds the placeholders a cut keeps, whatever its nodes, and a cut that expands every walk keeps none to count', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const cut = await walks.cut(R, window, { context: 0 })
-  const within = await walks.cut(R, window, {
+  const cut = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
+  const within = await walks.getCutForRange(R, window.start, window.end, {
     context: 0,
     placeholderLimit: cut.placeholders,
   })
   expect(within.kept).toEqual(cut.kept)
   const over = await walks
-    .cut(R, window, { context: 0, placeholderLimit: cut.placeholders - 1 })
+    .getCutForRange(R, window.start, window.end, {
+      context: 0,
+      placeholderLimit: cut.placeholders - 1,
+    })
     .catch((e: unknown) => e)
   expect(over).toBeInstanceOf(RegionTooLargeError)
   expect(over).toMatchObject({ limit: cut.placeholders - 1, windowBp: 60 })
-  const loaded = await walks.cut(R, window, {
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
     context: 0,
     expand: all,
     placeholderLimit: 0,
@@ -840,15 +944,20 @@ test('a placeholder limit bounds the placeholders a cut keeps, whatever its node
 test('a cut over its placeholder limit is refused as its pieces are built, before the finished cut counts its steps', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const cut = await walks.cut(R, window, { context: 0 })
+  const cut = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
   const held =
     cut.fragments.reduce((sum, f) => sum + f.ids.length, 0) +
     cut.departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
   await expect(
-    walks.cut(R, window, { context: 0, stepBudget: held - 1 }),
+    walks.getCutForRange(R, window.start, window.end, {
+      context: 0,
+      stepBudget: held - 1,
+    }),
   ).rejects.toMatchObject({ limit: held - 1 })
   await expect(
-    walks.cut(R, window, {
+    walks.getCutForRange(R, window.start, window.end, {
       context: 0,
       stepBudget: held - 1,
       placeholderLimit: 1,
@@ -890,8 +999,8 @@ test.each(PLACEHOLDER_SWEEPS)(
   async ({ fixture, ...expected }) => {
     const walks = reader(fixture)
     const swept = { cuts: 0, withPlaceholders: 0 }
-    for (const refName of await walks.referenceSequences()) {
-      const length = await walks.sequenceLength(refName)
+    for (const refName of await walks.getReferenceSequences()) {
+      const length = await walks.getSequenceLength(refName)
       for (let start = 0; start < length; start += 5) {
         for (const width of [5, 20, 60]) {
           for (const opts of [
@@ -901,14 +1010,24 @@ test.each(PLACEHOLDER_SWEEPS)(
             { context: 10, contained: true },
           ]) {
             const window = { start, end: start + width }
-            const cut = await walks.cut(refName, window, opts)
-            const within = await walks.cut(refName, window, {
-              ...opts,
-              placeholderLimit: cut.placeholders,
-            })
+            const cut = await walks.getCutForRange(
+              refName,
+              window.start,
+              window.end,
+              opts,
+            )
+            const within = await walks.getCutForRange(
+              refName,
+              window.start,
+              window.end,
+              {
+                ...opts,
+                placeholderLimit: cut.placeholders,
+              },
+            )
             expect(within.kept).toEqual(cut.kept)
             await expect(
-              walks.cut(refName, window, {
+              walks.getCutForRange(refName, window.start, window.end, {
                 ...opts,
                 placeholderLimit: cut.placeholders - 1,
               }),
@@ -926,7 +1045,9 @@ test.each(PLACEHOLDER_SWEEPS)(
 test('a step built for an unloaded piece counts towards the step budget as any step does', async () => {
   const walks = reader('blocks.R')
   const window = { start: 60, end: 120 }
-  const cut = await walks.cut(R, window, { context: 0 })
+  const cut = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
   const held =
     cut.fragments.reduce((sum, f) => sum + f.ids.length, 0) +
     cut.departures.reduce((sum, d) => sum + (d.steps?.ids.length ?? 0), 0)
@@ -937,10 +1058,16 @@ test('a step built for an unloaded piece counts towards the step budget as any s
       .filter(f => f.name !== R)
       .reduce((sum, f) => sum + f.ids.length, 0),
   )
-  const within = await walks.cut(R, window, { context: 0, stepBudget: held })
+  const within = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    stepBudget: held,
+  })
   expect(within.fragments).toHaveLength(cut.fragments.length)
   await expect(
-    walks.cut(R, window, { context: 0, stepBudget: held - 1 }),
+    walks.getCutForRange(R, window.start, window.end, {
+      context: 0,
+      stepBudget: held - 1,
+    }),
   ).rejects.toThrow('Zoom in')
 })
 
@@ -949,19 +1076,15 @@ test('a step built for an unloaded piece counts towards the step budget as any s
 test('the bytes of a tile fetched for own steps are checked with the blocks unit read before it, before it is fetched', async () => {
   const { reader: walks, fetched, watch } = counted('ownends.R')
   await watch(R)
-  const units = await walks.units(R)
+  const units = await walks.getUnits(R)
   const bytes = (kind: string, name: string) =>
     units.find(u => u.kind === kind && u.name === name)!.length
   const cut = (byteBudget: number) =>
-    walks.cut(
-      R,
-      { start: 24, end: 30 },
-      {
-        context: 0,
-        keep: name => name === 'X#1#c' || name === R,
-        byteBudget,
-      },
-    )
+    walks.getCutForRange(R, 24, 30, {
+      context: 0,
+      keep: name => name === 'X#1#c' || name === R,
+      byteBudget,
+    })
   const read = () => fetched.filter(u => !u.startsWith('departures')).sort()
   const window = bytes('tile', '20') + bytes('blocks', '20')
   const whole = window + bytes('tile', '0')
@@ -980,7 +1103,7 @@ test('the bytes of a tile fetched for own steps are checked with the blocks unit
 // from 6 to 1 owns the 30 bp, which trail a piece with no step on a window
 // over 1
 test('a cut that expands a walk reads the piece a record attaches steps of, though it has no step on the window', async () => {
-  const walks = WalkReader.fromFilehandles(
+  const walks = walkFileFrom(
     walkFileOf([
       '#walks format:i:8 tile:i:60',
       '#reference R',
@@ -998,8 +1121,13 @@ test('a cut that expands a walk reads the piece a record attaches steps of, thou
     ]),
   )
   const window = { start: 0, end: 10 }
-  const loaded = await walks.cut(R, window, { context: 0, expand: all })
-  const unloaded = await walks.cut(R, window, { context: 0 })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    expand: all,
+  })
+  const unloaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
   const held = (cut: Cut) =>
     cut.departures.map(d => [
       d.hapStart,
@@ -1022,7 +1150,10 @@ test('a cut that expands a walk loads its piece between two over the drawn stret
   const { reader: walks, fetched, watch } = counted('between.R')
   await watch(R)
   const window = { start: 60, end: 90 }
-  const loaded = await walks.cut(R, window, { context: 10, expand: all })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 10,
+    expand: all,
+  })
   expect(fetched.sort()).toEqual([
     'departures .',
     'departures .',
@@ -1042,7 +1173,9 @@ test('a cut that expands a walk loads its piece between two over the drawn stret
   ])
   expect(loaded.fragments.some(f => f.abridged)).toBe(false)
   expect(loaded.placeholders).toBe(0)
-  const unloaded = await walks.cut(R, window, { context: 10 })
+  const unloaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 10,
+  })
   expect(rows(unloaded, 'MID#1#c')).toEqual([
     [0, 55, '>7@60 >8@70 >1@0 off:5 >2@10 >9@80'],
   ])
@@ -1056,8 +1189,13 @@ test('a cut that expands a walk loads its piece between two over the drawn stret
 test('a cut that expands a walk holds no link of a piece it does not build, where the piece’s detail unit holds one it builds', async () => {
   const walks = reader('unbuilt.R')
   const window = { start: 0, end: 10 }
-  const loaded = await walks.cut(R, window, { context: 0, expand: all })
-  const unloaded = await walks.cut(R, window, { context: 0 })
+  const loaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+    expand: all,
+  })
+  const unloaded = await walks.getCutForRange(R, window.start, window.end, {
+    context: 0,
+  })
   expect(rows(loaded, 'BACK#1#c')).toEqual([[0, 10, '>1@0']])
   expect([...loaded.kept].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6])
   expect(links(loaded)).toEqual([
@@ -1095,18 +1233,16 @@ describe('the units a cut reads', () => {
   test('a cut that leaves a kept piece unloaded reads its tile’s blocks unit, and no detail unit', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
-    await walks.cut(R, { start: 6000, end: 6500 })
+    await walks.getCutForRange(R, 6000, 6500)
     expect(fetched.sort()).toEqual(['blocks 0', 'tile 0'])
   })
 
   test('a cut that expands every walk reads the detail units of the pieces whose span lies over the drawn stretch, no other, and no blocks unit', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
-    const { fragments } = await walks.cut(
-      R,
-      { start: 6000, end: 6500 },
-      { expand: all },
-    )
+    const { fragments } = await walks.getCutForRange(R, 6000, 6500, {
+      expand: all,
+    })
     expect(fetched.sort()).toEqual(['detail 0:0', 'detail 0:1', 'tile 0'])
     expect(fragments.map(f => f.name).sort()).toEqual([
       'FAR#1#c',
@@ -1118,11 +1254,10 @@ describe('the units a cut reads', () => {
   test('a cut that expands the walks it keeps reads their detail units by their abridged rows', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
-    const { fragments } = await walks.cut(
-      R,
-      { start: 6000, end: 6500 },
-      { keep: name => name !== 'OFF#1#c', expand: all },
-    )
+    const { fragments } = await walks.getCutForRange(R, 6000, 6500, {
+      keep: name => name !== 'OFF#1#c',
+      expand: all,
+    })
     expect(fetched.sort()).toEqual(['detail 0:0', 'detail 0:1', 'tile 0'])
     expect(fragments.some(f => f.abridged)).toBe(false)
   })
@@ -1130,11 +1265,9 @@ describe('the units a cut reads', () => {
   test('a cut that expands some walks reads the blocks unit for the others', async () => {
     const { reader: walks, fetched, watch } = counted('cover.R')
     await watch(R)
-    const { fragments } = await walks.cut(
-      R,
-      { start: 6000, end: 6500 },
-      { expand: name => name === 'FAR#1#c' },
-    )
+    const { fragments } = await walks.getCutForRange(R, 6000, 6500, {
+      expand: name => name === 'FAR#1#c',
+    })
     expect(fetched.sort()).toEqual(['blocks 0', 'detail 0:0', 'tile 0'])
     expect(
       fragments
@@ -1151,11 +1284,10 @@ describe('the units a cut reads', () => {
     async ({ expand, read }) => {
       const { reader: walks, fetched, watch } = counted('cover.R')
       await watch(R)
-      const { fragments } = await walks.cut(
-        R,
-        { start: 9000, end: 9100 },
-        { context: 0, expand },
-      )
+      const { fragments } = await walks.getCutForRange(R, 9000, 9100, {
+        context: 0,
+        expand,
+      })
       expect(kinds(fetched)).toEqual(read)
       expect(fragments.map(f => f.name)).toEqual(['R#0#c'])
     },
@@ -1163,19 +1295,26 @@ describe('the units a cut reads', () => {
 
   test('the blocks unit counts against the byte budget, and in the bytes a cut is said to read', async () => {
     const walks = reader('cover.R')
-    const units = await walks.units(R)
+    const units = await walks.getUnits(R)
     const bytes = (kind: string) =>
       units.filter(u => u.kind === kind).reduce((sum, u) => sum + u.length, 0)
     const window = { start: 6000, end: 6500 }
-    expect(await walks.bytesFor(R, window)).toBe(
+    expect(await walks.getBytesForRange(R, window.start, window.end)).toBe(
       bytes('tile') + bytes('blocks'),
     )
     await expect(
-      walks.cut(R, window, { byteBudget: bytes('tile') }),
+      walks.getCutForRange(R, window.start, window.end, {
+        byteBudget: bytes('tile'),
+      }),
     ).rejects.toThrow('fetch')
-    const { fragments } = await walks.cut(R, window, {
-      byteBudget: bytes('tile') + bytes('blocks'),
-    })
+    const { fragments } = await walks.getCutForRange(
+      R,
+      window.start,
+      window.end,
+      {
+        byteBudget: bytes('tile') + bytes('blocks'),
+      },
+    )
     expect(fragments).toHaveLength(3)
   })
 })
@@ -1195,27 +1334,37 @@ describe('a file whose blocks unit is not what its tile needs', () => {
   ]
   const blocks = 'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5'
   const open = (lines: string[]) =>
-    WalkReader.fromFilehandles(walkFileOf([...header, ...lines]))
+    walkFileFrom(walkFileOf([...header, ...lines]))
   const window = { start: 0, end: 20 }
 
   test('a sequence with its blocks unit is read', async () => {
-    const cut = await open([...abridged, blocks]).cut('R#0#chr', window, {
-      context: 0,
-    })
+    const cut = await open([...abridged, blocks]).getCutForRange(
+      'R#0#chr',
+      window.start,
+      window.end,
+      {
+        context: 0,
+      },
+    )
     expect(rows(cut, 'H#1#h')).toEqual([[0, 18, '>3@10 off:8 >4@15']])
   })
 
   test('a tile with an abridged row and no blocks unit is refused by a cut that leaves the piece unloaded, and read by one that expands it', async () => {
     const walks = open(abridged)
     const error: unknown = await walks
-      .cut('R#0#chr', window)
+      .getCutForRange('R#0#chr', window.start, window.end)
       .catch((e: unknown) => e)
     expect(error).toBeInstanceOf(WalkFormatError)
     expect(error).toHaveProperty(
       'message',
       "R#0#chr's unit table lists no blocks unit 0, which the abridged rows of that tile need",
     )
-    const cut = await walks.cut('R#0#chr', window, { context: 0, expand: all })
+    const cut = await walks.getCutForRange(
+      'R#0#chr',
+      window.start,
+      window.end,
+      { context: 0, expand: all },
+    )
     expect(rows(cut, 'H#1#h')).toEqual([[0, 18, '>3@10 off:8 >4@15']])
   })
 
@@ -1228,9 +1377,10 @@ describe('a file whose blocks unit is not what its tile needs', () => {
     ['with no block', '18'],
   ])('a blocks row %s is refused', async (_, list) => {
     await expect(
-      open([...abridged, blocks.replace('10+5,8,0+5', list)]).cut(
+      open([...abridged, blocks.replace('10+5,8,0+5', list)]).getCutForRange(
         'R#0#chr',
-        window,
+        window.start,
+        window.end,
       ),
     ).rejects.toThrow(/blocks row/)
   })
@@ -1241,7 +1391,7 @@ describe('a file whose blocks unit is not what its tile needs', () => {
       blocks,
       'R#0#chr 20 ref R#0#chr 0 20 1 4 10,2,2,2 5,5,5,5 .',
       `R#0#chr 20 walk H#1#h 0 ${hapOffset} 1 2 10 .`,
-    ]).cut('R#0#chr', { start: 0, end: 40 }, { context: 0, expand })
+    ]).getCutForRange('R#0#chr', 0, 40, { context: 0, expand })
 
   test('an abridged row that ends where the line’s next piece starts is read', async () => {
     expect((await nextPiece(18)).placeholders).toBe(1)
@@ -1258,10 +1408,10 @@ describe('a file whose blocks unit is not what its tile needs', () => {
 
   test('a blocks unit without the row of a piece its tile abridges is refused', async () => {
     await expect(
-      open([...abridged, blocks.replace('H#1#h 0 0', 'H#1#h 0 1')]).cut(
-        'R#0#chr',
-        window,
-      ),
+      open([
+        ...abridged,
+        blocks.replace('H#1#h 0 0', 'H#1#h 0 1'),
+      ]).getCutForRange('R#0#chr', window.start, window.end),
     ).rejects.toThrow('holds no row for piece 0 of H#1#h')
   })
 })
@@ -1286,11 +1436,10 @@ describe('a file whose abridged rows, blocks rows, detail rows and records disag
     'R#0#c 0 60 departure W#1#c 20 80 50 60 + 1 0 + 1 0',
   ]
   const cut = (edit: (line: string) => string, expand?: () => boolean) =>
-    WalkReader.fromFilehandles(walkFileOf(lines.map(edit))).cut(
-      R,
-      { start: 0, end: 10 },
-      { context: 0, expand },
-    )
+    walkFileFrom(walkFileOf(lines.map(edit))).getCutForRange(R, 0, 10, {
+      context: 0,
+      expand,
+    })
   const hapBp49 = (line: string) =>
     line.replace('abridged W#1#c 0 0 0 3 50 0', 'abridged W#1#c 0 0 0 3 49 0')
   const record = (hapStart: number, ownBp: number) => (line: string) =>
@@ -1463,15 +1612,14 @@ test.each([
   async name => {
     const walks = reader(name)
     const missing: string[] = []
-    for (const refName of await walks.referenceSequences()) {
-      const length = await walks.sequenceLength(refName)
+    for (const refName of await walks.getReferenceSequences()) {
+      const length = await walks.getSequenceLength(refName)
       for (let start = 0; start < length; start += 5) {
         for (const contained of [false, true]) {
-          const cut = await walks.cut(
-            refName,
-            { start, end: start + 5 },
-            { context: 0, contained },
-          )
+          const cut = await walks.getCutForRange(refName, start, start + 5, {
+            context: 0,
+            contained,
+          })
           for (const walk of uncounted(cut)) {
             missing.push(`${refName}:${start} ${walk}`)
           }

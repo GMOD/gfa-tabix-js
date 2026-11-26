@@ -3,10 +3,10 @@ import { readdirSync } from 'node:fs'
 import { LocalFile } from 'generic-filehandle2'
 
 import { bytesRead, readsOf, unitsRead } from './testing.ts'
-import { WalkReader } from './walkReader.ts'
+import { WalkFile } from './walkFile.ts'
 import { walksKept } from './walkRows.ts'
 
-import type { WalkCutOptions } from './walkReader.ts'
+import type { WalkCutOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 
@@ -22,16 +22,16 @@ const CONTEXTS = [undefined, 0, 7]
 async function opened(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
   const data = new LocalFile(path)
-  const reader = WalkReader.fromFilehandles({
-    data,
-    directory: new LocalFile(`${path}.idx`),
+  const reader = new WalkFile({
+    walksFilehandle: data,
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
-  const header = await reader.header()
+  const header = await reader.getHeader()
   const sequences = await Promise.all(
-    (await reader.referenceSequences()).map(async refName => ({
+    (await reader.getReferenceSequences()).map(async refName => ({
       refName,
-      units: await reader.units(refName),
-      length: await reader.sequenceLength(refName),
+      units: await reader.getUnits(refName),
+      length: await reader.getSequenceLength(refName),
     })),
   )
   return { reader, header, sequences, reads: readsOf(data) }
@@ -59,9 +59,14 @@ async function eachCut(
   for (const { refName, units, length } of sequences) {
     for (const window of windowsOf(length)) {
       for (const context of CONTEXTS) {
-        const said = await reader.bytesFor(refName, window, { context })
+        const said = await reader.getBytesForRange(
+          refName,
+          window.start,
+          window.end,
+          { context },
+        )
         reads.length = 0
-        await reader.cut(refName, window, {
+        await reader.getCutForRange(refName, window.start, window.end, {
           context,
           ...options(header.haplotypes, refName),
         })
@@ -143,15 +148,23 @@ test('bytesFor counts the tiles a cut fetches for own steps within attachBp, and
     { attachBp: 29, tiles: ['10'] },
     { attachBp: 9, tiles: [] },
   ]) {
-    const said = await reader.bytesFor(refName, window, {
-      context: 0,
-      attachBp,
-    })
+    const said = await reader.getBytesForRange(
+      refName,
+      window.start,
+      window.end,
+      {
+        context: 0,
+        attachBp,
+      },
+    )
     expect(said).toBe(
       tiles.reduce((sum, name) => sum + bytes('tile', name), windowBytes),
     )
     reads.length = 0
-    await reader.cut(refName, window, { context: 0, attachBp })
+    await reader.getCutForRange(refName, window.start, window.end, {
+      context: 0,
+      attachBp,
+    })
     expect(bytesRead(reads)).toBe(said)
   }
 })
@@ -175,7 +188,12 @@ test.each([
     const [{ refName, units } = { refName: '', units: [] }] = sequences
     const bytes = (keep: (u: (typeof units)[number]) => boolean) =>
       units.filter(keep).reduce((sum, u) => sum + u.length, 0)
-    const said = await reader.bytesFor(refName, window, { context: 0 })
+    const said = await reader.getBytesForRange(
+      refName,
+      window.start,
+      window.end,
+      { context: 0 },
+    )
     expect(said).toBe(
       bytes(u => u.kind === 'tile' && [...tiles, ...own].includes(u.name)) +
         bytes(
@@ -186,7 +204,9 @@ test.each([
         ),
     )
     reads.length = 0
-    await reader.cut(refName, window, { context: 0 })
+    await reader.getCutForRange(refName, window.start, window.end, {
+      context: 0,
+    })
     expect(bytesRead(reads)).toBe(said)
     expect(
       unitsRead(units, reads)
@@ -201,11 +221,16 @@ test('bytesFor reads the departure blocks a cut would, and none past the departu
   const { reader, sequences, reads } = await opened('ownends.R')
   const [{ refName, units } = { refName: '', units: [] }] = sequences
   const window = { start: 24, end: 30 }
-  await reader.bytesFor(refName, window, { context: 0 })
+  await reader.getBytesForRange(refName, window.start, window.end, {
+    context: 0,
+  })
   expect(unitsRead(units, reads).map(u => u.kind)).toEqual(['departures'])
   reads.length = 0
   await expect(
-    reader.bytesFor(refName, window, { context: 0, departureByteBudget: 1 }),
+    reader.getBytesForRange(refName, window.start, window.end, {
+      context: 0,
+      departureByteBudget: 1,
+    }),
   ).rejects.toThrow('Too many departures')
   expect(reads).toEqual([])
 })

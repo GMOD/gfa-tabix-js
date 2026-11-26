@@ -17,6 +17,18 @@ export class AmbiguousSequenceError extends Error {
   }
 }
 
+export class MissingSequenceError extends Error {
+  override name = 'MissingSequenceError'
+  readonly sequences: string[]
+
+  constructor(refName: string, assemblyName: string, sequences: string[]) {
+    super(
+      `The walk file has no sequence ${refName} on ${assemblyName}; it holds ${sequences.slice(0, 5).join(', ')}${sequences.length > 5 ? ', …' : ''}`,
+    )
+    this.sequences = sequences
+  }
+}
+
 /**
  * A file's sequence names under each spelling a caller may ask by: the file's
  * own (`GRCh38#0#chr6`), and a PanSN name's contig under its sample (`chr6`

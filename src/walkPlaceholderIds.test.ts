@@ -6,18 +6,18 @@ import {
   idsNotOneToOne,
   placeholderRuns,
 } from './testing.ts'
-import { WalkReader } from './walkReader.ts'
+import { WalkFile } from './walkFile.ts'
 
-import type { WalkCutOptions } from './walkReader.ts'
+import type { WalkCutOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 const R = 'R#0#c'
 
 function open(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
 }
 
@@ -27,13 +27,13 @@ interface Window {
   opts: WalkCutOptions
 }
 
-const cutOf = (reader: WalkReader, { start, end, opts }: Window) =>
-  reader.cut(R, { start, end }, opts)
+const cutOf = (reader: WalkFile, { start, end, opts }: Window) =>
+  reader.getCutForRange(R, start, end, opts)
 
 // Windows of 5 and 20 bp along a fixture's R: plain, contained, which splits
 // a placeholder at its context's end, and expanding some of the walks
-async function sweep(reader: WalkReader) {
-  const length = await reader.sequenceLength(R)
+async function sweep(reader: WalkFile) {
+  const length = await reader.getSequenceLength(R)
   const windows: Window[] = []
   for (let start = 0; start < length; start += 5) {
     for (const width of [5, 20]) {
@@ -76,7 +76,7 @@ const CUTS = [
 describe.each(CUTS)(
   'the cut of $fixture over $start-$end, $opts',
   ({ fixture, ...window }) => {
-    const facts = async (reader: WalkReader) =>
+    const facts = async (reader: WalkFile) =>
       cutFacts(await cutOf(reader, window))
 
     test('holds placeholders, and is the same on a second fresh reader', async () => {

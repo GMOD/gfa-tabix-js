@@ -148,7 +148,7 @@ export function parseGraphHeader(lines: string[]): GraphHeader {
   const format = tags.get('format')
   if (format !== '2') {
     throw new Error(
-      `gfa-to-tabix format ${format}: this graph-walks reads format 2`,
+      `gfa-to-tabix format ${format}: this @gmod/gfa-tabix reads format 2`,
     )
   }
   const samples = lines.find(l => l.startsWith('#samples\t'))

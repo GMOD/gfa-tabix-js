@@ -6,11 +6,11 @@ import { expect, test } from 'vitest'
 import { rangesRead, readsOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import { COUNT_REASONS } from './walkCounts.ts'
-import { WalkReader } from './walkReader.ts'
+import { WalkFile } from './walkFile.ts'
 import { walksKept } from './walkRows.ts'
 
 import type { CountColumns, WalkCounts } from './walkCounts.ts'
-import type { WalkCountOptions } from './walkReader.ts'
+import type { CutForRange, WalkCountOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 
@@ -332,13 +332,18 @@ function problemsOf(
 
 // The nodes and links of a cut with no count
 async function uncounted(
-  reader: WalkReader,
+  reader: WalkFile,
   refName: string,
   region: { start: number; end: number },
   opts: WalkCountOptions,
   counts: WalkCounts,
 ) {
-  const cut = await reader.cut(refName, region, opts)
+  const cut = await reader.getCutForRange(
+    refName,
+    region.start,
+    region.end,
+    opts,
+  )
   const { nodes, links } = cut.graph.tables(
     cut.kept,
     cut.fragments,
@@ -371,11 +376,11 @@ test.each(FIXTURES)(
   async fixture => {
     const path = `${DATA}${fixture}.R.walks.gz`
     const data = new LocalFile(path)
-    const reader = WalkReader.fromFilehandles({
-      data,
-      directory: new LocalFile(`${path}.idx`),
+    const reader = new WalkFile({
+      walksFilehandle: data,
+      idxFilehandle: new LocalFile(`${path}.idx`),
     })
-    const sequences = await reader.referenceSequences()
+    const sequences = await reader.getReferenceSequences()
     const reads = readsOf(data)
     const truth = truthOf(
       readFileSync(`${DATA}${gfaOf(fixture)}.R.gfa`, 'utf8'),
@@ -385,7 +390,7 @@ test.each(FIXTURES)(
     const promised = stated === '0'
     const problems: string[] = []
     for (const refName of sequences) {
-      const length = await reader.sequenceLength(refName)
+      const length = await reader.getSequenceLength(refName)
       for (const region of windowsOf(refName, length, truth)) {
         for (const context of [0, 3]) {
           for (const contained of [false, true]) {
@@ -398,7 +403,12 @@ test.each(FIXTURES)(
               }
               try {
                 reads.splice(0)
-                const counts = await reader.counts(refName, region, opts)
+                const counts = await reader.getCountsForRange(
+                  refName,
+                  region.start,
+                  region.end,
+                  opts,
+                )
                 const counted = reads.splice(0)
                 const found = problemsOf(
                   counts,
@@ -459,7 +469,7 @@ test.each(FIXTURES)(
 )
 
 // Each link a cut lists between two loaded nodes, by its handles
-function cutLinks(cut: Awaited<ReturnType<WalkReader['cut']>>) {
+function cutLinks(cut: CutForRange) {
   const { nodes, links } = cut.graph.tables(
     cut.kept,
     cut.fragments,
@@ -482,19 +492,19 @@ test.each(FIXTURES)(
   "%s: a cut of one haplotype with links 'between' lists only the GFA's links, each the counts find between its nodes, and each it walks",
   async fixture => {
     const path = `${DATA}${fixture}.R.walks.gz`
-    const reader = WalkReader.fromFilehandles({
-      data: new LocalFile(path),
-      directory: new LocalFile(`${path}.idx`),
+    const reader = new WalkFile({
+      walksFilehandle: new LocalFile(path),
+      idxFilehandle: new LocalFile(`${path}.idx`),
     })
-    const sequences = await reader.referenceSequences()
-    const { haplotypes } = await reader.header()
+    const sequences = await reader.getReferenceSequences()
+    const { haplotypes } = await reader.getHeader()
     const truth = truthOf(
       readFileSync(`${DATA}${gfaOf(fixture)}.R.gfa`, 'utf8'),
       new Set(sequences),
     )
     const problems: string[] = []
     for (const refName of sequences) {
-      const length = await reader.sequenceLength(refName)
+      const length = await reader.getSequenceLength(refName)
       const keep = walksKept(haplotypes.slice(0, 1), refName)
       for (const region of windowsOf(refName, length, truth)) {
         for (const context of [0, 3]) {
@@ -502,9 +512,15 @@ test.each(FIXTURES)(
             const opts = { context, contained, keep }
             const where = `${refName}:${region.start}-${region.end}, context ${context}${contained ? ', contained' : ''}`
             const [walked, between, counts] = await Promise.all([
-              reader.cut(refName, region, opts),
-              reader.cut(refName, region, { ...opts, links: 'between' }),
-              reader.counts(refName, region, { context, contained }),
+              reader.getCutForRange(refName, region.start, region.end, opts),
+              reader.getCutForRange(refName, region.start, region.end, {
+                ...opts,
+                links: 'between',
+              }),
+              reader.getCountsForRange(refName, region.start, region.end, {
+                context,
+                contained,
+              }),
             ])
             const listed = cutLinks(between)
             const kept = (handle: number) => between.kept.has(handle >> 1)

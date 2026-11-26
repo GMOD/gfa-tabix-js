@@ -3,13 +3,13 @@ import { readFileSync } from 'node:fs'
 import { LocalFile } from 'generic-filehandle2'
 import { expect, test } from 'vitest'
 
-import { rangesRead, readsOf, walkFileOf } from './testing.ts'
+import { rangesRead, readsOf, walkFileFrom, walkFileOf } from './testing.ts'
 import { RegionTooLargeError } from './util.ts'
 import { countReasons } from './walkCounts.ts'
-import { DepartureReadError, WalkReader } from './walkReader.ts'
+import { DepartureReadError, WalkFile } from './walkFile.ts'
 
 import type { WalkCounts } from './walkCounts.ts'
-import type { WalkCountOptions } from './walkReader.ts'
+import type { WalkCountOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 
@@ -27,10 +27,10 @@ function countsOf(
   opts: WalkCountOptions = {},
 ) {
   const path = `${DATA}${fixture}.R.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
-  }).counts(R, region, { context: 0, ...opts })
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
+  }).getCountsForRange(R, region.start, region.end, { context: 0, ...opts })
 }
 
 const handle = (step: string) =>
@@ -257,13 +257,18 @@ test('a haplotype whose two contigs step a node counts once, and each step is a 
 // twice, and H5#1 alone takes >10>13, written <13<10, off the reference
 test('a contained count with context takes the piece before the drawn stretch that a contained cut keeps', async () => {
   const path = `${DATA}contained.R.walks.gz`
-  const reader = WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
+  const reader = new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
   const opts = { context: 3, contained: true, expand: () => true }
   const region = { start: 44, end: 61 }
-  const cut = await reader.cut('R#0#chrA', region, opts)
+  const cut = await reader.getCutForRange(
+    'R#0#chrA',
+    region.start,
+    region.end,
+    opts,
+  )
   const { nodes, links } = cut.graph.tables(
     cut.kept,
     cut.fragments,
@@ -273,7 +278,12 @@ test('a contained count with context takes the piece before the drawn stretch th
     [nodes.names[i], nodes.names[links.to[k]!]].join(' and '),
   )
   expect(cutLinks).toContain('10 and 13')
-  const counts = await reader.counts('R#0#chrA', region, opts)
+  const counts = await reader.getCountsForRange(
+    'R#0#chrA',
+    region.start,
+    region.end,
+    opts,
+  )
   expect(linkCount(counts, '>10', '>13')).toMatchObject([
     { haplotypes: 1, passes: 1 },
   ])
@@ -300,17 +310,17 @@ test('counts past the step budget say what the window holds and what to do inste
 test('counts that expand every walk read the bytes an expanded cut of every walk reads, and no piece that only touches own steps', async () => {
   const path = `${DATA}between.R.walks.gz`
   const data = new LocalFile(path)
-  const reader = WalkReader.fromFilehandles({
-    data,
-    directory: new LocalFile(`${path}.idx`),
+  const reader = new WalkFile({
+    walksFilehandle: data,
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
-  await reader.units('R#0#c')
+  await reader.getUnits('R#0#c')
   const reads = readsOf(data)
   const region = { start: 20, end: 100 }
   const opts = { context: 0, expand: () => true }
-  await reader.counts('R#0#c', region, opts)
+  await reader.getCountsForRange('R#0#c', region.start, region.end, opts)
   const counted = reads.splice(0)
-  await reader.cut('R#0#c', region, opts)
+  await reader.getCutForRange('R#0#c', region.start, region.end, opts)
   expect(rangesRead(counted)).toEqual(rangesRead(reads))
 })
 
@@ -335,9 +345,9 @@ test.each([
 ])(
   'under %s a count on a once-passed node of the drawn stretch has reasons %j, and a haplotype count of every haplotype the file holds is exact whatever the header states',
   async (walks, reasons) => {
-    const counts = await WalkReader.fromFilehandles(
+    const counts = await walkFileFrom(
       walkFileOf(underHeader(walks)),
-    ).counts(R, { start: 0, end: 20 }, { context: 0 })
+    ).getCountsForRange(R, 0, 20, { context: 0 })
     expect(counts.haplotypes.file).toBe(3)
     expect(nodeCount(counts, 3)).toEqual({
       haplotypes: 2,
@@ -366,9 +376,10 @@ test('a ref row that states 2 passes leaves its node revisited, though the heade
   const lines = underHeader('#walks format:i:8 tile:i:10 revisited:i:0').map(
     line => (line.includes(' 0 ref ') ? line.replace(/\.$/, '2,1') : line),
   )
-  const counts = await WalkReader.fromFilehandles(walkFileOf(lines)).counts(
+  const counts = await walkFileFrom(walkFileOf(lines)).getCountsForRange(
     R,
-    { start: 0, end: 20 },
+    0,
+    20,
     { context: 0 },
   )
   expect(nodeCount(counts, 1)?.passReasons).toEqual(['revisited', 'elsewhere'])
@@ -381,10 +392,10 @@ function plantedCounts(
   region: { start: number; end: number },
 ) {
   const path = `${DATA}planted/${file}.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
-  }).counts(refName, region, { context: 0 })
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
+  }).getCountsForRange(refName, region.start, region.end, { context: 0 })
 }
 
 // The haplotypes of a planted GFA with a W line stepping node `id`

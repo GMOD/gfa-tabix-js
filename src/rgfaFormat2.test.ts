@@ -1,7 +1,7 @@
 import { TabixIndexedFile } from '@gmod/tabix'
 
+import { GfaTabixFile } from './gfaTabixFile.ts'
 import { carrierNames, parseGraphHeader, parseGraphRow } from './rgfaBed.ts'
-import { rgfaCut } from './rgfaCut.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 
@@ -40,8 +40,18 @@ test.each(['anchored', 'contig'])(
     const { one, two } = formats(layout)
     for (let start = 1004500; start < 1004961; start += 37) {
       const window = { refName: 'K12#1#chr', start, end: start + 60 }
-      const a = await rgfaCut(one, window, { hops: 1 })
-      const b = await rgfaCut(two, window, { hops: 1 })
+      const a = await new GfaTabixFile(one).getGraphForRange(
+        window.refName,
+        window.start,
+        window.end,
+        { hops: 1 },
+      )
+      const b = await new GfaTabixFile(two).getGraphForRange(
+        window.refName,
+        window.start,
+        window.end,
+        { hops: 1 },
+      )
       expect(withoutSamples(b)).toEqual(withoutSamples(a))
       // every carrier list format 2 gives matches format 1's
       const named = new Set(lines(a))
@@ -86,7 +96,7 @@ test('a format 2 node row names its carriers from #samples', () => {
 
 test('a format other than 2 is refused', () => {
   expect(() => parseGraphHeader(['#gfa-to-tabix\tformat:i:3'])).toThrow(
-    'gfa-to-tabix format 3: this graph-walks reads format 2',
+    'gfa-to-tabix format 3: this @gmod/gfa-tabix reads format 2',
   )
   expect(() => parseGraphHeader(['#other'])).toThrow('no #gfa-to-tabix header')
 })

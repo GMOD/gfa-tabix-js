@@ -55,10 +55,10 @@ function offReference(segments: RgfaSegment[]) {
   return segments.filter(segment => segment.rank > 0)
 }
 
-// A gfa-to-tabix index, read as @gmod/tabix's TabixIndexedFile reads it:
-// format 1's two files (gfa-to-tabix docs/adr/0002-two-index-files.md), or
-// format 2's one (docs/adr/0007-node-link-format-2.md)
-export type RgfaFiles =
+// A GFA tabix file, read as @gmod/tabix's TabixIndexedFile reads it: format
+// 1's two files (gfa-to-tabix docs/adr/0002-two-index-files.md), or format
+// 2's one (docs/adr/0007-node-link-format-2.md)
+export type GfaTabixFileOptions =
   | {
       segments: Pick<TabixSource, 'getLines'>
       links: Pick<TabixSource, 'getLines'>
@@ -97,7 +97,7 @@ function getLines(
 // gives no carriers takes the tags of its node row in the same query; an end
 // past the span has none.
 async function readSpan(
-  files: RgfaFiles,
+  files: GfaTabixFileOptions,
   span: StableSpan,
   withSegments: boolean,
   signal?: AbortSignal,
@@ -160,8 +160,8 @@ async function readSpan(
  * as cheap as it was. `signal` goes to every one of those queries, so a cut
  * the view has replaced stops.
  */
-export async function rgfaCut(
-  files: RgfaFiles,
+async function rgfaCut(
+  files: GfaTabixFileOptions,
   window: StableSpan,
   { hops = 0, signal }: { hops?: number; signal?: AbortSignal } = {},
 ) {
@@ -207,4 +207,37 @@ export async function rgfaCut(
     }
   }
   return formatSubgraph(segments, links)
+}
+
+export interface GfaTabixRangeOptions {
+  hops?: number
+  signal?: AbortSignal
+}
+
+/**
+ * gfa-to-tabix's GFA tabix file, its segments and links Tabix-indexed BED
+ * by stable sequence: `{ graph }`, format 2's graph.bed.gz, or `{ segments,
+ * links }`, format 1's two files, each a TabixIndexedFile of @gmod/tabix or
+ * anything that reads as one
+ */
+export class GfaTabixFile {
+  private readonly files: GfaTabixFileOptions
+
+  constructor(files: GfaTabixFileOptions) {
+    this.files = files
+  }
+
+  /**
+   * The graph over the 0-based half-open range of stable sequence `refName`,
+   * as GFA text: its segments and links, `hops` rounds of links followed
+   * past them, 0 by default
+   */
+  getGraphForRange(
+    refName: string,
+    start: number,
+    end: number,
+    opts: GfaTabixRangeOptions = {},
+  ) {
+    return rgfaCut(this.files, { refName, start, end }, opts)
+  }
 }

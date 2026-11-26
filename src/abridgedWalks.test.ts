@@ -4,18 +4,18 @@ import { LocalFile } from 'generic-filehandle2'
 import { expect, test } from 'vitest'
 
 import { abridgedText, abridgedWalks } from './abridgedWalks.ts'
-import { WalkReader } from './walkReader.ts'
+import { WalkFile } from './walkFile.ts'
 
-import type { WalkCutOptions } from './walkReader.ts'
+import type { CutForRange, WalkCutOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
 const READS_DOC = new URL('../docs/reads.md', import.meta.url).pathname
 
 function open(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
 }
 
@@ -25,13 +25,18 @@ async function cutOf(
   region: { start: number; end: number },
   opts: WalkCutOptions = {},
 ) {
-  const cut = await open(fixture).cut(refName, region, opts)
+  const cut = await open(fixture).getCutForRange(
+    refName,
+    region.start,
+    region.end,
+    opts,
+  )
   const { graph, kept, fragments, departures } = cut
   return { cut, tables: graph.tables(kept, fragments, departures) }
 }
 
 // The bp of each walk's placeholders the cut keeps, by the walk each lies on
-function placeholderBp(cut: Awaited<ReturnType<WalkReader['cut']>>) {
+function placeholderBp(cut: CutForRange) {
   const bp = new Map<string, number>()
   for (const id of cut.kept) {
     const node = cut.graph.nodes.get(id)
@@ -102,11 +107,16 @@ test.each(SWEPT)(
   'over windows of $fixture, a walk counts the bp of each placeholder the cut keeps on its contig once',
   async ({ fixture, refName, lists }) => {
     const reader = open(fixture)
-    const length = await reader.sequenceLength(refName)
+    const length = await reader.getSequenceLength(refName)
     let listed = 0
     for (let start = 0; start < length; start += 5) {
       for (const opts of OPTIONS) {
-        const cut = await reader.cut(refName, { start, end: start + 20 }, opts)
+        const cut = await reader.getCutForRange(
+          refName,
+          start,
+          start + 20,
+          opts,
+        )
         const tables = cut.graph.tables(cut.kept, cut.fragments, cut.departures)
         const found = abridgedWalks(tables)
         listed += found.length

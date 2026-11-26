@@ -1,60 +1,70 @@
 export {
+  CUT_PRESETS,
+  DepartureReadError,
+  WALK_BUDGETS,
+  WALK_CONTEXT,
+  WalkFile,
+} from './walkFile.ts'
+export type {
+  BytesForRangeOptions,
+  CountsForRangeOptions,
+  CutForRange,
+  CutForRangeOptions,
+  FormsForRangeOptions,
+  GraphForRange,
+  GraphForRangeOptions,
+  WalkCountOptions,
+  WalkCutOptions,
+  WalkFileHeader,
+  WalkFileOptions,
+} from './walkFile.ts'
+export { GfaTabixFile } from './gfaTabixFile.ts'
+export type {
+  GfaTabixFileOptions,
+  GfaTabixRangeOptions,
+} from './gfaTabixFile.ts'
+export { WALK_FORMAT, WalkFormatError } from './walkContainer.ts'
+export type { WalkFilehandle, WalkUnit } from './walkContainer.ts'
+export { WalkRowError } from './walkChunk.ts'
+export {
+  AmbiguousSequenceError,
+  MissingSequenceError,
+  refNameLookup,
+  resolveRefName,
+} from './refNames.ts'
+export {
+  RegionTooLargeError,
+  bpString,
+  panSNContig,
+  panSNHaplotype,
+  panSNMatchesPrefix,
+  panSNSample,
+} from './util.ts'
+export type { DepartureTable, GapTable, GraphTables } from './util.ts'
+export {
   BUDGET_NAMES,
-  WalkGraph,
-  byteBudgetError,
   isPlaceholder,
-  joinPieces,
-  keptNodesError,
   keptStepsError,
-  stepBudgetError,
-  walkCut,
-  walkHeader,
-  walkNameFilter,
   walksKept,
 } from './walkRows.ts'
 export type {
   Abridged,
   BudgetNames,
   WalkFragment,
-  WalkHeader,
   WalkNode,
-  WalkRow,
-  WalkRun,
-  WalkWindow,
 } from './walkRows.ts'
-export {
-  ATTACH_BP,
-  adjacentSteps,
-  departureKind,
-  departureStretch,
-  leavesOrRejoinsOn,
-  parseDepartureRow,
-  placementChoice,
-  squeezer,
-} from './walkDeparture.ts'
+export { ATTACH_BP, departureKind, placementChoice } from './walkDeparture.ts'
+export type { DepartureKind, WalkDeparture } from './walkDeparture.ts'
+export { GAP_KINDS } from './walkGaps.ts'
+export type { GapKind, GapSegment, WalkGap } from './walkGaps.ts'
+export { COUNT_REASONS, countReasons } from './walkCounts.ts'
+export type { CountColumns, CountReason, WalkCounts } from './walkCounts.ts'
+export { FORMS_STEP_BUDGET, walkDepartures } from './walkDepartures.ts'
 export type {
-  DepartureKind,
-  DepartureRecord,
-  Hole,
-  WalkDeparture,
-} from './walkDeparture.ts'
-export {
-  CUT_PRESETS,
-  DepartureReadError,
-  WALK_BUDGETS,
-  WALK_CONTEXT,
-  WalkReader,
-} from './walkReader.ts'
-export { WALK_FORMAT, WalkFile, WalkFormatError } from './walkFile.ts'
-export type { WalkFilehandle, WalkUnit } from './walkFile.ts'
-export { checkRange } from './tabixSource.ts'
-export type { TabixSource } from './tabixSource.ts'
-export {
-  AmbiguousSequenceError,
-  refNameLookup,
-  resolveRefName,
-} from './refNames.ts'
-export { WalkRowError, referenceNodes } from './walkChunk.ts'
+  Departure,
+  DepartureSource,
+  HaplotypeDepartures,
+} from './walkDepartures.ts'
 export {
   FLOOR_PRESETS,
   NO_CALL_STATE,
@@ -62,15 +72,11 @@ export {
   RARER_STATE,
   REFERENCE_STATE,
   STRUCTURAL_BP,
-  autoFloor,
   changeKind,
-  changeName,
   describeForm,
   formStateAt,
   formTag,
-  haplotypeMarks,
   markTag,
-  minCarriersFor,
   sizeTag,
   stateKey,
   structuralForms,
@@ -85,38 +91,11 @@ export type {
   SiteState,
   StructuralForms,
 } from './structuralForms.ts'
+export { abridgedText, abridgedWalks } from './abridgedWalks.ts'
+export type { AbridgedWalk } from './abridgedWalks.ts'
+export { checkRange } from './tabixSource.ts'
+export type { TabixSource } from './tabixSource.ts'
 export {
-  FORMS_STEP_BUDGET,
-  formsCut,
-  walkDepartures,
-} from './walkDepartures.ts'
-export type {
-  Departure,
-  DepartureSource,
-  FormsCutOptions,
-  HaplotypeDepartures,
-} from './walkDepartures.ts'
-export type {
-  RegionCutOptions,
-  WalkCountOptions,
-  WalkCutOptions,
-  WalkReaderHeader,
-} from './walkReader.ts'
-export { COUNT_REASONS, countReasons } from './walkCounts.ts'
-export type { CountColumns, CountReason, WalkCounts } from './walkCounts.ts'
-export {
-  RegionTooLargeError,
-  bpString,
-  panSNContig,
-  panSNHaplotype,
-  panSNHaplotypeOrSample,
-  panSNMatchesPrefix,
-  panSNSample,
-} from './util.ts'
-export type { DepartureTable, GapTable, GraphTables } from './util.ts'
-export {
-  MOVED_TAG,
-  carrierNames,
   formatSubgraph,
   linkKey,
   parseGraphHeader,
@@ -126,17 +105,4 @@ export {
   parseSegmentRow,
   segmentSamples,
 } from './rgfaBed.ts'
-export type {
-  GraphHeader,
-  RgfaLink,
-  RgfaSegment,
-  StableSpan,
-} from './rgfaBed.ts'
-export { rgfaCut } from './rgfaCut.ts'
-export type { RgfaFiles } from './rgfaCut.ts'
-export { formContradictions } from './formsCheck.ts'
-export type { Contradiction, ContradictionKind } from './formsCheck.ts'
-export { abridgedText, abridgedWalks } from './abridgedWalks.ts'
-export type { AbridgedWalk } from './abridgedWalks.ts'
-export { GAP_KINDS } from './walkGaps.ts'
-export type { GapKind, GapSegment, WalkGap } from './walkGaps.ts'
+export type { RgfaSegment } from './rgfaBed.ts'

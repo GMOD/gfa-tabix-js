@@ -1,7 +1,6 @@
 import { panSNHaplotypeOrSample } from './util.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
-import type { WalkReader, WalkReaderHeader } from './walkReader.ts'
 import type { WalkFragment, WalkNode } from './walkRows.ts'
 
 /**
@@ -31,8 +30,8 @@ export interface HaplotypeDepartures {
   departures: Departure[]
 }
 
-// A cut's fragments, its departures and its nodes, as WalkReader.cut returns
-// them
+// A cut's fragments, its departures and its nodes, as WalkFile's
+// getCutForRange returns them
 export interface DepartureSource {
   fragments: WalkFragment[]
   departures: WalkDeparture[]
@@ -343,58 +342,3 @@ function coveredOnce(spans: [number, number][]) {
 
 // The most steps a forms cut keeps
 export const FORMS_STEP_BUDGET = 16_000_000
-
-export interface FormsCutOptions {
-  // the most steps the cut keeps, FORMS_STEP_BUDGET at least
-  stepBudget?: number
-  // the most compressed bytes the cut fetches from the region's tiles and
-  // their blocks units; WALK_BUDGETS' by default
-  byteBudget?: number
-  // the most compressed bytes the cut's departure read fetches;
-  // WALK_BUDGETS' by default
-  departureByteBudget?: number
-  signal?: AbortSignal
-}
-
-// Every haplotype's departures over a region, for structuralForms, from one
-// cut without links that expands no walk. A haplotype the header names with
-// no walk in the cut is listed with nothing covered.
-export async function formsCut(
-  reader: Pick<WalkReader, 'header' | 'sequenceFor' | 'cut'>,
-  region: { refName: string; start: number; end: number },
-  opts: FormsCutOptions = {},
-) {
-  const {
-    stepBudget = FORMS_STEP_BUDGET,
-    byteBudget,
-    departureByteBudget,
-    signal,
-  } = opts
-  const header: WalkReaderHeader = await reader.header({ signal })
-  const sample = header.references[0] ?? ''
-  const refName =
-    (await reader.sequenceFor(sample, region.refName, { signal })) ??
-    region.refName
-  const cut = await reader.cut(refName, region, {
-    links: 'none',
-    stepBudget: Math.max(stepBudget, FORMS_STEP_BUDGET),
-    byteBudget,
-    departureByteBudget,
-    signal,
-  })
-  const haplotypes = walkDepartures(
-    {
-      fragments: cut.fragments,
-      departures: cut.departures,
-      nodes: cut.graph.nodes,
-    },
-    refName,
-  )
-  const seen = new Set(haplotypes.map(h => h.haplotype))
-  for (const haplotype of header.haplotypes) {
-    if (!seen.has(haplotype)) {
-      haplotypes.push({ haplotype, covered: [], departures: [] })
-    }
-  }
-  return haplotypes
-}

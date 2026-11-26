@@ -1,34 +1,36 @@
 import { BlobFile, LocalFile } from 'generic-filehandle2'
 
-import { AmbiguousSequenceError } from './refNames.ts'
+import { AmbiguousSequenceError, MissingSequenceError } from './refNames.ts'
 import {
   bgzf,
   bytesRead,
+  cutFacts,
   digestOf,
   graphTablesGFA,
   readsOf,
+  walkFileFrom,
   walkFileOf,
   walkPlaces,
 } from './testing.ts'
 import { RegionTooLargeError, panSNHaplotype } from './util.ts'
 import { WalkRowError, canonicalLink } from './walkChunk.ts'
+import { WalkContainer, WalkFormatError } from './walkContainer.ts'
 import { departureKind, placementChoice } from './walkDeparture.ts'
-import { WalkFile, WalkFormatError } from './walkFile.ts'
 import {
   DepartureReadError,
   WALK_BUDGETS,
-  WalkReader,
+  WalkFile,
   readInOrder,
   touchingRuns,
-} from './walkReader.ts'
+} from './walkFile.ts'
 import { isPlaceholder, walkNameFilter, walksKept } from './walkRows.ts'
 
 import type { GraphTables } from './util.ts'
 import type { AbridgedPiece, ChunkRef } from './walkChunk.ts'
+import type { WalkUnit } from './walkContainer.ts'
 import type { WalkDeparture } from './walkDeparture.ts'
-import type { WalkUnit } from './walkFile.ts'
+import type { CutForRange, WalkCutOptions } from './walkFile.ts'
 import type { WalkGap } from './walkGaps.ts'
-import type { WalkCutOptions } from './walkReader.ts'
 import type { WalkFragment } from './walkRows.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
@@ -67,9 +69,9 @@ vi.mock(import('./walkChunk.ts'), async importOriginal => {
 
 function reader(name: string) {
   const path = `${DATA}${name}.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
 }
 
@@ -79,11 +81,11 @@ function reader(name: string) {
 async function unitsRead(
   name: string,
   refName: string,
-  run: (walks: WalkReader) => Promise<unknown>,
+  run: (walks: WalkFile) => Promise<unknown>,
 ) {
   const walks = reader(name)
-  const units = await walks.units(refName)
-  await walks.header()
+  const units = await walks.getUnits(refName)
+  await walks.getHeader()
   const read = vi.spyOn(LocalFile.prototype, 'read')
   try {
     await run(walks)
@@ -98,15 +100,16 @@ async function unitsRead(
 }
 
 async function gfa(
-  walks: WalkReader,
+  walks: WalkFile,
   start: number,
   end: number,
   haplotypes?: string[],
 ) {
   const refName = 'GRCh38#0#chr1'
-  const { graph, kept, fragments, departures } = await walks.cut(
+  const { graph, kept, fragments, departures } = await walks.getCutForRange(
     refName,
-    { start, end },
+    start,
+    end,
     { keep: walkNameFilter(haplotypes, panSNHaplotype(refName)) },
   )
   return graphTablesGFA(graph.tables(kept, fragments, departures))
@@ -153,7 +156,7 @@ const departure = (d: WalkDeparture) => [
 test('the header names the format, the reference, the haplotypes, the tile size, the graph and the lines left out, read from byte 0 and no tile', async () => {
   const read = vi.spyOn(LocalFile.prototype, 'read')
   try {
-    const header = await reader('header.GRCh38').header()
+    const header = await reader('header.GRCh38').getHeader()
     expect(header).toMatchObject({
       format: 8,
       tile: 1000,
@@ -177,7 +180,7 @@ test('the header has no graph or lines left out where the walk file states neith
     '#walks format:i:8 tile:i:16',
     '#reference R',
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4 .',
-  ]).header()
+  ]).getHeader()
   expect('graph' in header).toBe(false)
   expect('leftout' in header).toBe(false)
   expect(header).toStrictEqual({
@@ -192,9 +195,9 @@ test('the header has no graph or lines left out where the walk file states neith
 // A walk file whose directory's first line is `walks`, with its header
 // unit and data as walkFileOf writes them unless `data` is given
 function directoryOf(walks: string, data = new Uint8Array()) {
-  return WalkReader.fromFilehandles({
-    data: new BlobFile(new Blob([data])),
-    directory: new BlobFile(new Blob([`${walks}\n#header\t0\t0\n`])),
+  return new WalkFile({
+    walksFilehandle: new BlobFile(new Blob([data])),
+    idxFilehandle: new BlobFile(new Blob([`${walks}\n#header\t0\t0\n`])),
   })
 }
 
@@ -208,11 +211,11 @@ test.each([
   'a walk file whose directory states $walks is refused as format $format, with what to rebuild it with',
   async ({ walks, format }) => {
     const walkFile = directoryOf(walks)
-    await expect(walkFile.header()).rejects.toThrow(WalkFormatError)
+    await expect(walkFile.getHeader()).rejects.toThrow(WalkFormatError)
     await expect(
-      walkFile.cut('GRCh38#0#chr1', { start: 0, end: 600 }),
+      walkFile.getCutForRange('GRCh38#0#chr1', 0, 600),
     ).rejects.toThrow(
-      `This walk file is format ${format}; @jbrowse/graph-walks reads format 8, so rebuild it with gfa-to-tabix 5.0 or later`,
+      `This walk file is format ${format}; @gmod/gfa-tabix reads format 8, so rebuild it with gfa-to-tabix 5.0 or later`,
     )
   },
 )
@@ -221,55 +224,113 @@ test.each([9, 10])(
   'a format %i walk file is refused, asking for a newer reader',
   async format => {
     await expect(
-      directoryOf(`#walks\tformat:i:${format}\ttile:i:1000`).header(),
+      directoryOf(`#walks\tformat:i:${format}\ttile:i:1000`).getHeader(),
     ).rejects.toThrow(
-      `This walk file is format ${format}; this version of @jbrowse/graph-walks reads format 8, so update the viewer, or @jbrowse/graph-walks, to one that reads format ${format}`,
+      `This walk file is format ${format}; this version of @gmod/gfa-tabix reads format 8, so update the viewer, or @gmod/gfa-tabix, to one that reads format ${format}`,
     )
   },
 )
 
 test('a file that is not a directory is refused', async () => {
-  await expect(directoryOf('GRCh38#0#chr1\t0\t100').header()).rejects.toThrow(
-    "This is not a walk file's directory",
+  await expect(
+    directoryOf('GRCh38#0#chr1\t0\t100').getHeader(),
+  ).rejects.toThrow("This is not a walk file's directory")
+})
+
+test('a walksUrl finds its directory beside the data, before any query', async () => {
+  const fetched: string[] = []
+  const host = 'http://walks.test/'
+  const realFetch = globalThis.fetch
+  vi.stubGlobal(
+    'fetch',
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (!url.startsWith(host)) {
+        return realFetch(input, init)
+      }
+      fetched.push(url)
+      const bytes = await new LocalFile(
+        `${DATA}${url.slice(host.length).replace(/[?#].*$/, '')}`,
+      ).readFile()
+      const range = /bytes=(\d+)-(\d+)/.exec(
+        new Headers(init?.headers).get('range') ?? '',
+      )
+      return range
+        ? new Response(bytes.slice(+range[1]!, +range[2]! + 1), {
+            status: 206,
+            headers: {
+              'content-range': `bytes ${range[1]}-${Math.min(+range[2]!, bytes.length - 1)}/${bytes.length}`,
+            },
+          })
+        : new Response(bytes)
+    },
+  )
+  try {
+    const walks = new WalkFile({
+      walksUrl: `${host}header.GRCh38.walks.gz?v=1#top`,
+    })
+    expect((await walks.getHeader()).tile).toBe(1000)
+    expect(new Set(fetched)).toEqual(
+      new Set([
+        `${host}header.GRCh38.walks.gz?v=1#top`,
+        `${host}header.GRCh38.walks.gz.idx?v=1#top`,
+      ]),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a WalkFile takes exactly one walk file and at most one directory', () => {
+  const walksFilehandle = new LocalFile(`${DATA}header.GRCh38.walks.gz`)
+  // @ts-expect-error a walksFilehandle has no directory to default to
+  expect(() => new WalkFile({ walksFilehandle })).toThrow(
+    'which a walksFilehandle needs',
+  )
+  const both = {
+    walksPath: `${DATA}header.GRCh38.walks.gz`,
+    walksUrl: 'https://example.com/a.walks.gz',
+  }
+  // @ts-expect-error one walk file at a time
+  expect(() => new WalkFile(both)).toThrow(
+    'A WalkFile takes one of walksUrl, walksPath or walksFilehandle',
   )
 })
 
-test('open finds the directory beside the data, before any query', async () => {
-  const opened: string[] = []
-  const walks = WalkReader.open(
-    `${DATA}header.GRCh38.walks.gz?v=1#top`,
-    url => {
-      opened.push(url)
-      return new LocalFile(url.replace(/[?#].*$/, ''))
-    },
-  )
-  expect(opened).toEqual([
-    `${DATA}header.GRCh38.walks.gz?v=1#top`,
-    `${DATA}header.GRCh38.walks.gz.idx?v=1#top`,
-  ])
-  expect((await walks.header()).tile).toBe(1000)
+test('a walksPath opens its directory at the path plus .idx', async () => {
+  const walks = new WalkFile({ walksPath: `${DATA}header.GRCh38.walks.gz` })
+  expect((await walks.getHeader()).tile).toBe(1000)
 })
 
 // header.GRCh38's rows, with its directory changed by `edit`
 async function edited(edit: (directory: string) => string) {
   const path = `${DATA}header.GRCh38.walks.gz`
   const directory = await new LocalFile(`${path}.idx`).readFile('utf8')
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new BlobFile(new Blob([edit(directory)])),
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new BlobFile(new Blob([edit(directory)])),
   })
 }
 
 const region = { start: 0, end: 600 }
-const entryPoints: [string, (walks: WalkReader) => Promise<unknown>][] = [
-  ['header', walks => walks.header()],
-  ['referenceSequences', walks => walks.referenceSequences()],
-  ['sequenceFor', walks => walks.sequenceFor('GRCh38', 'chr1')],
-  ['units', walks => walks.units('GRCh38#0#chr1')],
-  ['sequenceLength', walks => walks.sequenceLength('GRCh38#0#chr1')],
-  ['bytesFor', walks => walks.bytesFor('GRCh38#0#chr1', region)],
-  ['referenceNodes', walks => walks.referenceNodes('GRCh38#0#chr1', region)],
-  ['cut', walks => walks.cut('GRCh38#0#chr1', region)],
+const entryPoints: [string, (walks: WalkFile) => Promise<unknown>][] = [
+  ['header', walks => walks.getHeader()],
+  ['referenceSequences', walks => walks.getReferenceSequences()],
+  ['sequenceFor', walks => walks.getSequenceName('GRCh38', 'chr1')],
+  ['units', walks => walks.getUnits('GRCh38#0#chr1')],
+  ['sequenceLength', walks => walks.getSequenceLength('GRCh38#0#chr1')],
+  [
+    'bytesFor',
+    walks => walks.getBytesForRange('GRCh38#0#chr1', region.start, region.end),
+  ],
+  [
+    'referenceNodes',
+    walks => walks.getReferenceNodes('GRCh38#0#chr1', region.start, region.end),
+  ],
+  [
+    'cut',
+    walks => walks.getCutForRange('GRCh38#0#chr1', region.start, region.end),
+  ],
 ]
 
 test.each(entryPoints)(
@@ -300,11 +361,9 @@ test('a cut keeps the reference and the haplotypes asked for', async () => {
 })
 
 test('a cut lists each departure over the window, with the own steps it holds', async () => {
-  const { fragments, departures } = await reader('header.GRCh38').cut(
-    'GRCh38#0#chr1',
-    { start: 1000, end: 2600 },
-    { context: 0 },
-  )
+  const { fragments, departures } = await reader(
+    'header.GRCh38',
+  ).getCutForRange('GRCh38#0#chr1', 1000, 2600, { context: 0 })
   expect(fragments.map(fragment)).toEqual([
     ['GRCh38#0#chr1', 600, 3000, '>2>3>4>5', 600, 0],
     ['HG00097#1#chr1', 600, 3000, '>2>3>4>5', 600, 0],
@@ -322,7 +381,7 @@ test('a cut lists each departure over the window, with the own steps it holds', 
 //   W HG002  1 chr1 >1>3>4   3 replaces 2
 test('a node longer than a tile is read from the tile whose extent holds it', async () => {
   const reads = await unitsRead('maxnode.GRCh38', 'GRCh38#0#chr1', walks =>
-    walks.cut('GRCh38#0#chr1', { start: 2100, end: 2500 }, { context: 0 }),
+    walks.getCutForRange('GRCh38#0#chr1', 2100, 2500, { context: 0 }),
   )
   expect(reads.flat()).toContain('tile 0')
   const text = await gfa(reader('maxnode.GRCh38'), 2100, 2500)
@@ -353,8 +412,14 @@ test.each([
       'header.GRCh38',
       'GRCh38#0#chr1',
       async walks => {
-        departures = (await walks.cut('GRCh38#0#chr1', window, { context: 0 }))
-          .departures
+        departures = (
+          await walks.getCutForRange(
+            'GRCh38#0#chr1',
+            window.start,
+            window.end,
+            { context: 0 },
+          )
+        ).departures
       },
     )
     expect(reads).toEqual(read)
@@ -398,7 +463,7 @@ test.each([
   async (start, end, placed, steps) => {
     const { graph, kept, fragments, departures } = await reader(
       'revisit.GRCh38',
-    ).cut('GRCh38#0#chr1', { start, end }, { context: 0 })
+    ).getCutForRange('GRCh38#0#chr1', start, end, { context: 0 })
     const onWindow = [...graph.nodes]
       .filter(([, node]) => node.onWindow)
       .map(([id, node]) => `${id}@${node.start}`)
@@ -414,7 +479,7 @@ test.each([
 test('tables takes the departures, so the call without them is a type error', async () => {
   const { graph, kept, fragments, departures } = await reader(
     'skip.GRCh38',
-  ).cut('GRCh38#0#chr1', { start: 31, end: 60 }, { context: 0 })
+  ).getCutForRange('GRCh38#0#chr1', 31, 60, { context: 0 })
   // @ts-expect-error departures are required
   expect(() => graph.tables(kept, fragments)).toThrow(TypeError)
   expect(graph.tables(kept, fragments, departures).departures.names).toEqual([
@@ -423,11 +488,9 @@ test('tables takes the departures, so the call without them is a type error', as
 })
 
 test('a step on a second pass over the window departs from that pass', async () => {
-  const { fragments, departures } = await reader('revisit.GRCh38').cut(
-    'GRCh38#0#chr1',
-    { start: 4000, end: 5000 },
-    { context: 0 },
-  )
+  const { fragments, departures } = await reader(
+    'revisit.GRCh38',
+  ).getCutForRange('GRCh38#0#chr1', 4000, 5000, { context: 0 })
   expect(fragments.map(fragment)).toEqual([
     ['GRCh38#0#chr1', 4000, 5000, '>7>8', 0, 0],
     ['HG002#1#chr1', 4000, 4500, '>7', 0, 500],
@@ -454,14 +517,15 @@ test('a step on a second pass over the window departs from that pass', async () 
 test("a cut leaves out the reference's other pass over the window's nodes", async () => {
   const { graph, kept, fragments, departures } = await reader(
     'farpass.GRCh38',
-  ).cut('GRCh38#0#chr1', { start: 4500, end: 5000 }, { context: 0 })
+  ).getCutForRange('GRCh38#0#chr1', 4500, 5000, { context: 0 })
   const text = graphTablesGFA(graph.tables(kept, fragments, departures))
   expect(text).toMatch(/^W\tGRCh38\t0\tchr1\t4500\t5000\t>7>8$/m)
   expect(text).toMatch(/^W\tHG002\t1\tchr1\t4500\t4750\t>7$/m)
   expect(text).not.toMatch(/^S\t(9|10)\t/m)
-  const both = await reader('farpass.GRCh38').cut(
+  const both = await reader('farpass.GRCh38').getCutForRange(
     'GRCh38#0#chr1',
-    { start: 3900, end: 5000 },
+    3900,
+    5000,
     { context: 0 },
   )
   expect(
@@ -488,16 +552,14 @@ test("a cut leaves out the reference's other pass over the window's nodes", asyn
 // leaves chunk 1000 for 20 and 21, 2 kb each, and rejoins at 9, in chunk
 // 4000; HG003#1's contig ends on 22
 test('a walk leaving the window is cut there, and its record says where it rejoins', async () => {
-  let cut: Awaited<ReturnType<WalkReader['cut']>> | undefined
+  let cut: CutForRange | undefined
   const reads = await unitsRead(
     'follow.GRCh38',
     'GRCh38#0#chr1',
     async walks => {
-      cut = await walks.cut(
-        'GRCh38#0#chr1',
-        { start: 1000, end: 1500 },
-        { context: 0 },
-      )
+      cut = await walks.getCutForRange('GRCh38#0#chr1', 1000, 1500, {
+        context: 0,
+      })
     },
   )
   expect(reads).toEqual([['tile 1000', 'departures 1000']])
@@ -524,9 +586,10 @@ test('a walk leaving the window is cut there, and its record says where it rejoi
 })
 
 test('the same graph in 10 kb chunks computes the departure from the steps of one piece', async () => {
-  const { departures } = await reader('rejoin.GRCh38').cut(
+  const { departures } = await reader('rejoin.GRCh38').getCutForRange(
     'GRCh38#0#chr1',
-    { start: 4000, end: 4200 },
+    4000,
+    4200,
     { context: 0 },
   )
   expect(departures.map(departure)).toEqual([
@@ -551,11 +614,9 @@ test('the same graph in 10 kb chunks computes the departure from the steps of on
 //   W HG002  1 chr1 4000 7000  >7>8>...>12
 //   W HG003  1 chr1 0    10000 >1>2>3>19>20>4>5>...>18
 const records = async (start: number, end: number, name: string) => {
-  const { fragments, departures } = await reader('records.GRCh38').cut(
-    'GRCh38#0#chr1',
-    { start, end },
-    { context: 0 },
-  )
+  const { fragments, departures } = await reader(
+    'records.GRCh38',
+  ).getCutForRange('GRCh38#0#chr1', start, end, { context: 0 })
   return {
     fragments: fragments.filter(f => f.name === name).map(fragment),
     departures: departures.filter(d => d.name === name).map(departure),
@@ -632,17 +693,15 @@ test('a walk jumping away for eight chunks and back has a record each way', asyn
 
 test('a cut on a signal already aborted reads no row', async () => {
   const walks = reader('header.GRCh38')
-  await walks.header()
-  await walks.units('GRCh38#0#chr1')
+  await walks.getHeader()
+  await walks.getUnits('GRCh38#0#chr1')
   const read = vi.spyOn(LocalFile.prototype, 'read')
   const aborted = new AbortController()
   aborted.abort(new Error('panned away'))
   await expect(
-    walks.cut(
-      'GRCh38#0#chr1',
-      { start: 1000, end: 2600 },
-      { signal: aborted.signal },
-    ),
+    walks.getCutForRange('GRCh38#0#chr1', 1000, 2600, {
+      signal: aborted.signal,
+    }),
   ).rejects.toThrow('panned away')
   expect(read).not.toHaveBeenCalled()
   read.mockRestore()
@@ -651,18 +710,18 @@ test('a cut on a signal already aborted reads no row', async () => {
 test.each([
   [
     'cut',
-    (walks: WalkReader, r: { start: number; end: number }) =>
-      walks.cut('GRCh38#0#chr1', r),
+    (walks: WalkFile, r: { start: number; end: number }) =>
+      walks.getCutForRange('GRCh38#0#chr1', r.start, r.end),
   ],
   [
     'referenceNodes',
-    (walks: WalkReader, r: { start: number; end: number }) =>
-      walks.referenceNodes('GRCh38#0#chr1', r),
+    (walks: WalkFile, r: { start: number; end: number }) =>
+      walks.getReferenceNodes('GRCh38#0#chr1', r.start, r.end),
   ],
   [
     'bytesFor',
-    (walks: WalkReader, r: { start: number; end: number }) =>
-      walks.bytesFor('GRCh38#0#chr1', r),
+    (walks: WalkFile, r: { start: number; end: number }) =>
+      walks.getBytesForRange('GRCh38#0#chr1', r.start, r.end),
   ],
 ])('a range that is not finite queries nothing by %s', async (_, run) => {
   await expect(
@@ -675,7 +734,7 @@ test.each([
 
 test('a cut over its step budget says how far to zoom in', async () => {
   const error = await reader('header.GRCh38')
-    .cut('GRCh38#0#chr1', { start: 0, end: 3600 }, { stepBudget: 2 })
+    .getCutForRange('GRCh38#0#chr1', 0, 3600, { stepBudget: 2 })
     .catch((e: unknown) => e)
   expect(error).toBeInstanceOf(RegionTooLargeError)
   expect((error as RegionTooLargeError).regionTooLarge).toBe(true)
@@ -683,7 +742,7 @@ test('a cut over its step budget says how far to zoom in', async () => {
 
 test('a cut over its departure budget fails without a zoom-in notice', async () => {
   const error = await reader('span.GRCh38')
-    .cut('GRCh38#0#chr1', { start: 50, end: 55 }, { departureByteBudget: 1 })
+    .getCutForRange('GRCh38#0#chr1', 50, 55, { departureByteBudget: 1 })
     .catch((e: unknown) => e)
   expect(error).toBeInstanceOf(DepartureReadError)
   expect(error).not.toBeInstanceOf(RegionTooLargeError)
@@ -693,13 +752,30 @@ test('a cut over its departure budget fails without a zoom-in notice', async () 
   expect((error as DepartureReadError).limit).toBe(1)
 })
 
+test("a region cut gives each node's bases when asked, and none otherwise", async () => {
+  const walks = reader('hprc-chrM.GRCh38')
+  const { tables, sequences } = await walks.getGraphForRange(
+    'chrM',
+    8000,
+    8300,
+    { sequences: true },
+  )
+  tables.nodes.names.forEach((name, i) => {
+    expect(sequences?.get(Number(name))).toHaveLength(tables.nodes.lengths[i]!)
+  })
+  expect(
+    (await walks.getGraphForRange('chrM', 8000, 8300)).sequences,
+  ).toBeUndefined()
+})
+
 // The chrM graph of HPRC's release 2, from `vg convert -f` of its GBZ and
 // gfa-to-tabix --walks --refs GRCh38 --sequences
 test("a cut keeps each node's bases when asked", async () => {
   const walks = reader('hprc-chrM.GRCh38')
-  const { graph, kept, fragments, departures } = await walks.cut(
+  const { graph, kept, fragments, departures } = await walks.getCutForRange(
     'GRCh38#0#chrM',
-    { start: 8000, end: 8300 },
+    8000,
+    8300,
     { sequences: true },
   )
   expect(
@@ -710,19 +786,23 @@ test("a cut keeps each node's bases when asked", async () => {
     expect(graph.sequences.get(id)).toMatch(/^[ACGTN]+$/)
     expect(graph.sequences.get(id)).toHaveLength(node.end - node.start)
   }
-  expect(await walks.referenceSequences()).toEqual(['GRCh38#0#chrM'])
+  expect(await walks.getReferenceSequences()).toEqual(['GRCh38#0#chrM'])
 })
 
 test('a contig names its sequence on the reference sample', async () => {
   const walks = reader('hprc-chrM.GRCh38')
-  expect(await walks.sequenceFor('GRCh38', 'chrM')).toBe('GRCh38#0#chrM')
-  expect(await walks.sequenceFor('hg38', 'GRCh38#0#chrM')).toBe('GRCh38#0#chrM')
-  expect(await walks.sequenceFor('GRCh38', 'chr1')).toBeUndefined()
+  expect(await walks.getSequenceName('GRCh38', 'chrM')).toBe('GRCh38#0#chrM')
+  expect(await walks.getSequenceName('hg38', 'GRCh38#0#chrM')).toBe(
+    'GRCh38#0#chrM',
+  )
+  expect(await walks.getSequenceName('GRCh38', 'chr1')).toBeUndefined()
 })
 
 test("a region cut names the file's sequence for a contig, and keeps the haplotypes asked for", async () => {
-  const cut = await reader('header.GRCh38').cutRegion(
-    { refName: 'chr1', start: 1000, end: 2600 },
+  const cut = await reader('header.GRCh38').getGraphForRange(
+    'chr1',
+    1000,
+    2600,
     { haplotypes: ['HG002#2'] },
   )
   expect(cut.refName).toBe('GRCh38#0#chr1')
@@ -732,11 +812,11 @@ test("a region cut names the file's sequence for a contig, and keeps the haploty
     'HG002#2#chr1',
   ])
   expect(cut.tables.departures.names).toEqual(['HG002#2#chr1'])
-  const whole = await reader('header.GRCh38').cutRegion({
-    refName: 'GRCh38#0#chr1',
-    start: 1000,
-    end: 2600,
-  })
+  const whole = await reader('header.GRCh38').getGraphForRange(
+    'GRCh38#0#chr1',
+    1000,
+    2600,
+  )
   expect(graphTablesGFA(whole.tables)).toBe(
     await gfa(reader('header.GRCh38'), 1000, 2600),
   )
@@ -747,35 +827,46 @@ const dipShared =
 
 test('a contig on both haplotypes of a diploid reference sample names its sequence by haplotype or full name', async () => {
   const walks = reader('dip.HG002')
-  expect(await walks.referenceSequences()).toEqual([
+  expect(await walks.getReferenceSequences()).toEqual([
     'HG002#1#chr1',
     'HG002#2#chr1',
   ])
-  await expect(walks.sequenceFor('HG002', 'chr1')).rejects.toThrow(
+  await expect(walks.getSequenceName('HG002', 'chr1')).rejects.toThrow(
     AmbiguousSequenceError,
   )
-  await expect(walks.sequenceFor('HG002', 'chr1')).rejects.toMatchObject({
+  await expect(walks.getSequenceName('HG002', 'chr1')).rejects.toMatchObject({
     message: dipShared,
     sequences: ['HG002#1#chr1', 'HG002#2#chr1'],
   })
-  expect(await walks.sequenceFor('HG002#1', 'chr1')).toBe('HG002#1#chr1')
-  expect(await walks.sequenceFor('HG002#2', 'chr1')).toBe('HG002#2#chr1')
-  expect(await walks.sequenceFor('HG002', 'HG002#2#chr1')).toBe('HG002#2#chr1')
+  expect(await walks.getSequenceName('HG002#1', 'chr1')).toBe('HG002#1#chr1')
+  expect(await walks.getSequenceName('HG002#2', 'chr1')).toBe('HG002#2#chr1')
+  expect(await walks.getSequenceName('HG002', 'HG002#2#chr1')).toBe(
+    'HG002#2#chr1',
+  )
 })
 
 test('a region cut by a contig on both haplotypes of a diploid reference sample throws until one is named', async () => {
   const walks = reader('dip.HG002')
   const byContig = { refName: 'chr1', start: 0, end: 40 }
-  await expect(walks.cutRegion(byContig)).rejects.toThrow(dipShared)
-  const one = await walks.cutRegion(byContig, { referenceSample: 'HG002#1' })
+  await expect(
+    walks.getGraphForRange(byContig.refName, byContig.start, byContig.end),
+  ).rejects.toThrow(dipShared)
+  const one = await walks.getGraphForRange(
+    byContig.refName,
+    byContig.start,
+    byContig.end,
+    { referenceSample: 'HG002#1' },
+  )
   expect(one.refName).toBe('HG002#1#chr1')
   expect(one.sample).toBe('HG002#1')
   expect(walkNames(graphTablesGFA(one.tables))).toEqual([
     'HG002#1#chr1',
     'HG00097#1#chr1',
   ])
-  const two = await walks.cutRegion(
-    { ...byContig, refName: 'HG002#2#chr1' },
+  const two = await walks.getGraphForRange(
+    'HG002#2#chr1',
+    byContig.start,
+    byContig.end,
     { context: 0 },
   )
   expect(two.refName).toBe('HG002#2#chr1')
@@ -785,15 +876,62 @@ test('a region cut by a contig on both haplotypes of a diploid reference sample 
 
 test('a region cut on a sequence the file lacks names the ones it holds', async () => {
   await expect(
-    reader('header.GRCh38').cutRegion({ refName: 'chr2', start: 0, end: 100 }),
+    reader('header.GRCh38').getGraphForRange('chr2', 0, 100),
   ).rejects.toThrow(
     'The walk file has no sequence chr2 on GRCh38; it holds GRCh38#0#chr1',
   )
 })
 
+test.each([
+  ['getCutForRange', (walks: WalkFile) => walks.getCutForRange('chr2', 0, 100)],
+  [
+    'getCountsForRange',
+    (walks: WalkFile) => walks.getCountsForRange('chr2', 0, 100),
+  ],
+  [
+    'getBytesForRange',
+    (walks: WalkFile) => walks.getBytesForRange('chr2', 0, 100),
+  ],
+  [
+    'getReferenceNodes',
+    (walks: WalkFile) => walks.getReferenceNodes('chr2', 0, 100),
+  ],
+  [
+    'getFormsForRange',
+    (walks: WalkFile) => walks.getFormsForRange('GRCh38#0#chr2', 0, 100),
+  ],
+])(
+  '%s refuses a sequence the file lacks, listing those it holds',
+  async (_, run) => {
+    const error = await run(reader('header.GRCh38')).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(MissingSequenceError)
+    expect(error).toMatchObject({ sequences: ['GRCh38#0#chr1'] })
+  },
+)
+
+test("a cut by contig is the cut by the file's name, and its tables hold its gaps", async () => {
+  const walks = reader('header.GRCh38')
+  const byContig = await walks.getCutForRange('chr1', 1000, 2600)
+  const byName = await walks.getCutForRange('GRCh38#0#chr1', 1000, 2600)
+  expect(byContig.refName).toBe('GRCh38#0#chr1')
+  expect(digestOf(cutFacts(byContig))).toBe(digestOf(cutFacts(byName)))
+  expect(byContig.tables()).toEqual(
+    byContig.graph.tables(
+      byContig.kept,
+      byContig.fragments,
+      byContig.departures,
+      byContig.gaps,
+    ),
+  )
+  expect(byContig.tables().gaps).toBeDefined()
+  expect((await walks.getGraphForRange('chr1', 1000, 2600)).tables).toEqual(
+    byContig.tables(),
+  )
+})
+
 test('a region cut over its node limit says how far to zoom in', async () => {
   const error = await reader('header.GRCh38')
-    .cutRegion({ refName: 'chr1', start: 0, end: 3600 }, { nodeLimit: 4 })
+    .getGraphForRange('chr1', 0, 3600, { nodeLimit: 4 })
     .catch((e: unknown) => e)
   expect(error).toBeInstanceOf(RegionTooLargeError)
   expect(error).toMatchObject({ limit: 4, windowBp: 3600 })
@@ -819,7 +957,7 @@ function inline(lines: string[], reversed = false, served: number[] = []) {
     }
     return read(length, position, opts)
   }
-  return WalkReader.fromFilehandles({ data, directory })
+  return new WalkFile({ walksFilehandle: data, idxFilehandle: directory })
 }
 
 const keptSteps = (cut: {
@@ -855,16 +993,18 @@ const fitsNarrower = (error: unknown, window: { start: number; end: number }) =>
 // same cut left to the finished cut's refusals: what each throws, and how
 // many tiles it decoded
 async function earlyAndFinished(
-  walks: WalkReader,
+  walks: WalkFile,
   window: { start: number; end: number },
   opts: WalkCutOptions,
 ) {
   const run = async () => {
     decoding.tiles = 0
-    const error = await walks.cut('R#0#chr', window, opts).then(
-      () => undefined,
-      (e: unknown) => e,
-    )
+    const error = await walks
+      .getCutForRange('R#0#chr', window.start, window.end, opts)
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )
     return { error, decoded: decoding.tiles }
   }
   const early = await run()
@@ -1080,7 +1220,12 @@ const copiesAt16 = [
 
 test('a window over a revisited reference, whose rows name passes by :k, @k and start@k and take its second route, is cut at the 22 steps it keeps and refused before decoding below the 20 its rows keep, as the finished cut refuses it', async () => {
   const window = { start: 16, end: 52 }
-  const cut = await inline(copiesAt16).cut('R#0#chr', window, { context: 1 })
+  const cut = await inline(copiesAt16).getCutForRange(
+    'R#0#chr',
+    window.start,
+    window.end,
+    { context: 1 },
+  )
   expect(keptSteps(cut)).toBe(22)
   const at = await earlyAndFinished(inline(copiesAt16), window, {
     context: 1,
@@ -1114,7 +1259,7 @@ const abridgedAt16 = [
 
 test('a window whose blocks unit takes it past the byte budget gets the byte refusal, bytes and all, and one within it the early refusal', async () => {
   const walks = inline(abridgedAt16)
-  const units = await walks.units('R#0#chr')
+  const units = await walks.getUnits('R#0#chr')
   const bytes = units
     .filter(u => u.name === '16' && (u.kind === 'tile' || u.kind === 'blocks'))
     .reduce((sum, u) => sum + u.length, 0)
@@ -1177,7 +1322,12 @@ test.each([
   async ({ context, contained = false, counted }) => {
     const window = { start: 16, end: 32 }
     const opts = { context, contained }
-    const cut = await inline(threeAbridgedAt16).cut('R#0#chr', window, opts)
+    const cut = await inline(threeAbridgedAt16).getCutForRange(
+      'R#0#chr',
+      window.start,
+      window.end,
+      opts,
+    )
     expect(cut.fragments.reduce((sum, f) => sum + f.ids.length, 0)).toBe(19)
     expect(keptSteps(cut)).toBe(22)
     const at = await earlyAndFinished(inline(threeAbridgedAt16), window, {
@@ -1266,17 +1416,19 @@ test.each(ABRIDGED_SWEEPS)(
     const walks = reader(fixture)
     const swept = { cuts: 0, unloaded: 0 }
     let refusedEarly = 0
-    for (const refName of await walks.referenceSequences()) {
-      const length = await walks.sequenceLength(refName)
+    for (const refName of await walks.getReferenceSequences()) {
+      const length = await walks.getSequenceLength(refName)
       const run = async (
         window: { start: number; end: number },
         opts: WalkCutOptions,
       ) => {
         decoding.tiles = 0
-        const error = await walks.cut(refName, window, opts).then(
-          () => undefined,
-          (e: unknown) => e,
-        )
+        const error = await walks
+          .getCutForRange(refName, window.start, window.end, opts)
+          .then(
+            () => undefined,
+            (e: unknown) => e,
+          )
         return { error, decoded: decoding.tiles }
       }
       for (let start = 0; start < length; start += 5) {
@@ -1288,7 +1440,12 @@ test.each(ABRIDGED_SWEEPS)(
             { context: 10, contained: true },
           ]) {
             const window = { start, end: start + width }
-            const cut = await walks.cut(refName, window, opts)
+            const cut = await walks.getCutForRange(
+              refName,
+              window.start,
+              window.end,
+              opts,
+            )
             const kept = keptSteps(cut)
             swept.cuts++
             swept.unloaded += cut.fragments.some(
@@ -1330,7 +1487,7 @@ test.each([
   'a window whose records can fetch tiles to attach gets the refusal the finished cut throws, $refusal',
   async ({ over, early: fires }) => {
     const walks = reader('attachmany.R')
-    const bytes = (await walks.units('R#0#chr'))
+    const bytes = (await walks.getUnits('R#0#chr'))
       .filter(u => u.kind === 'tile' && (u.start < 100 || u.start >= 300))
       .reduce((sum, u) => sum + u.length, 0)
     const { early, finished } = await earlyAndFinished(
@@ -1469,11 +1626,16 @@ test.each([
       .filter(cols => ['ref', 'walk', 'abridged'].includes(cols[2]!))
       .reduce((sum, cols) => sum + Number(cols[7]), 0)
     expect(stated).toBeGreaterThan(kept)
-    const cut = await inline(lines).cut('R#0#chr', window, {
-      context: 1,
-      keep,
-      stepBudget: kept,
-    })
+    const cut = await inline(lines).getCutForRange(
+      'R#0#chr',
+      window.start,
+      window.end,
+      {
+        context: 1,
+        keep,
+        stepBudget: kept,
+      },
+    )
     expect(keptSteps(cut)).toBe(kept)
     const { early, finished } = await earlyAndFinished(inline(lines), window, {
       context: 1,
@@ -1538,7 +1700,7 @@ describe.each([
     test('keeps its reference position, in whichever order the chunks come', async () => {
       const cut = (reversed?: boolean) =>
         inline(stays, reversed)
-          .cutRegion({ refName: 'chr', start, end }, { haplotypes, context: 0 })
+          .getGraphForRange('chr', start, end, { haplotypes, context: 0 })
           .then(({ tables }) => ({
             text: graphTablesGFA(tables),
             own: [...tables.departures.steps].map(i => tables.nodes.names[i]),
@@ -1568,8 +1730,10 @@ test('the same walks in pieces of their own cut whole, with the jumps as records
     'R#0#chr 4 24 departure H2#1#c 8 0 0 24 + 1 4 + 1 .',
     'R#0#chr 4 28 departure H2#1#c 12 0 0 8 + 1 24 + 1 .',
   ]
-  const { tables } = await inline(departureRecords).cutRegion(
-    { refName: 'chr', start: 4, end: 20 },
+  const { tables } = await inline(departureRecords).getGraphForRange(
+    'chr',
+    4,
+    20,
     { context: 0 },
   )
   const text = graphTablesGFA(tables)
@@ -1587,11 +1751,9 @@ test('the same walks in pieces of their own cut whole, with the jumps as records
 })
 
 test("a route's own steps inside one piece are a departure computed from the steps", async () => {
-  const { departures } = await inline(stays).cut(
-    'R#0#chr',
-    { start: 4, end: 20 },
-    { context: 0 },
-  )
+  const { departures } = await inline(stays).getCutForRange('R#0#chr', 4, 20, {
+    context: 0,
+  })
   expect(departures.map(departure)).toEqual([
     ['H1#1#c', 8, 4, 0, '8+', '8+', 'adjacent', 'steps', '>6'],
   ])
@@ -1610,7 +1772,7 @@ test("a departure computed from steps takes its ends' pass counts from the ref r
     'R#0#chr 0 nodes 9 4',
     'R#0#chr 0 route 4 14 -12',
     'R#0#chr 0 walk H#1#h 0 0 0 5 2 0',
-  ]).cut('R#0#chr', { start: 0, end: 16 }, { context: 0 })
+  ]).getCutForRange('R#0#chr', 0, 16, { context: 0 })
   expect(
     departures.map(d => [
       d.leavePos,
@@ -1630,18 +1792,31 @@ test("a departure computed from steps takes its ends' pass counts from the ref r
 
 test('a cut with no budgets is the cut with WALK_BUDGETS spelled out, and refuses a window past one its caller lowers', async () => {
   const window = { start: 16, end: 32 }
-  const cut = await inline(copyJump).cut('R#0#chr', window)
-  const spelled = await inline(copyJump).cut('R#0#chr', window, {
-    ...WALK_BUDGETS,
-  })
+  const cut = await inline(copyJump).getCutForRange(
+    'R#0#chr',
+    window.start,
+    window.end,
+  )
+  const spelled = await inline(copyJump).getCutForRange(
+    'R#0#chr',
+    window.start,
+    window.end,
+    {
+      ...WALK_BUDGETS,
+    },
+  )
   expect(cut.departures).toHaveLength(2)
   expect(cut.departures).toEqual(spelled.departures)
   expect(cut.fragments).toEqual(spelled.fragments)
   await expect(
-    inline(copyJump).cut('R#0#chr', window, { departureByteBudget: 1 }),
+    inline(copyJump).getCutForRange('R#0#chr', window.start, window.end, {
+      departureByteBudget: 1,
+    }),
   ).rejects.toBeInstanceOf(DepartureReadError)
   await expect(
-    inline(copyJump).cut('R#0#chr', window, { byteBudget: 1 }),
+    inline(copyJump).getCutForRange('R#0#chr', window.start, window.end, {
+      byteBudget: 1,
+    }),
   ).rejects.toBeInstanceOf(RegionTooLargeError)
 })
 
@@ -1651,7 +1826,7 @@ test('a ref row whose passes do not count its steps is refused', async () => {
     '#reference R',
     'R#0#chr 0 ref R#0#chr 0 0 0 4 2,2,2,2 4,4,4,4',
   ])
-    .cut('R#0#chr', { start: 0, end: 16 }, { context: 0 })
+    .getCutForRange('R#0#chr', 0, 16, { context: 0 })
     .catch((e: unknown) => e)
   expect(error).toBeInstanceOf(WalkRowError)
 })
@@ -1675,7 +1850,12 @@ describe('a node id at or past 2^31, the format’s limit, or below 0', () => {
   const window = { start: 0, end: 16 }
 
   test('2^31 − 1 is read as itself, which is no placeholder', async () => {
-    const cut = await refOf(2 ** 31 - 1).cut('R#0#chr', window, { context: 0 })
+    const cut = await refOf(2 ** 31 - 1).getCutForRange(
+      'R#0#chr',
+      window.start,
+      window.end,
+      { context: 0 },
+    )
     expect([...cut.kept].sort((a, b) => a - b)).toEqual([1, 2 ** 31 - 1])
     expect([...cut.kept].some(isPlaceholder)).toBe(false)
   })
@@ -1696,7 +1876,7 @@ describe('a node id at or past 2^31, the format’s limit, or below 0', () => {
     },
   ])('is refused in $where: $id', async ({ file, id }) => {
     const error = await file
-      .cut('R#0#chr', window, { context: 0 })
+      .getCutForRange('R#0#chr', window.start, window.end, { context: 0 })
       .catch((e: unknown) => e)
     expect(error).toBeInstanceOf(WalkRowError)
     expect(String(error)).toContain(`node id ${id}`)
@@ -1704,15 +1884,18 @@ describe('a node id at or past 2^31, the format’s limit, or below 0', () => {
   })
 
   test('is a WalkRowError a consumer of the package can catch by type', async () => {
-    const { WalkReader: Exported, WalkRowError: Refusal } =
+    const { WalkFile: Exported, WalkRowError: Refusal } =
       await import('./index.ts')
     const { data, directory } = walkFileOf([
       '#walks format:i:8 tile:i:16',
       '#reference R',
       `R#0#chr 0 ref R#0#chr 0 0 0 2 2,${2 ** 32} 4,4 .`,
     ])
-    const error = await Exported.fromFilehandles({ data, directory })
-      .cut('R#0#chr', window, { context: 0 })
+    const error = await new Exported({
+      walksFilehandle: data,
+      idxFilehandle: directory,
+    })
+      .getCutForRange('R#0#chr', window.start, window.end, { context: 0 })
       .catch((e: unknown) => e)
     expect(error).toBeInstanceOf(Refusal)
   })
@@ -1741,9 +1924,10 @@ const copyJumpCut = async (
   contained: boolean,
   walks = inline(copyJump),
 ) => {
-  const { graph, kept, fragments, departures } = await walks.cut(
+  const { graph, kept, fragments, departures } = await walks.getCutForRange(
     'R#0#chr',
-    { start, end },
+    start,
+    end,
     { context: 0, contained, nodeLimit: 5 },
   )
   return {
@@ -1801,28 +1985,23 @@ const eightChunks = [
 
 test('a cut over its node limit stops decoding at the tile that puts it over', async () => {
   const error = await inline(eightChunks)
-    .cutRegion(
-      { refName: 'chr', start: 0, end: 128 },
-      { context: 0, nodeLimit: 6 },
-    )
+    .getGraphForRange('chr', 0, 128, { context: 0, nodeLimit: 6 })
     .catch((e: unknown) => e)
   expect(error).toBeInstanceOf(RegionTooLargeError)
   expect(error).toMatchObject({ limit: 6, windowBp: 128, fitsBp: 24 })
-  const whole = await inline(eightChunks).cutRegion(
-    { refName: 'chr', start: 0, end: 128 },
-    { context: 0, nodeLimit: 32 },
-  )
+  const whole = await inline(eightChunks).getGraphForRange('chr', 0, 128, {
+    context: 0,
+    nodeLimit: 32,
+  })
   expect(whole.tables.nodes.names).toHaveLength(32)
 })
 
 // gfa-to-tabix's walks-two-refs.gfa on R in 10 bp chunks, once as written and
 // once with --abridge-bytes 1, which abridges every walk in every chunk
 async function twoRefs(name: string, expand?: (name: string) => boolean) {
-  const { graph, kept, fragments, departures } = await reader(name).cut(
-    'R#0#chr',
-    { start: 0, end: 30 },
-    { expand },
-  )
+  const { graph, kept, fragments, departures } = await reader(
+    name,
+  ).getCutForRange('R#0#chr', 0, 30, { expand })
   return {
     tables: graph.tables(kept, fragments, departures),
     fragments,
@@ -1898,9 +2077,10 @@ test('an unloaded walk cuts to the fragment its loaded one does, a placeholder f
 //   W R 0 chr >1>2>3>4
 //   W H 1 h   >3>5>4   5 of 8 bp
 test('an abridged piece starting where the drawn stretch ends is not cut', async () => {
-  const { fragments } = await reader('abredge.R').cut(
+  const { fragments } = await reader('abredge.R').getCutForRange(
     'R#0#chr',
-    { start: 0, end: 10 },
+    0,
+    10,
     { context: 0 },
   )
   expect(fragments.map(f => f.name)).toEqual(['R#0#chr'])
@@ -1929,7 +2109,10 @@ function gridCut(
   span: { start: number; end: number },
   mode: { contained: boolean; context: number },
 ) {
-  return reader(name).cut(refName, span, { ...mode, expand: () => true })
+  return reader(name).getCutForRange(refName, span.start, span.end, {
+    ...mode,
+    expand: () => true,
+  })
 }
 
 function expandedFacts(
@@ -1998,8 +2181,8 @@ function twinBreakpointsForNaN(
 // contained, with and without context
 async function* gridOf(name: string) {
   const walks = reader(name)
-  for (const refName of await walks.referenceSequences()) {
-    const length = await walks.sequenceLength(refName)
+  for (const refName of await walks.getReferenceSequences()) {
+    const length = await walks.getSequenceLength(refName)
     const step = Math.ceil(length / 12)
     for (const mode of [
       { contained: false, context: 0 },
@@ -2064,11 +2247,10 @@ test.each([
 // on 1 and leaves its piece on 2, at 10-20 in the same tile, unbuilt
 test('an unread stretch beside an abridged piece the cut did not build has no breakpoint there, where its twin built without abridging states one', async () => {
   const gapsOf = async (name: string) => {
-    const { gaps } = await reader(name).cut(
-      'R#0#c',
-      { start: 0, end: 10 },
-      { context: 0, expand: () => true },
-    )
+    const { gaps } = await reader(name).getCutForRange('R#0#c', 0, 10, {
+      context: 0,
+      expand: () => true,
+    })
     return gaps.map(gap => [
       gap.name,
       gap.start,
@@ -2117,9 +2299,10 @@ test.each([
     for (const name of names) {
       const breaks = new Map<string, number | undefined>()
       for await (const at of gridOf(name)) {
-        const { fragments, departures } = await reader(name).cut(
+        const { fragments, departures } = await reader(name).getCutForRange(
           at.refName,
-          at.span,
+          at.span.start,
+          at.span.end,
           { ...at.mode, expand: () => true },
         )
         for (const d of departures) {
@@ -2153,11 +2336,9 @@ async function placedOf(
   start: number,
   end: number,
 ) {
-  const { graph, kept, fragments, departures } = await reader(name).cut(
-    'R#0#c',
-    { start, end },
-    { context: 0, expand: () => true },
-  )
+  const { graph, kept, fragments, departures } = await reader(
+    name,
+  ).getCutForRange('R#0#c', start, end, { context: 0, expand: () => true })
   const { nodes } = graph.tables(kept, fragments, departures)
   const k = nodes.names.indexOf(node)
   return [nodes.refNames[nodes.refs[k]!], nodes.starts[k]]
@@ -2194,7 +2375,9 @@ test("a departure's steps that lead to its rejoin lie where its walk has them, p
 })
 
 test('the reference sequences leave out detail records and departures', async () => {
-  expect(await reader('abridged.R').referenceSequences()).toEqual(['R#0#chr'])
+  expect(await reader('abridged.R').getReferenceSequences()).toEqual([
+    'R#0#chr',
+  ])
 })
 
 // abridged.R, each read of a detail unit made through `around`
@@ -2205,7 +2388,7 @@ async function heldDetails(
   ) => Promise<T>,
 ) {
   const path = `${DATA}abridged.R.walks.gz`
-  const units = await reader('abridged.R').units('R#0#chr')
+  const units = await reader('abridged.R').getUnits('R#0#chr')
   const details = new Set(
     units.filter(u => u.kind === 'detail').map(u => u.offset),
   )
@@ -2218,16 +2401,17 @@ async function heldDetails(
           signal: opts.signal,
         })
       : read(length, position, opts)
-  return WalkReader.fromFilehandles({
-    data,
-    directory: new LocalFile(`${path}.idx`),
+  return new WalkFile({
+    walksFilehandle: data,
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
 }
 
-async function expandedCut(walks: WalkReader, signal?: AbortSignal) {
-  const { graph, kept, fragments, departures } = await walks.cut(
+async function expandedCut(walks: WalkFile, signal?: AbortSignal) {
+  const { graph, kept, fragments, departures } = await walks.getCutForRange(
     'R#0#chr',
-    { start: 0, end: 30 },
+    0,
+    30,
     { expand: () => true, signal },
   )
   return {
@@ -2312,13 +2496,10 @@ test('an expanding cut reads the detail units that touch in the file by one read
   const expanded = async (apart: boolean) => {
     const { data, directory, units } = walkFileOf(threeAbridgedAt16, { apart })
     const reads = readsOf(data)
-    const { tables } = await WalkReader.fromFilehandles({
-      data,
-      directory,
-    }).cutRegion(
-      { refName: 'chr', start: 16, end: 32 },
-      { context: 1, expand: () => true },
-    )
+    const { tables } = await new WalkFile({
+      walksFilehandle: data,
+      idxFilehandle: directory,
+    }).getGraphForRange('chr', 16, 32, { context: 1, expand: () => true })
     const details = units.filter(u => u.kind === 'detail')
     const detailReads = reads.filter(({ position, length }) =>
       details.some(u => u.offset >= position && u.offset < position + length),
@@ -2401,7 +2582,7 @@ test('a cut reads the chunks under its context, not only under its window', asyn
   const walks = reader('skip.GRCh38')
   const reference = async (start: number, end: number, context: number) =>
     (
-      await walks.cut('GRCh38#0#chr1', { start, end }, { context })
+      await walks.getCutForRange('GRCh38#0#chr1', start, end, { context })
     ).fragments.find(f => f.name === 'GRCh38#0#chr1')?.refStarts
   expect(await reference(32, 38, 5)).toEqual(await reference(27, 43, 0))
   expect(await reference(32, 38, 15)).toEqual(await reference(17, 53, 0))
@@ -2409,30 +2590,25 @@ test('a cut reads the chunks under its context, not only under its window', asyn
 
 test('a window inside a jump finds the jump in the departure read', async () => {
   const walks = reader('skip.GRCh38')
-  const { fragments, departures } = await walks.cut(
+  const { fragments, departures } = await walks.getCutForRange(
     'GRCh38#0#chr1',
-    { start: 31, end: 60 },
+    31,
+    60,
     { context: 0 },
   )
   expect(fragments.map(f => f.name)).toEqual(['GRCh38#0#chr1'])
   expect(departures.map(departure)).toEqual([
     ['HG002#1#ctg', 20, 0, 0, '20+', '80+', 'forward', 'record', undefined],
   ])
-  const { tables } = await walks.cutRegion({
-    refName: 'GRCh38#0#chr1',
-    start: 31,
-    end: 60,
-  })
+  const { tables } = await walks.getGraphForRange('GRCh38#0#chr1', 31, 60)
   expect(tables.departures.names).toEqual(['HG002#1#ctg'])
   expect([
     ...tables.departures.leavePos,
     ...tables.departures.rejoinPos,
   ]).toEqual([20, 80])
-  const filtered = await walks.cut(
-    'GRCh38#0#chr1',
-    { start: 31, end: 60 },
-    { keep: name => name === 'GRCh38#0#chr1' },
-  )
+  const filtered = await walks.getCutForRange('GRCh38#0#chr1', 31, 60, {
+    keep: name => name === 'GRCh38#0#chr1',
+  })
   expect(filtered.departures).toEqual([])
 })
 
@@ -2450,7 +2626,7 @@ const spanCut = (
   walks = reader('span.GRCh38'),
   window = { start: 50, end: 55 },
 ) =>
-  walks.cut('GRCh38#0#chr1', window, {
+  walks.getCutForRange('GRCh38#0#chr1', window.start, window.end, {
     context: 0,
     keep: walkNameFilter([haplotype], 'GRCh38'),
     ...opts,
@@ -2483,7 +2659,7 @@ test("a record that rejoins on the window carries the walk's own steps, from the
 
 test('a leave piece the read lacks is fetched for the own steps, once per tile, within the byte budget', async () => {
   const atLeave = { start: 35, end: 40 }
-  const cut = (opts = {}, walks?: WalkReader) =>
+  const cut = (opts = {}, walks?: WalkFile) =>
     spanCut('HG003#1', opts, walks, atLeave)
   let departures: WalkDeparture[] = []
   const reads = await unitsRead('span.GRCh38', 'GRCh38#0#chr1', async walks => {
@@ -2493,7 +2669,7 @@ test('a leave piece the read lacks is fetched for the own steps, once per tile, 
     ['HG003#1#chr1', 30, 30, 0, '70-', '40-', 'forward', 'record', '<22<21<20'],
   ])
   expect(reads).toEqual([['tile 20', 'departures 20'], ['tile 60']])
-  const units = await reader('span.GRCh38').units('GRCh38#0#chr1')
+  const units = await reader('span.GRCh38').getUnits('GRCh38#0#chr1')
   const bytes = units
     .filter(u => u.kind === 'tile' && (u.name === '20' || u.name === '60'))
     .reduce((sum, u) => sum + u.length, 0)
@@ -2532,9 +2708,10 @@ test('a direct jump across the window is a record with nothing of its own', asyn
 //   W HG002  1 chr1 >1>2>3>20>11>12
 //   W HG003  1 chr1 >1>2>21>11>12
 test('two records whose leave pieces lie in adjacent chunks both get their own steps', async () => {
-  const { departures } = await reader('attach.GRCh38').cut(
+  const { departures } = await reader('attach.GRCh38').getCutForRange(
     'GRCh38#0#chr1',
-    { start: 100, end: 120 },
+    100,
+    120,
     { context: 0 },
   )
   expect(departures.map(departure)).toEqual([
@@ -2582,17 +2759,18 @@ test.each([
   const parts = [bytes.subarray(0, tableAt), ...table, bytes.subarray(end)]
   const size = parts.reduce((sum, part) => sum + part.length, 0)
   const index = `${walks.replace(/\tbytes:i:\d+/, `\tbytes:i:${size}`)}\n${header}\nR#0#chr\t${tableAt}\t${tableLength}\n`
-  const headerReader = WalkReader.fromFilehandles({
-    data: new BlobFile(new Blob(parts)),
-    directory: new BlobFile(new Blob([index])),
+  const headerReader = new WalkFile({
+    walksFilehandle: new BlobFile(new Blob(parts)),
+    idxFilehandle: new BlobFile(new Blob([index])),
   })
   expect(
-    (await headerReader.units('R#0#chr')).filter(u => u.length === 0),
+    (await headerReader.getUnits('R#0#chr')).filter(u => u.length === 0),
   ).toHaveLength(1)
-  const cut = async (source: WalkReader) => {
-    const { fragments, departures } = await source.cut(
+  const cut = async (source: WalkFile) => {
+    const { fragments, departures } = await source.getCutForRange(
       'R#0#chr',
-      { start: 0, end: 48 },
+      0,
+      48,
       { context: 0 },
     )
     return [fragments.map(fragment), departures.map(departure)]
@@ -2607,19 +2785,15 @@ test.each([
 // them, and a cut of 2100-2600 does not
 test("a sequence's length and the reference nodes over a window come from its tiles, and the bytes a cut reads from its table and its records' ownTiles", async () => {
   const walks = reader('header.GRCh38')
-  const units = await walks.units('GRCh38#0#chr1')
+  const units = await walks.getUnits('GRCh38#0#chr1')
   const tile = (name: string) =>
     units.find(u => u.kind === 'tile' && u.name === name)!
-  expect(await walks.sequenceLength('GRCh38#0#chr1')).toBe(3600)
-  expect(await walks.sequenceLength('GRCh38#0#chr2')).toBe(0)
+  expect(await walks.getSequenceLength('GRCh38#0#chr1')).toBe(3600)
+  expect(await walks.getSequenceLength('GRCh38#0#chr2')).toBe(0)
   const departureBlock = (start: number) =>
     units.find(u => u.kind === 'departures' && u.start === start)!
   expect(
-    await walks.bytesFor(
-      'GRCh38#0#chr1',
-      { start: 1700, end: 2300 },
-      { context: 0 },
-    ),
+    await walks.getBytesForRange('GRCh38#0#chr1', 1700, 2300, { context: 0 }),
   ).toBe(
     tile('1000').length +
       departureBlock(1000).length +
@@ -2627,18 +2801,14 @@ test("a sequence's length and the reference nodes over a window come from its ti
       tile('0').length,
   )
   expect(
-    await walks.bytesFor(
-      'GRCh38#0#chr1',
-      { start: 2100, end: 2600 },
-      { context: 0 },
-    ),
+    await walks.getBytesForRange('GRCh38#0#chr1', 2100, 2600, { context: 0 }),
   ).toBe(
     tile('1000').length + tile('2000').length + departureBlock(2000).length,
   )
   expect(
-    (
-      await walks.referenceNodes('GRCh38#0#chr1', { start: 1100, end: 2500 })
-    ).map(n => `${n.id}@${n.start}-${n.end}`),
+    (await walks.getReferenceNodes('GRCh38#0#chr1', 1100, 2500)).map(
+      n => `${n.id}@${n.start}-${n.end}`,
+    ),
   ).toEqual(['2@600-1200', '3@1200-1800', '4@1800-2400', '5@2400-3000'])
 })
 
@@ -2665,7 +2835,9 @@ test.each([
       'GRCh38#0#chr1',
       async walks => {
         departures = (
-          await walks.cut('GRCh38#0#chr1', { start, end }, { context: 0 })
+          await walks.getCutForRange('GRCh38#0#chr1', start, end, {
+            context: 0,
+          })
         ).departures
       },
     )
@@ -2680,9 +2852,12 @@ test('a file past 4 GiB is read at its exact offsets', async () => {
   const gap = 2 ** 32 + 7
   const { data, directory, units } = walkFileOf(copyJump, { gap })
   expect(units[0]!.offset).toBeGreaterThan(2 ** 32)
-  const walks = WalkReader.fromFilehandles({ data, directory })
+  const walks = new WalkFile({
+    walksFilehandle: data,
+    idxFilehandle: directory,
+  })
   expect(
-    (await walks.units('R#0#chr'))
+    (await walks.getUnits('R#0#chr'))
       .filter(u => u.kind !== 'filler')
       .map(u => u.offset),
   ).toEqual(units.map(u => u.offset))
@@ -2703,9 +2878,10 @@ test.each([
 ])(
   "an attach fetch reads an abridged piece's own steps where the cut expands the walk, and else holds a placeholder for them: $steps",
   async ({ expand, steps }) => {
-    const { departures } = await reader('ownends.R').cut(
+    const { departures } = await reader('ownends.R').getCutForRange(
       'R#0#c',
-      { start: 24, end: 30 },
+      24,
+      30,
       {
         context: 0,
         keep: name => name === 'X#1#c' || name === 'R#0#c',
@@ -2724,9 +2900,10 @@ test.each([
 //   W A 1 a   >1>2>3>2>3>2>3>4
 //   W F 1 f   >1>2>3>2>5>3>4   5 between the second passes of 2 and 3
 test("a cut's drawn stretch takes every pass over the window, not one per node", async () => {
-  const { fragments, departures } = await reader('loop.R').cut(
+  const { fragments, departures } = await reader('loop.R').getCutForRange(
     'R#0#chr',
-    { start: 8, end: 20 },
+    8,
+    20,
     { context: 0 },
   )
   expect(
@@ -2751,9 +2928,10 @@ test.each([
 ])(
   'a walk that leaves at the end of a node the window draws gets its own steps where the window holds the base it leaves from: to $end',
   async ({ end, steps }) => {
-    const { fragments, departures } = await reader('loop.R').cut(
+    const { fragments, departures } = await reader('loop.R').getCutForRange(
       'R#0#chr',
-      { start: 8, end },
+      8,
+      end,
       { context: 0 },
     )
     expect(
@@ -2779,9 +2957,10 @@ test.each([
   'a departure inside one piece gets its own steps where it leaves on the window, and none where it jumps over it, expanded or not: $own',
   async ({ expand, own }) => {
     const g = async (start: number) => {
-      const cut = await reader('drawnedge.R').cut(
+      const cut = await reader('drawnedge.R').getCutForRange(
         'R#0#chr',
-        { start, end: start + 100 },
+        start,
+        start + 100,
         { context: 100, expand },
       )
       return {
@@ -2846,9 +3025,10 @@ test.each([
 ])(
   'a tile fetched to attach gives its record the own steps and nothing else: $opts',
   async ({ opts, steps }) => {
-    const { fragments, departures } = await inline(farAttach).cut(
+    const { fragments, departures } = await inline(farAttach).getCutForRange(
       'R#0#chr',
-      { start: 20, end: 28 },
+      20,
+      28,
       { context: 0, ...opts },
     )
     expect(fragments.filter(f => f.name === 'H#1#h').map(fragment)).toEqual([
@@ -2877,8 +3057,12 @@ const attachManyCut = async (
 ) => {
   let departures: WalkDeparture[] = []
   const reads = await unitsRead('attachmany.R', 'R#0#chr', async walks => {
-    departures = (await walks.cut('R#0#chr', window, { context: 0, ...opts }))
-      .departures
+    departures = (
+      await walks.getCutForRange('R#0#chr', window.start, window.end, {
+        context: 0,
+        ...opts,
+      })
+    ).departures
   })
   return {
     steps: departures.map(d => `${d.name} ${departure(d)[8]}`).sort(),
@@ -2926,12 +3110,17 @@ test('of the records over a window, a cut fetches a tile for those alone that le
 
 test('a cut whose attach fetches take it past the byte budget attaches none and says so', async () => {
   const walks = reader('attachmany.R')
-  const tiles = (await walks.units('R#0#chr')).filter(u => u.kind === 'tile')
+  const tiles = (await walks.getUnits('R#0#chr')).filter(u => u.kind === 'tile')
   const bytesOf = (starts: (start: number) => boolean) =>
     tiles.filter(u => starts(u.start)).reduce((sum, u) => sum + u.length, 0)
   const bytes = bytesOf(start => start < 100 || start >= 300)
   const cut = (byteBudget: number) =>
-    walks.cut('R#0#chr', attachManyRejoins, { context: 0, byteBudget })
+    walks.getCutForRange(
+      'R#0#chr',
+      attachManyRejoins.start,
+      attachManyRejoins.end,
+      { context: 0, byteBudget },
+    )
   expect((await cut(bytes)).departures.every(d => d.steps !== undefined)).toBe(
     true,
   )
@@ -2953,12 +3142,18 @@ test('a cut whose attach fetches take it past the byte budget attaches none and 
 test('the byte budget counts the tiles of the context past the window', async () => {
   const walks = reader('attachmany.R')
   const opts = { context: 10 }
-  const bytes = (await walks.units('R#0#chr'))
+  const bytes = (await walks.getUnits('R#0#chr'))
     .filter(u => u.kind === 'tile' && u.start >= 180 && u.start <= 210)
     .reduce((sum, u) => sum + u.length, 0)
-  await walks.cut('R#0#chr', attachMany, { ...opts, byteBudget: bytes })
+  await walks.getCutForRange('R#0#chr', attachMany.start, attachMany.end, {
+    ...opts,
+    byteBudget: bytes,
+  })
   await expect(
-    walks.cut('R#0#chr', attachMany, { ...opts, byteBudget: bytes - 1 }),
+    walks.getCutForRange('R#0#chr', attachMany.start, attachMany.end, {
+      ...opts,
+      byteBudget: bytes - 1,
+    }),
   ).rejects.toBeInstanceOf(RegionTooLargeError)
 })
 
@@ -2973,9 +3168,10 @@ test.each([
 ])(
   'a record over a 0 bp segment alone holds no step, cut $start-$end',
   async ({ start, end }) => {
-    const { departures } = await reader('ownzero.R').cut(
+    const { departures } = await reader('ownzero.R').getCutForRange(
       'R#0#chr',
-      { start, end },
+      start,
+      end,
       { context: 0 },
     )
     expect(departures.map(departure)).toEqual([
@@ -2995,9 +3191,10 @@ test.each([
 ])(
   'a cut returns every record whose line overlaps its window, in a hole too: $start-$end',
   async ({ start, end }) => {
-    const { departures } = await reader('hole.R').cut(
+    const { departures } = await reader('hole.R').getCutForRange(
       'R#0#chr',
-      { start, end },
+      start,
+      end,
       { context: 0 },
     )
     expect(departures.map(departure)).toEqual([
@@ -3011,9 +3208,10 @@ test.each([
 //   W R 0 chr >1>2>...>12
 //   W H 1 h   >1>9>11>2
 test('a cut computes no departure outside its drawn stretch, even inside a fragment', async () => {
-  const { fragments, departures } = await reader('excursion.R').cut(
+  const { fragments, departures } = await reader('excursion.R').getCutForRange(
     'R#0#chr',
-    { start: 0, end: 8 },
+    0,
+    8,
     { context: 0 },
   )
   expect(fragments.filter(f => f.name === 'H#1#h').map(fragment)).toEqual([
@@ -3026,10 +3224,7 @@ test('a cut computes no departure outside its drawn stretch, even inside a fragm
 })
 
 test('referenceNodes gives every pass of the reference over the region', async () => {
-  const nodes = await reader('loop.R').referenceNodes('R#0#chr', {
-    start: 0,
-    end: 36,
-  })
+  const nodes = await reader('loop.R').getReferenceNodes('R#0#chr', 0, 36)
   expect(nodes.map(n => `${n.id}@${n.start}-${n.end}`)).toEqual([
     '1@0-6',
     '2@6-12',
@@ -3053,9 +3248,10 @@ const nodeStrands = ({ nodes }: GraphTables) =>
 // in 3 and 2, each walked against the strand R steps it on
 test('a node on the reference states the strand the reference steps it on, though the cut keeps no step of the reference there', async () => {
   const walks = reader('strand.R')
-  const { graph, kept, fragments, departures } = await walks.cut(
+  const { graph, kept, fragments, departures } = await walks.getCutForRange(
     'R#0#chr',
-    { start: 0, end: 10 },
+    0,
+    10,
     { context: 0 },
   )
   const tables = graph.tables(kept, fragments, departures)
@@ -3070,7 +3266,7 @@ test('a node on the reference states the strand the reference steps it on, thoug
     '<3@20 rank 0',
   ])
   expect(
-    (await walks.referenceNodes('R#0#chr', { start: 0, end: 40 })).map(
+    (await walks.getReferenceNodes('R#0#chr', 0, 40)).map(
       n => `${n.reversed === true ? '<' : '>'}${n.id}`,
     ),
   ).toEqual(['>1', '<2', '<3', '>4'])
@@ -3078,8 +3274,10 @@ test('a node on the reference states the strand the reference steps it on, thoug
 
 // revref.gfa: the reference walks 1-,2-,4- and H#1 walks 1-,3-,4-
 test('a node placed off the reference states no strand of the reference', async () => {
-  const { tables } = await reader('revref.GRCh38').cutRegion(
-    { refName: 'chr', start: 0, end: 9 },
+  const { tables } = await reader('revref.GRCh38').getGraphForRange(
+    'chr',
+    0,
+    9,
     { context: 0, expand: () => true },
   )
   expect(nodeStrands(tables)).toEqual([
@@ -3096,7 +3294,7 @@ test('a cut over its byte budget by the tiles it fetches to attach advises a nar
   const walks = reader('counts.R')
   const opts = { context: 0, byteBudget: 500 }
   const error: unknown = await walks
-    .cut('R#0#chr', { start: 20, end: 30 }, opts)
+    .getCutForRange('R#0#chr', 20, 30, opts)
     .catch((e: unknown) => e)
   expect(error).toBeInstanceOf(RegionTooLargeError)
   expect(error).toMatchObject({
@@ -3105,7 +3303,7 @@ test('a cut over its byte budget by the tiles it fetches to attach advises a nar
     fitsBp: 9,
     bytes: 626,
   })
-  const narrower = await walks.cut('R#0#chr', { start: 20, end: 29 }, opts)
+  const narrower = await walks.getCutForRange('R#0#chr', 20, 29, opts)
   expect(narrower.fragments.length).toBeGreaterThan(0)
 })
 
@@ -3130,7 +3328,7 @@ test.each([
 test("a cut's links run the way a walk along the reference takes them", async () => {
   const { graph, kept, fragments, departures } = await reader(
     'excursion.R',
-  ).cut('R#0#chr', { start: 0, end: 8 }, { context: 0 })
+  ).getCutForRange('R#0#chr', 0, 8, { context: 0 })
   const links = graphTablesGFA(graph.tables(kept, fragments, departures))
     .split('\n')
     .filter(line => line.startsWith('L\t'))
@@ -3144,11 +3342,9 @@ test("a cut's links run the way a walk along the reference takes them", async ()
 //   W H 1 h     0  40 >1>2<3>4
 //   W H 1 h   100 140 >1>2>3>4
 test("a link between two pieces of one W line holds though the contig's other W line numbers its pieces the same", async () => {
-  const { graph, kept, fragments, departures } = await reader('twolines.R').cut(
-    'R#0#chr',
-    { start: 0, end: 40 },
-    { context: 0 },
-  )
+  const { graph, kept, fragments, departures } = await reader(
+    'twolines.R',
+  ).getCutForRange('R#0#chr', 0, 40, { context: 0 })
   expect(
     graphTablesGFA(graph.tables(kept, fragments, departures)).split('\n'),
   ).toContain('L\t2\t+\t3\t-\t0M')
@@ -3168,9 +3364,10 @@ const placedSteps = (f: WalkFragment) =>
 //   W U 1 u   >1>9>3>4         9 of 18 bp
 //   W S 1 s   >2>3>4
 test('a walk row takes the passes its :k, @k and start@k name, and the defaults where it names none', async () => {
-  const { fragments } = await reader('copies.R').cut(
+  const { fragments } = await reader('copies.R').getCutForRange(
     'R#0#chr',
-    { start: 0, end: 36 },
+    0,
+    36,
     { context: 0 },
   )
   expect(fragments.map(f => `${f.name} ${placedSteps(f)}`).sort()).toEqual([
@@ -3182,11 +3379,9 @@ test('a walk row takes the passes its :k, @k and start@k name, and the defaults 
 })
 
 test("a cut's tables state the pass each step takes, NaN for a step off R", async () => {
-  const { graph, kept, fragments, departures } = await reader('copies.R').cut(
-    'R#0#chr',
-    { start: 0, end: 36 },
-    { context: 0 },
-  )
+  const { graph, kept, fragments, departures } = await reader(
+    'copies.R',
+  ).getCutForRange('R#0#chr', 0, 36, { context: 0 })
   const { walks, nodes } = graph.tables(kept, fragments, departures)
   expect(
     walks.names.map((name, p) => {
@@ -3208,11 +3403,9 @@ test("a cut's tables state the pass each step takes, NaN for a step off R", asyn
 // hairpin.R.gfa: R over six 6 bp nodes, and W H 1 c
 // >12>1>2<2<1>11>5>6>3>13>14, which steps on 2 and back over the window's 1
 test('a step between two on the window states its pass, off the window', async () => {
-  const { graph, kept, fragments, departures } = await reader('hairpin.R').cut(
-    'R#0#c',
-    { start: 0, end: 6 },
-    { context: 0, expand: () => true },
-  )
+  const { graph, kept, fragments, departures } = await reader(
+    'hairpin.R',
+  ).getCutForRange('R#0#c', 0, 6, { context: 0, expand: () => true })
   expect(walkPlaces(graph.tables(kept, fragments, departures))).toEqual([
     'R#0#c 1@0',
     'H#1#c 1@0 2@6 2@6 1@0',
@@ -3223,11 +3416,9 @@ async function copiesPlaced(
   name: string,
   edit: (f: WalkFragment) => WalkFragment,
 ) {
-  const { graph, kept, fragments, departures } = await reader('copies.R').cut(
-    'R#0#chr',
-    { start: 0, end: 36 },
-    { context: 0 },
-  )
+  const { graph, kept, fragments, departures } = await reader(
+    'copies.R',
+  ).getCutForRange('R#0#chr', 0, 36, { context: 0 })
   const tables = graph.tables(
     kept,
     fragments.map(f => (f.name === name ? edit({ ...f }) : f)),
@@ -3267,10 +3458,11 @@ test("a host's fragment with fewer refStarts than steps gives the rest NaN place
 // copies.R's header states revisited:i:2, skip.GRCh38's revisited:i:0, and
 // the inline file's none
 test("a cut's tables carry the header's revisited count, NaN where it states none", async () => {
-  const revisited = async (walks: WalkReader, refName: string, end: number) => {
-    const { graph, kept, fragments, departures } = await walks.cut(
+  const revisited = async (walks: WalkFile, refName: string, end: number) => {
+    const { graph, kept, fragments, departures } = await walks.getCutForRange(
       refName,
-      { start: 0, end },
+      0,
+      end,
       { context: 0 },
     )
     return graph.tables(kept, fragments, departures).revisited
@@ -3296,9 +3488,10 @@ test("a cut's tables carry the header's revisited count, NaN where it states non
 //   W R 0 chr >1>2>3>2>3>4
 //   W E 1 e   >1>2>8>3>2>3>4   8 of 2 bp
 test('a route naming no :k leaves from the first pass of its entry the walk reaches', async () => {
-  const { fragments } = await reader('early.R').cut(
+  const { fragments } = await reader('early.R').getCutForRange(
     'R#0#chr',
-    { start: 0, end: 36 },
+    0,
+    36,
     { context: 0 },
   )
   expect(fragments.map(f => `${f.name} ${placedSteps(f)}`)).toContain(
@@ -3315,11 +3508,10 @@ test('a route naming no :k leaves from the first pass of its entry the walk reac
 //   W V 1 v   >1>2>3>6>7>8>4>2>3
 test("an abridged row's end takes the pass end@k names, else the one nearest its start", async () => {
   const cut = (expand?: (name: string) => boolean) =>
-    reader('copyends.R').cut(
-      'R#0#chr',
-      { start: 0, end: 60 },
-      { context: 0, expand },
-    )
+    reader('copyends.R').getCutForRange('R#0#chr', 0, 60, {
+      context: 0,
+      expand,
+    })
   const { fragments } = await cut()
   expect(
     fragments
@@ -3346,9 +3538,10 @@ test("an abridged row's end takes the pass end@k names, else the one nearest its
 //   W R 0 chr >1>2>3>9>4>5>6>7
 //   W G 1 g   >1>2>9>6>7
 test('a walk through a 0 bp segment of the reference departs once over it', async () => {
-  const { departures } = await reader('zerostep.R').cut(
+  const { departures } = await reader('zerostep.R').getCutForRange(
     'R#0#chr',
-    { start: 0, end: 28 },
+    0,
+    28,
     { context: 0 },
   )
   expect(departures.map(departure)).toEqual([
@@ -3359,9 +3552,10 @@ test('a walk through a 0 bp segment of the reference departs once over it', asyn
 // hole.R.gfa in one 64 bp tile: H jumps from 1 to 4 across the hole, and J
 // steps straight across it from 2 to 3, which the hole makes adjacent
 test('steps either side of a hole in the reference depart nowhere', async () => {
-  const { fragments, departures } = await reader('holetile.R').cut(
+  const { fragments, departures } = await reader('holetile.R').getCutForRange(
     'R#0#chr',
-    { start: 0, end: 48 },
+    0,
+    48,
     { context: 0 },
   )
   expect(fragments.find(f => f.name === 'J#1#j')?.ids).toEqual(
@@ -3377,14 +3571,14 @@ test('steps either side of a hole in the reference depart nowhere', async () => 
 test('a window inside a hole in the reference returns the jump across it, whether or not the writer cut the walk there', async () => {
   const across = async (name: string) =>
     (
-      await reader(name).cut('R#0#chr', { start: 20, end: 24 }, { context: 0 })
+      await reader(name).getCutForRange('R#0#chr', 20, 24, { context: 0 })
     ).departures.map(d => departure(d).slice(0, 6))
   expect(await across('hole.R')).toEqual([['H#1#h', 4, 0, 0, '4+', '44+']])
   expect(await across('holetile.R')).toEqual([['H#1#h', 4, 0, 0, '4+', '44+']])
 })
 
 // Each link of a cut's tables, as its two nodes and their strands
-function linkNames(cut: Awaited<ReturnType<WalkReader['cut']>>) {
+function linkNames(cut: CutForRange) {
   const { nodes, links } = cut.graph.tables(
     cut.kept,
     cut.fragments,
@@ -3401,11 +3595,9 @@ function linkNames(cut: Awaited<ReturnType<WalkReader['cut']>>) {
 // 64 bp tile, and H jumps from 1 to 4. No walk goes from 2 to 3, so the graph
 // has no such link
 test('a cut lists no link over a hole in the reference that no walk crosses, where both sides lie in one tile', async () => {
-  const cut = await reader('refhole.R').cut(
-    'R#0#chr',
-    { start: 0, end: 64 },
-    { context: 0 },
-  )
+  const cut = await reader('refhole.R').getCutForRange('R#0#chr', 0, 64, {
+    context: 0,
+  })
   expect(linkNames(cut)).toEqual(['1+ 2+', '1+ 4+', '3+ 4+'])
 })
 
@@ -3413,13 +3605,11 @@ test('a cut lists no link over a hole in the reference that no walk crosses, whe
 // file's tile holds every haplotype's rows, whichever a cut keeps
 test('a cut of four haplotypes lists the links its fragments walk, and between reference nodes no other', async () => {
   const walks = reader('hprc-chrM.GRCh38')
-  const [refName = ''] = await walks.referenceSequences()
-  const { haplotypes } = await walks.header()
-  const cut = await walks.cut(
-    refName,
-    { start: 0, end: 16_000 },
-    { keep: walksKept(haplotypes.slice(0, 4), refName) },
-  )
+  const [refName = ''] = await walks.getReferenceSequences()
+  const { haplotypes } = await walks.getHeader()
+  const cut = await walks.getCutForRange(refName, 0, 16_000, {
+    keep: walksKept(haplotypes.slice(0, 4), refName),
+  })
   const walked = new Set<string>()
   for (const { ids, rev } of cut.fragments) {
     for (let i = 1; i < ids.length; i++) {
@@ -3446,14 +3636,17 @@ test('a cut of four haplotypes lists the links its fragments walk, and between r
 // cut of four lists between its nodes the links a cut of all 44 walks
 test("a cut of four haplotypes lists between its nodes every link the file's walks take there", async () => {
   const walks = reader('hprc-chrM.GRCh38')
-  const [refName = ''] = await walks.referenceSequences()
-  const { haplotypes } = await walks.header()
+  const [refName = ''] = await walks.getReferenceSequences()
+  const { haplotypes } = await walks.getHeader()
   const chrM = { start: 0, end: 16_000 }
   const keep = walksKept(haplotypes.slice(0, 4), refName)
   const [walked, between, every] = await Promise.all([
-    walks.cut(refName, chrM, { keep }),
-    walks.cut(refName, chrM, { keep, links: 'between' }),
-    walks.cut(refName, chrM),
+    walks.getCutForRange(refName, chrM.start, chrM.end, { keep }),
+    walks.getCutForRange(refName, chrM.start, chrM.end, {
+      keep,
+      links: 'between',
+    }),
+    walks.getCutForRange(refName, chrM.start, chrM.end),
   ])
   const inCut = (link: string) =>
     link.split(' ').every(end => between.kept.has(Number(end.slice(0, -1))))
@@ -3467,11 +3660,11 @@ test("a cut of four haplotypes lists between its nodes every link the file's wal
 // keeps ABUT alone, whose two lines end at 2 and start at 4, lists the
 // reference's step from 2 to 3 with links 'between'
 test("a cut whose keep leaves the reference out lists the reference's link from one tile to the next with links 'between'", async () => {
-  const cut = await reader('abut.R').cut(
-    'R#0#c',
-    { start: 0, end: 60 },
-    { context: 0, keep: name => name.startsWith('ABUT#1#'), links: 'between' },
-  )
+  const cut = await reader('abut.R').getCutForRange('R#0#c', 0, 60, {
+    context: 0,
+    keep: name => name.startsWith('ABUT#1#'),
+    links: 'between',
+  })
   expect(linkNames(cut)).toContain('2+ 3+')
 })
 
@@ -3484,11 +3677,10 @@ describe('the links at a departure record’s ends', () => {
   const all = () => true
 
   test('own steps that stop short of the rejoin node are not linked to it', async () => {
-    const cut = await reader('adv.R').cut(
-      'R#0#c1',
-      { start: 84, end: 96 },
-      { context: 0, expand: all },
-    )
+    const cut = await reader('adv.R').getCutForRange('R#0#c1', 84, 96, {
+      context: 0,
+      expand: all,
+    })
     expect(
       cut.departures.map(d => [d.name, [...(d.steps?.ids ?? [])]]),
     ).toEqual([
@@ -3500,11 +3692,10 @@ describe('the links at a departure record’s ends', () => {
   })
 
   test('the node a record leaves is linked to its first own step, and its last to the node it rejoins, where the cut holds them', async () => {
-    const cut = await reader('adv.R').cut(
-      'R#0#c1',
-      { start: 0, end: 15 },
-      { context: 1000, expand: all },
-    )
+    const cut = await reader('adv.R').getCutForRange('R#0#c1', 0, 15, {
+      context: 1000,
+      expand: all,
+    })
     const links = linkNames(cut)
     expect(links).toContain('3+ 21+')
     expect(links).toContain('3+ 24+')
@@ -3515,9 +3706,10 @@ describe('the links at a departure record’s ends', () => {
   // jumpback.GRCh38.gfa: HG002's second W line starts on node 20, off the
   // reference, and rejoins at node 3
   test('own steps before the rejoin are linked to the node the record rejoins', async () => {
-    const cut = await reader('jumpback.GRCh38').cut(
+    const cut = await reader('jumpback.GRCh38').getCutForRange(
       'GRCh38#0#chr1',
-      { start: 0, end: 16 },
+      0,
+      16,
       { context: 10 },
     )
     expect(linkNames(cut)).toContain('20+ 3+')
@@ -3531,11 +3723,10 @@ describe('the links at a departure record’s ends', () => {
   ])(
     'a departure inside a piece links its own steps to the steps either side: $links',
     async ({ expand, links }) => {
-      const cut = await reader('abridged.R').cut(
-        'R#0#chr',
-        { start: 10, end: 20 },
-        { context: 0, ...(expand ? { expand } : {}) },
-      )
+      const cut = await reader('abridged.R').getCutForRange('R#0#chr', 10, 20, {
+        context: 0,
+        ...(expand ? { expand } : {}),
+      })
       expect(linkNames(cut)).toEqual(expect.arrayContaining(links))
     },
   )
@@ -3552,11 +3743,10 @@ describe('the links at a departure record’s ends', () => {
   ])(
     'own steps are not linked to a rejoin step their walk’s fragment lacks, though another walk keeps its node: $none',
     async ({ expand, link, none }) => {
-      const cut = await reader('abridged.R').cut(
-        'R#0#chr',
-        { start: 10, end: 18 },
-        { context: 0, ...(expand ? { expand } : {}) },
-      )
+      const cut = await reader('abridged.R').getCutForRange('R#0#chr', 10, 18, {
+        context: 0,
+        ...(expand ? { expand } : {}),
+      })
       const links = linkNames(cut)
       expect(cut.kept.has(4)).toBe(true)
       expect(links).toContain(link)
@@ -3567,11 +3757,9 @@ describe('the links at a departure record’s ends', () => {
   // abridged.R.gfa: Q leaves R after node 1 for 6 bp of its own and rejoins
   // at node 3; its own steps are one placeholder in a cut that expands none
   test('a placeholder for own steps is linked to the steps its record leaves and rejoins', async () => {
-    const cut = await reader('abridged.R').cut(
-      'R#0#chr',
-      { start: 4, end: 16 },
-      { context: 0 },
-    )
+    const cut = await reader('abridged.R').getCutForRange('R#0#chr', 4, 16, {
+      context: 0,
+    })
     expect(linkNames(cut)).toEqual([
       '1+ 2+',
       '1+ 3-',
@@ -3586,11 +3774,9 @@ describe('the links at a departure record’s ends', () => {
   // a window that starts after node 1: Q's fragment starts at node 3, and
   // D's keeps node 1
   test('a placeholder for own steps is not linked to a leave step its walk’s fragment lacks', async () => {
-    const cut = await reader('abridged.R').cut(
-      'R#0#chr',
-      { start: 8, end: 16 },
-      { context: 0 },
-    )
+    const cut = await reader('abridged.R').getCutForRange('R#0#chr', 8, 16, {
+      context: 0,
+    })
     expect(cut.kept.has(1)).toBe(true)
     expect(linkNames(cut)).toEqual([
       '1+ 2+',
@@ -3607,11 +3793,10 @@ describe('the links at a departure record’s ends', () => {
 // ends. Their departure records state the same
 describe('a record between two W lines that abut', () => {
   const cutOf = async (haplotype: string, start: number, end: number) => {
-    const cut = await reader('abut.R').cut(
-      'R#0#c',
-      { start, end },
-      { context: 0, keep: walksKept([haplotype], 'R#0#c') },
-    )
+    const cut = await reader('abut.R').getCutForRange('R#0#c', start, end, {
+      context: 0,
+      keep: walksKept([haplotype], 'R#0#c'),
+    })
     return {
       links: linkNames(cut),
       departures: cut.departures.map(d => ({
@@ -3647,11 +3832,9 @@ describe('a record between two W lines that abut', () => {
 // 70 for the own steps of the record rejoining at 3, and that tile holds the
 // piece rejoining at 8 too. The cut returns no step on 8
 test('a record whose rejoin piece comes in a fetch for another record breaks where the cut returns no step beside its own', async () => {
-  const cut = await reader('farrejoin.R').cut(
-    'R#0#c',
-    { start: 0, end: 30 },
-    { context: 0 },
-  )
+  const cut = await reader('farrejoin.R').getCutForRange('R#0#c', 0, 30, {
+    context: 0,
+  })
   expect(
     cut.departures.map(d => [d.hapStart, [...(d.steps?.ids ?? [])], d.breakAt]),
   ).toEqual([
@@ -3677,10 +3860,10 @@ describe('the links of a cut of several haplotypes are those of each cut alone',
     'abut.R',
   ])('%s', async name => {
     const walks = reader(name)
-    const { haplotypes } = await walks.header()
+    const { haplotypes } = await walks.getHeader()
     const differing: string[] = []
-    for (const refName of await walks.referenceSequences()) {
-      const end = (await walks.units(refName)).reduce(
+    for (const refName of await walks.getReferenceSequences()) {
+      const end = (await walks.getUnits(refName)).reduce(
         (most, unit) => Math.max(most, unit.end),
         0,
       )
@@ -3690,16 +3873,12 @@ describe('the links of a cut of several haplotypes are those of each cut alone',
             for (const expand of [undefined, () => true]) {
               const cutOf = async (kept: string[]) =>
                 linkNames(
-                  await walks.cut(
-                    refName,
-                    { start, end: start + 8 },
-                    {
-                      keep: walksKept(kept, refName),
-                      context,
-                      contained,
-                      ...(expand ? { expand } : {}),
-                    },
-                  ),
+                  await walks.getCutForRange(refName, start, start + 8, {
+                    keep: walksKept(kept, refName),
+                    context,
+                    contained,
+                    ...(expand ? { expand } : {}),
+                  }),
                 )
               const alone = new Set<string>()
               for (const haplotype of haplotypes) {
@@ -3733,7 +3912,7 @@ test("a tile's R joins its ref rows in hapOffset order", async () => {
     'R#0#chr 0 ref R#0#chr 40 40 0 2 6,2 4,4 .',
     'R#0#chr 0 ref R#0#chr 0 0 0 2 2,2 4,4 .',
     'R#0#chr 0 walk J#1#j 0 0 0 4 2 .',
-  ]).cut('R#0#chr', { start: 0, end: 48 }, { context: 0 })
+  ]).getCutForRange('R#0#chr', 0, 48, { context: 0 })
   expect(fragments.map(f => `${f.name} ${placedSteps(f)}`).sort()).toEqual([
     'J#1#j >1@0>2@4>3@40>4@44',
     'R#0#chr >1@0>2@4',
@@ -3749,9 +3928,10 @@ test.each([
 ])(
   'a cut keeps the departure lines overlapping its window, of the blocks it reads: 0-$end',
   async ({ end, names }) => {
-    const { departures } = await reader('attach.GRCh38').cut(
+    const { departures } = await reader('attach.GRCh38').getCutForRange(
       'GRCh38#0#chr1',
-      { start: 0, end },
+      0,
+      end,
       { context: 0 },
     )
     expect(departures.map(d => d.name)).toEqual(names)
@@ -3783,10 +3963,10 @@ function oneUnit(unit: Uint8Array<ArrayBuffer>[], table = tableOf) {
 
 // A walk file whose one sequence, R#0#chr, has one tile, 0 over [0, 4)
 const oneTile = (tile: Uint8Array<ArrayBuffer>[], table = tableOf) =>
-  WalkReader.fromFilehandles(oneUnit(tile, table))
+  walkFileFrom(oneUnit(tile, table))
 
-const cutAll = (walks: WalkReader) =>
-  walks.cut('R#0#chr', { start: 0, end: 4 }, { context: 0 })
+const cutAll = (walks: WalkFile) =>
+  walks.getCutForRange('R#0#chr', 0, 4, { context: 0 })
 
 const TILE_AT =
   "The unit at byte 69 of the walk file, R#0#chr's tile 0 over [0, 4) as its table lists it,"
@@ -3841,7 +4021,7 @@ test.each([
       (at, length) =>
         `${tableOf(at, length, kind, name)}${kind === 'detail' ? `#entry\tR#0#chr\t0\t4\tblocks\t0\t${at + length}\t0\n` : ''}`,
     )
-    const file = new WalkFile(data, directory)
+    const file = new WalkContainer(data, directory)
     const units = await file.units('R#0#chr')
     await expect(file.read(units.filter(u => u.kind === kind))).rejects.toThrow(
       `holds a row that is not one of ${kinds}`,
@@ -3854,7 +4034,7 @@ test('a unit of a kind the format does not give is read whatever its rows', asyn
   const { data, directory } = oneUnit(unit, (at, length) =>
     tableOf(at, length, 'sketch', '.'),
   )
-  const file = new WalkFile(data, directory)
+  const file = new WalkContainer(data, directory)
   expect(await file.read(await file.units('R#0#chr'))).toEqual([['anything']])
 })
 
@@ -3897,7 +4077,7 @@ test.each([
   ],
 ])('a table with %s is refused', async (_, table, message) => {
   await expect(
-    oneTile(bgzf(TILE_HEAD + REF_ROW), table).units('R#0#chr'),
+    oneTile(bgzf(TILE_HEAD + REF_ROW), table).getUnits('R#0#chr'),
   ).rejects.toThrow(message)
 })
 
@@ -3944,14 +4124,14 @@ test.each([
   ],
 ])('a table with %s is refused', async (_, table, message) => {
   await expect(
-    oneTile(bgzf(TILE_HEAD + REF_ROW), table).units('R#0#chr'),
+    oneTile(bgzf(TILE_HEAD + REF_ROW), table).getUnits('R#0#chr'),
   ).rejects.toThrow(message)
 })
 
 test('a table whose entries cover every byte since the header is read, an entry of no bytes among them', async () => {
   const units = await oneTile(bgzf(TILE_HEAD + REF_ROW), (at, length) =>
     twoEntries([at, length], [at + length, 0]),
-  ).units('R#0#chr')
+  ).getUnits('R#0#chr')
   expect(units.map(u => [u.kind, u.length > 0])).toEqual([
     ['tile', true],
     ['sketch', false],
@@ -3960,14 +4140,14 @@ test('a table whose entries cover every byte since the header is read, an entry 
 
 test("gfa-to-tabix's entry-dropped file, a table that leaves out its departures unit's entry, is refused", async () => {
   await expect(
-    reader('planted/entry-dropped').units('GRCh38#0#chr'),
+    reader('planted/entry-dropped').getUnits('GRCh38#0#chr'),
   ).rejects.toThrow('leave no gap and do not overlap')
 })
 
 test("a second sequence's table covers the bytes from the first sequence's table on", async () => {
   const walks = reader('adv.R')
-  const before = await walks.units('R#0#c1')
-  const after = await walks.units('R#0#c2')
+  const before = await walks.getUnits('R#0#c1')
+  const after = await walks.getUnits('R#0#c2')
   expect(after[0]!.offset).toBeGreaterThan(
     before.at(-1)!.offset + before.at(-1)!.length,
   )
@@ -3980,11 +4160,11 @@ test("a reader that cannot learn the data's length skips the directory's bytes c
   const directory = (
     await new LocalFile(`${path}.idx`).readFile('utf8')
   ).replace(/\tbytes:i:\d+/, '\tbytes:i:12')
-  const walks = WalkReader.fromFilehandles({
-    data,
-    directory: new BlobFile(new Blob([directory])),
+  const walks = new WalkFile({
+    walksFilehandle: data,
+    idxFilehandle: new BlobFile(new Blob([directory])),
   })
-  expect((await walks.header()).tile).toBe(1000)
+  expect((await walks.getHeader()).tile).toBe(1000)
 })
 
 // A unit of a kind this reader does not know, listed in the table between
@@ -4014,17 +4194,15 @@ test('a unit of a kind the reader does not know is skipped', async () => {
   )
   const parts = [...header, ...tile, ...sketch, ...table]
   const directory = `${walks}\tbytes:i:${unitBytes(parts)}\n#header\t0\t${tileAt}\nR#0#chr\t${tableAt}\t${unitBytes(table)}\n`
-  const walkFile = WalkReader.fromFilehandles({
-    data: new BlobFile(new Blob(parts)),
-    directory: new BlobFile(new Blob([directory])),
+  const walkFile = new WalkFile({
+    walksFilehandle: new BlobFile(new Blob(parts)),
+    idxFilehandle: new BlobFile(new Blob([directory])),
   })
   const read = vi.spyOn(BlobFile.prototype, 'read')
   try {
-    const { fragments, kept } = await walkFile.cut(
-      'R#0#chr',
-      { start: 0, end: 4 },
-      { context: 0 },
-    )
+    const { fragments, kept } = await walkFile.getCutForRange('R#0#chr', 0, 4, {
+      context: 0,
+    })
     expect(fragments.map(fragment)).toEqual([['R#0#chr', 0, 4, '>1', 0, 0]])
     expect([...kept]).toEqual([1])
     expect(
@@ -4057,11 +4235,9 @@ test('tags a reader does not know are ignored on any row and header line', async
     line.includes(' nodes ') ? `${line} SQ:Z:AAAA` : line,
   )
   const cut = async (lines: string[]) => {
-    const { graph, kept, fragments, departures } = await inline(lines).cut(
-      'R#0#chr',
-      { start: 4, end: 20 },
-      { context: 0, sequences: true },
-    )
+    const { graph, kept, fragments, departures } = await inline(
+      lines,
+    ).getCutForRange('R#0#chr', 4, 20, { context: 0, sequences: true })
     return {
       gfa: graphTablesGFA(graph.tables(kept, fragments, departures)),
       bases: [...graph.sequences].sort(([a], [b]) => a - b),
@@ -4075,13 +4251,14 @@ test('tags a reader does not know are ignored on any row and header line', async
     [6, 'AAAA'],
   ])
   expect(await cut(tagged(withBases))).toEqual(plain)
-  expect(await inline(tagged(stays)).header()).toEqual(
-    await inline(stays).header(),
+  expect(await inline(tagged(stays)).getHeader()).toEqual(
+    await inline(stays).getHeader(),
   )
   const attached = async (lines: string[]) => {
-    const { fragments, departures } = await inline(lines).cut(
+    const { fragments, departures } = await inline(lines).getCutForRange(
       'R#0#chr',
-      { start: 20, end: 28 },
+      20,
+      28,
       { context: 0 },
     )
     return [fragments.map(fragment), departures.map(departure)]
@@ -4098,16 +4275,14 @@ test('a file that states its graph and the lines it leaves out cuts as one that 
       : line,
   )
   const cut = async (lines: string[]) => {
-    const { graph, kept, fragments, departures } = await inline(lines).cut(
-      'R#0#chr',
-      { start: 4, end: 20 },
-      { context: 0 },
-    )
+    const { graph, kept, fragments, departures } = await inline(
+      lines,
+    ).getCutForRange('R#0#chr', 4, 20, { context: 0 })
     return graphTablesGFA(graph.tables(kept, fragments, departures))
   }
-  const header = await inline(stated).header()
+  const header = await inline(stated).getHeader()
   expect(header).toMatchObject({ graph: '6f8a0816aa66e2d6', leftout: 1 })
-  const plain = await inline(stays).header()
+  const plain = await inline(stays).getHeader()
   expect(plain.graph).toBeUndefined()
   expect(plain.leftout).toBeUndefined()
   expect({ ...plain, graph: header.graph, leftout: 1 }).toEqual(header)
@@ -4120,14 +4295,10 @@ test('a file that states its graph and the lines it leaves out cuts as one that 
 // a header line whose first word it does not know
 const extended = async (name: string, expand?: (name: string) => boolean) => {
   const walks = reader(`extension/${name}.R`)
-  const cut = await walks.cut(
-    'R#0#c',
-    { start: 0, end: 36 },
-    { context: 0, expand },
-  )
+  const cut = await walks.getCutForRange('R#0#c', 0, 36, { context: 0, expand })
   const { graph, kept, fragments, departures, gaps, placeholders } = cut
   return {
-    header: await walks.header(),
+    header: await walks.getHeader(),
     fragments,
     departures,
     gaps,
@@ -4175,7 +4346,7 @@ const everyKind = [
   'R#0#chr 0 20 departure K#1#k 5 3 0 5 + 1 15 + 1 0',
 ]
 const everyKindCut = (lines: string[], expand?: (name: string) => boolean) =>
-  inline(lines).cut('R#0#chr', { start: 0, end: 20 }, { context: 0, expand })
+  inline(lines).getCutForRange('R#0#chr', 0, 20, { context: 0, expand })
 const withRow = (kind: string, edit: (line: string) => string, from = 0) =>
   everyKind.map((line, k) =>
     k === everyKind.findIndex((l, i) => i >= from && l.includes(` ${kind} `))
@@ -4260,15 +4431,15 @@ test('a directory line of a later kind is ignored, and a sequence line with a co
   const { data, directory } = walkFileOf(everyKind)
   const text = await directory.readFile('utf8')
   const withLine = (edit: (text: string) => string) =>
-    WalkReader.fromFilehandles({
-      data,
-      directory: new BlobFile(new Blob([edit(text)])),
+    new WalkFile({
+      walksFilehandle: data,
+      idxFilehandle: new BlobFile(new Blob([edit(text)])),
     })
   expect(
-    await withLine(t => `${t}#future\tx\ty\n`).referenceSequences(),
+    await withLine(t => `${t}#future\tx\ty\n`).getReferenceSequences(),
   ).toEqual(['R#0#chr'])
   await expect(
-    withLine(t => t.replace(/(R#0#chr\t\d+\t\d+)\n/, '$1\tzz:i:1\n')).units(
+    withLine(t => t.replace(/(R#0#chr\t\d+\t\d+)\n/, '$1\tzz:i:1\n')).getUnits(
       'R#0#chr',
     ),
   ).rejects.toThrow('A walk file directory line holds no byte range')
@@ -4285,7 +4456,7 @@ test("a tag after an abridged row's detail column names no other detail unit", a
     'R#0#chr 0:0 10 20 route 6 4 -2',
     'R#0#chr 0:0 10 20 walk H#1#h 0 0 0 3 6 0',
     'R#0#chr 0 10 20 blocks H#1#h 0 0 10+5,8,0+5 xx:i:1',
-  ]).cut('R#0#chr', { start: 0, end: 20 }, { context: 0 })
+  ]).getCutForRange('R#0#chr', 0, 20, { context: 0 })
   expect(
     fragments.flatMap(f => (f.abridged ?? []).map(a => a.detail.name)),
   ).toEqual(['0:0'])
@@ -4307,14 +4478,12 @@ test('a unit of a sequence of 0 bp, stating [0, 0), is read by no window', async
     served,
   )
   expect(
-    (await walks.units('R#0#chr0')).map(u => [u.kind, u.start, u.end]),
+    (await walks.getUnits('R#0#chr0')).map(u => [u.kind, u.start, u.end]),
   ).toEqual([['tile', 0, 0]])
-  expect(await walks.sequenceLength('R#0#chr0')).toBe(0)
-  const { fragments } = await walks.cut(
-    'R#0#chr0',
-    { start: 0, end: 16 },
-    { context: 0 },
-  )
+  expect(await walks.getSequenceLength('R#0#chr0')).toBe(0)
+  const { fragments } = await walks.getCutForRange('R#0#chr0', 0, 16, {
+    context: 0,
+  })
   expect(fragments).toEqual([])
   expect(served).toEqual([])
 })

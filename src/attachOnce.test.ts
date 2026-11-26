@@ -1,6 +1,6 @@
 import { LocalFile } from 'generic-filehandle2'
 
-import { WalkReader } from './walkReader.ts'
+import { WalkFile } from './walkFile.ts'
 
 import type { WalkDeparture } from './walkDeparture.ts'
 
@@ -35,9 +35,9 @@ vi.mock(import('./walkRows.ts'), async importOriginal => {
 
 function reader(name: string) {
   const path = `${DATA}${name}.walks.gz`
-  return WalkReader.fromFilehandles({
-    data: new LocalFile(path),
-    directory: new LocalFile(`${path}.idx`),
+  return new WalkFile({
+    walksFilehandle: new LocalFile(path),
+    idxFilehandle: new LocalFile(`${path}.idx`),
   })
 }
 
@@ -45,10 +45,10 @@ test.each(['attachmany.R', 'attach.GRCh38', 'ownends.R', 'farrejoin.R'])(
   'unattachedRecords finds, record for record, the ones the cut before the fetch found, over every window of %s',
   async name => {
     const walks = reader(name)
-    const [refName = ''] = await walks.referenceSequences()
+    const [refName = ''] = await walks.getReferenceSequences()
     calls.refName = refName
     calls.seen.length = 0
-    const length = await walks.sequenceLength(refName)
+    const length = await walks.getSequenceLength(refName)
     for (let start = 0; start < length; start += 5) {
       for (const width of [1, 10, 50]) {
         for (const options of [
@@ -58,7 +58,7 @@ test.each(['attachmany.R', 'attach.GRCh38', 'ownends.R', 'farrejoin.R'])(
           { context: 0, attachBp: 5 },
           { context: 20, contained: true, expand: () => true },
         ]) {
-          await walks.cut(refName, { start, end: start + width }, options)
+          await walks.getCutForRange(refName, start, start + width, options)
         }
       }
     }

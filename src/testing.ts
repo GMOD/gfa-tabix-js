@@ -3,15 +3,15 @@ import { crc32, deflateRawSync } from 'node:zlib'
 
 import { BlobFile } from 'generic-filehandle2'
 
+import { WalkFile } from './walkFile.ts'
 import { isPlaceholder, runName } from './walkRows.ts'
 
 import type { GraphTables } from './util.ts'
-import type { WalkFilehandle, WalkUnit } from './walkFile.ts'
-import type { WalkReader } from './walkReader.ts'
+import type { WalkFilehandle, WalkUnit } from './walkContainer.ts'
 import type { FilehandleOptions } from 'generic-filehandle2'
 import type { Hash } from 'node:crypto'
 
-type Cut = Awaited<ReturnType<WalkReader['cut']>>
+type Cut = Awaited<ReturnType<WalkFile['getCutForRange']>>
 
 // Every read `data` makes from here on, as its byte range
 export function readsOf(data: WalkFilehandle) {
@@ -262,6 +262,15 @@ const spanOf = (cols: string[]) =>
  * between the header and the first unit, and `apart` a unit of a kind no
  * reader knows after each detail unit, so no two of them touch.
  */
+// A WalkFile of a walk file's data and directory, as walkFileOf makes them
+export const walkFileFrom = ({
+  data,
+  directory,
+}: {
+  data: WalkFilehandle
+  directory: WalkFilehandle
+}) => new WalkFile({ walksFilehandle: data, idxFilehandle: directory })
+
 export function walkFileOf(
   lines: string[],
   { reversed = false, gap = 0, apart = false } = {},

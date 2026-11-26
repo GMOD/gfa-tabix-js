@@ -16,7 +16,7 @@ import {
   tokens,
   traverse,
 } from './walkChunk.ts'
-import { WalkFormatError } from './walkFile.ts'
+import { WalkFormatError } from './walkContainer.ts'
 
 import type { AbridgedPiece, PieceBlocks, Route } from './walkChunk.ts'
 import type { DepartureRecord } from './walkDeparture.ts'

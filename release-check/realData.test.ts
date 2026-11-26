@@ -1,10 +1,9 @@
-import { LocalFile, RemoteFile } from 'generic-filehandle2'
 import { expect, test } from 'vitest'
 
 import { formContradictions } from '../src/formsCheck.ts'
 import { structuralForms } from '../src/structuralForms.ts'
-import { formsCut, walkDepartures } from '../src/walkDepartures.ts'
-import { WalkReader } from '../src/walkReader.ts'
+import { walkDepartures } from '../src/walkDepartures.ts'
+import { WalkFile } from '../src/walkFile.ts'
 
 import type { HaplotypeDepartures } from '../src/walkDepartures.ts'
 
@@ -54,11 +53,9 @@ const lifted = {
 }
 
 const reader = () =>
-  WalkReader.open(walks, location =>
-    location.startsWith('http')
-      ? new RemoteFile(location)
-      : new LocalFile(location),
-  )
+  walks.startsWith('http')
+    ? new WalkFile({ walksUrl: walks })
+    : new WalkFile({ walksPath: walks })
 
 const net = (h: HaplotypeDepartures) =>
   h.departures.reduce((s, d) => s + d.altLength - (d.refEnd - d.refStart), 0)
@@ -70,11 +67,11 @@ test.runIf(walks !== '').for(WINDOWS)(
   '%i-%i: abridged pieces read unexpanded as expanded over the tiles the drawn stretch overlaps, context on both sides, and no form contradicts a member',
   async ([start, end], { skip }) => {
     const sequence =
-      (await reader().sequenceFor(
-        (await reader().header()).references[0] ?? '',
+      (await reader().getSequenceName(
+        (await reader().getHeader()).references[0] ?? '',
         refName,
       )) ?? refName
-    const tiles = (await reader().units(sequence)).filter(
+    const tiles = (await reader().getUnits(sequence)).filter(
       u => u.kind === 'tile' && u.start < end + 1000 && u.end > start - 1000,
     )
     skip(tiles.length === 0, `no tile of ${sequence} overlaps ${start}-${end}`)
@@ -83,12 +80,22 @@ test.runIf(walks !== '').for(WINDOWS)(
       start: tiles[0]!.start + 1000,
       end: tiles.at(-1)!.end - 1000,
     }
-    const unexpanded = await formsCut(reader(), region, lifted)
-    const loaded = await reader().cut(sequence, region, {
-      ...lifted,
-      links: 'none',
-      expand: () => true,
-    })
+    const unexpanded = await reader().getFormsForRange(
+      region.refName,
+      region.start,
+      region.end,
+      lifted,
+    )
+    const loaded = await reader().getCutForRange(
+      sequence,
+      region.start,
+      region.end,
+      {
+        ...lifted,
+        links: 'none',
+        expand: () => true,
+      },
+    )
     const called = new Set<string>()
     const expanded = walkDepartures(
       {
@@ -112,11 +119,10 @@ test.runIf(walks !== '').for(WINDOWS)(
 
     const reference = async (from: number, to: number, context: number) =>
       (
-        await reader().cut(
-          sequence,
-          { start: from, end: to },
-          { ...lifted, context },
-        )
+        await reader().getCutForRange(sequence, from, to, {
+          ...lifted,
+          context,
+        })
       ).fragments.find(f => f.name === sequence)?.refStarts
     expect(await reference(start, end, 1000)).toEqual(
       await reference(start - 1000, end + 1000, 0),
