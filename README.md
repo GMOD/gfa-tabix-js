@@ -12,9 +12,9 @@ is for BAM.
 npm install @gmod/gfa-tabix
 ```
 
-The GFA tabix file also needs `@gmod/tabix`.
-
 ## Quick start
+
+`WalkFile` reads the walk file, which holds each haplotype's route:
 
 ```ts
 import { WalkFile } from '@gmod/gfa-tabix'
@@ -42,28 +42,10 @@ const { tables } = await walks.getGraphForRange(
 
 ## The GFA tabix file
 
-`GfaTabixFile` reads gfa-to-tabix's segments and links, Tabix-indexed BED, as
-GFA text ([API reference](docs/api.md#the-gfa-tabix-file)):
-
-```ts
-import { GfaTabixFile } from '@gmod/gfa-tabix'
-import { TabixIndexedFile } from '@gmod/tabix'
-
-const gfaTabix = new GfaTabixFile({
-  graph: new TabixIndexedFile({ url: graphUrl, tbiUrl: `${graphUrl}.tbi` }),
-})
-const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
-```
-
-## Terms
-
-- **Reference:** the one linear genome, such as GRCh38
-- **Haplotype:** one copy of a chromosome from one person
-- **Node and link:** a piece of DNA many haplotypes share, and the join to the
-  next
-- **Walk:** the route one haplotype takes through the nodes and links
-- **Window:** a stretch of the reference, also called a region or range
-- **Cut:** the nodes, links and walks under a window
+The GFA tabix file holds the graph alone, segments and links with no walks.
+`GfaTabixFile` reads it as GFA text, for a viewer that draws the graph itself,
+and needs `@gmod/tabix`. Its use is in the
+[API reference](docs/api.md#the-gfa-tabix-file).
 
 ## Docs
 
