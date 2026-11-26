@@ -1,6 +1,6 @@
 {
   "name": "@gmod/gfa-tabix",
-  "version": "10.0.0",
+  "version": "10.1.0",
   "description": "The reader for gfa-to-tabix's GFA tabix and walk files: a pangenome graph's segments and links, and every haplotype's walk through a range of the reference, by range requests",
   "license": "MIT",
   "author": {
