@@ -53,8 +53,8 @@ Each `WalkFile` method below takes a contig and a range.
 | `getCutForRange`    | The cut as objects, for a caller that needs more than tables | [API reference](docs/api.md#fragments)       |
 
 The [API reference](docs/api.md) lists every method, option and error.
-[Large genomic regions and abridged walks](docs/reads.md) covers
-`RegionTooLargeError` and what to do about a region too large to load.
+[Large genomic regions and abridged walks](docs/reads.md) covers the size
+limits, `RegionTooLargeError` and `expand`.
 
 ## The GFA tabix file
 

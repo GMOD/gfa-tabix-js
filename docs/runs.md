@@ -1,11 +1,7 @@
 # Runs
 
-`getRunsForRange(refName, start, end, opts)` returns a range's walks as runs: no
-step is decoded and no node or placeholder made. It takes a range as the other
-range methods do, resolving a contig on `referenceSample` and throwing
-`MissingSequenceError` for a sequence the file lacks, and the options `signal`,
-`haplotypes`, `context`, `contained`, `attachBp`, `byteBudget`,
-`departureByteBudget` and `budgetNames`.
+`getRunsForRange` returns a range's walks as stretches of the reference and the
+bp between them, without decoding a step or making a node.
 
 ```ts
 import { WalkFile } from '@gmod/gfa-tabix'
@@ -19,51 +15,60 @@ const runs = await walks.getRunsForRange('chr6', 32_510_000, 32_600_000, {
 - The runs are the walks of `getCutForRange` over the same range with the same
   `context`, `contained` and `attachBp`, for a cut that expands nothing: the
   reference's walk and those of the `haplotypes` asked for, every one by default
-- It reads the window's tiles and departure blocks and those tiles' `blocks`
-  units: no detail unit, and no tile fetched to attach
-- It never refuses on a step budget, a node limit or a placeholder limit; it
-  refuses a window past `byteBudget` or `departureByteBudget` as a cut does
+- The options are `haplotypes`, `context`, `contained`, `attachBp`,
+  `byteBudget`, `departureByteBudget`, `referenceSample`, `signal` and
+  `budgetNames`
+- `getRunsForRange` has no step budget, node limit or placeholder limit. It
+  throws past `byteBudget` or `departureByteBudget` as a cut does
+- A file whose header does not state `revisited:i:0` throws a
+  `RunsRefusedError`, since a run off the reference could then hold a node the
+  reference passes. Cut the window for such a file
 
-## What runs hold
+## What runs return
 
-- A stretch is consecutive steps on the reference, each starting on the base the
-  last ended on, all one way. It never spans a hole. A run is what lies between
-  two stretches
-- `walks` holds one fragment per walk of the cut's tables, in their order:
-  `names`, `starts` and `ends` on the contig, `trimmedBefore` and
-  `trimmedAfter`, `offsets` into `stretches`, `leadBp` and `tailBp`, the bp off
-  the reference before the first stretch and after the last that a contained
-  cut's context keeps, with `leadLoaded` and `tailLoaded`, and the `before` and
-  `after` ends
+A stretch is consecutive steps on the reference, each starting on the base where
+the last ended, all in one direction. A run is what lies between two stretches.
+
+| Field       | Contents                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `walks`     | One fragment per walk, in the order of the cut's tables, with `offsets` into `stretches` |
+| `stretches` | `starts` and `bp` on the reference, `against`, `offBefore` and `loaded`                  |
+| `reference` | The reference's nodes over its fragments                                                 |
+| `drawn`     | The span of those nodes, NaN where the reference has no node over the window             |
+| `holes`     | The file's holes on the sequence                                                         |
+| `departing` | The departures over the window of walks that have no fragment there                      |
+| `revisited` | Always 0                                                                                 |
+
+`walks` columns:
+
+- `names`, and `starts` and `ends` on the contig
 - `trimmedBefore` and `trimmedAfter` count the walk row's bp past either end of
-  the fragment, its steps on the reference included, so they are not the
-  haplotype's own sequence off the reference
-- `stretches` holds `starts` and `bp` on the reference, `against`, `offBefore`,
-  the bp of the run before, 0 for a fragment's first, and `loaded`, 0 where that
-  run holds a placeholder. `loaded` reports the file's abridging, a piece the
-  writer moved out of its tile, not which nodes a host loaded
-- In a plain cut a fragment runs from its first step on the window to its last,
-  so a walk that goes away and comes back has stretches off the drawn stretch
-  and off the reference's nodes. A contained cut splits it there and keeps every
-  stretch on the window: a fold of the runs, which knows the reference's nodes
-  alone, uses `contained: true`
-- Stretches either side of a hole follow on with `offBefore` 0, so a consumer
-  takes `holes` out before it calls the gap between them a deletion
-- `reference` lists the reference's nodes over its fragments and `drawn` spans
-  them; `drawn` is NaN where the reference has no node over the window
-- `holes` are the file's holes on the sequence, and `revisited` is always 0
-- `departing` lists the departures over the drawn stretch of the walks with no
-  fragment, such as one that departs across the whole window, as the cut's
-  departure table lists them: `names`, `hapStarts`, `ownBp`, `missingBp`,
-  `leavePos`, `leaveReversed`, `rejoinPos` and `rejoinReversed`, so a host can
-  tell such a walk from one with no walk there. A walk with a fragment is left
-  out, even where it jumps the window elsewhere
+  the fragment. They include its steps on the reference, so they do not measure
+  sequence off the reference
+- `leadBp` and `tailBp` are the bp off the reference before the first stretch
+  and after the last that a contained cut's context keeps, with `leadLoaded` and
+  `tailLoaded`
+- `before` and `after` are the fragment's [ends](#ends)
+
+`stretches` columns:
+
+- `offBefore` is the bp of the run before the stretch, 0 for a fragment's first
+- `loaded` is 0 where that run is an abridged piece of the file
+- Stretches either side of a hole follow on with `offBefore` 0, so take `holes`
+  out before calling the gap between two stretches a deletion
+
+`departing` has the columns of the cut's departure table: `names`, `hapStarts`,
+`ownBp`, `missingBp`, `leavePos`, `leaveReversed`, `rejoinPos` and
+`rejoinReversed`. It lets a host tell a walk that jumps over the whole window
+from a haplotype with no walk there.
+
+In a plain cut a walk that goes away and comes back has stretches off the
+window. `contained: true` splits the walk there and keeps every stretch on the
+window, which is what a consumer that knows the reference's nodes alone wants.
 
 ## Ends
 
-An end (`WalkEnds`, its kind as an index into `END_KINDS`) comes from the
-departure that leaves the fragment's last stretch or rejoins its first, computed
-in its piece or read from a departure record between pieces:
+Each fragment end has a kind, an index into `END_KINDS`:
 
 | Kind        | Meaning                                                                                                          |
 | ----------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -73,31 +78,19 @@ in its piece or read from a departure record between pieces:
 | `nowhere`   | No departure, and the end lies inside the drawn stretch: the walk has no step on this reference sequence past it |
 
 - For `beyond` and `elsewhere`, `pos` is the departure's far breakpoint,
-  `reversed` 1 where that step runs against the reference, `ownBp` the walk's bp
-  between the fragment's stretch and that step, a lead or tail included, and
-  `missingBp` the part between the contig's W lines
+  `reversed` is 1 where that step runs against the reference, `ownBp` is the
+  walk's bp between the fragment's stretch and that step, and `missingBp` is the
+  part between the contig's W lines
 - For `edge` and `nowhere`, `pos` is NaN and `reversed` and `missingBp` are 0.
-  `ownBp` is NaN for `edge`, and for `nowhere` the rest of the run the read
-  holds past the stretch, all of it off the reference
+  `ownBp` is NaN for `edge`, and for `nowhere` it is the rest of the run past
+  the stretch, all of it off the reference
 
 ## Reading a cut back as runs
 
-`fragmentRuns(tables, refName, holes)` reads a cut's tables, from
-`getCutForRange(...).tables()` or `getGraphForRange`, back as runs; `holes` are
-the walk file header's, which the tables do not state. It is what
-`getRunsForRange` returns for a cut that expands nothing, and the oracle the
-checks below hold it to. It does not refuse: it copies the tables' `revisited`,
-which a caller checks is 0.
+`fragmentRuns(tables, refName, holes)` converts a cut's tables to runs. `holes`
+are the walk file header's, which the tables lack. It returns what
+`getRunsForRange` returns for a cut that expands nothing, and it copies the
+tables' `revisited`, which the caller checks is 0.
 
-## What runs refuse
-
-A file whose header does not state `revisited:i:0` is refused with a
-`RunsRefusedError`, since a run off the reference could then hold a node the
-reference passes; a host cuts the window instead.
-
-## How runs are checked
-
-`getRunsForRange` equals `fragmentRuns` of the cut for every fixture window,
-plain and contained, and over the hosted GRCh38 file
-(`scripts/runs-equality.ts`), and `scripts/runs-mutants.ts` breaks the reader on
-purpose and holds each break to failing.
+`scripts/runs-equality.ts` checks that `getRunsForRange` equals `fragmentRuns`
+of the cut over every fixture window and over the hosted GRCh38 file.
