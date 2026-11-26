@@ -1951,7 +1951,7 @@ function expandedFacts(
   }
 }
 
-// The README's exception to an abridged file cutting as its twin: an unread
+// docs/reads.md's exception to an abridged file cutting as its twin: an unread
 // segment's `before` or `after` beside an abridged piece the cut did not
 // build, one ending where the segment starts or starting where it ends, is
 // NaN where the twin states the breakpoint

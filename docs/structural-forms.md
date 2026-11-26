@@ -9,6 +9,106 @@
 - **Measured on:** the published `hprc-v2.1-mc-grch38-f5.GRCh38.walks.bed.gz`,
   Node 24 on a laptop, 462 haplotypes once GRCh38 and CHM13 are left out
 
+## Usage
+
+```ts
+import {
+  describeForm,
+  formTag,
+  formsCut,
+  structuralForms,
+} from '@jbrowse/graph-walks'
+
+const region = { refName: 'chr1', start: 109_680_000, end: 109_715_000 }
+const haplotypes = await formsCut(reader, region)
+const result = structuralForms(haplotypes, { window: region })
+result.forms.map(f => `${f.members.length} ${describeForm(f)}`)
+// ['306 del 18.4kb', '156 ref']
+result.forms.map(f => formTag(f, result))
+// ['del 18.4kb', 'ref']
+```
+
+- `formsCut` cuts the region uncontained and without links, and returns each
+  haplotype's departures from the reference: exact REF span and ALT length,
+  inverted bp, and bp walked again by a step back along the reference. It
+  expands no walk: an abridged piece's `blocks` row gives the departures its
+  detail record gives
+- `formsCut` keeps to `FORMS_STEP_BUDGET` steps, or a larger `stepBudget`, and
+  throws `RegionTooLargeError` past it
+- `formsCut` takes `byteBudget`, and a region whose tiles the table puts past it
+  throws `RegionTooLargeError` before any read
+- `formsCut` reads each haplotype's departures off the cut's `departures`, every
+  one over the region, and its fragments' ends, so a haplotype that leaves the
+  region and rejoins the reference far away, or jumps over it whole, is a
+  departure with no step on it; `walkDepartures` does the same for any cut
+- A walk the graph stores back to front reads the other way round: one that
+  walks the reference only against it, or that leaves it behind where it
+  entered. A walk forward at its flanks keeps its orientation however much of
+  the region an inversion fills. A walk lying wholly inside an inverted block
+  cannot be told from one stored back to front, so a region inside an inversion
+  reports its carriers as reference
+- `structuralForms` groups the haplotypes that make the same changes at every
+  informative site. Each change is a `Mark`: an insertion, deletion,
+  replacement, inversion or duplication
+- Each mark in a result names its `site` in `sites` and its `state` key there. A
+  site is `edge`, `shared` (no form differs there) or informative, and
+  `formStateAt(result, form, site)` gives a form's state key at any of them.
+  `REFERENCE_STATE`, `NO_CALL_STATE` and `RARER_STATE` are the keys for no
+  change, no call and a rare change among no-calls
+- `placed` counts the haplotypes in a form, so a form's share is its members
+  over `placed`
+- `markTag`, `formTag` and `describeForm` label marks and forms, as
+  [Labels](#labels) shows
+- Every result holds plain data, so a worker can post it, and regrouping at
+  another floor needs no new cut
+- [The sections below](#sites-come-from-the-walks) give the grouping rules and
+  the measurements behind them
+
+| Option          | Effect                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `window`        | The region; marks must touch it, and `auto` reads its width                                                                          |
+| `floorBp`       | The smallest change a form tells apart; `auto` gives 50 bp, 1 kb or 10 kb by width                                                   |
+| `minCarriers`   | The fewest haplotypes a state or form needs; 1% of them, at least one, by default                                                    |
+| `joinBp`        | Departures of one haplotype nearer than this on the reference join, one under 50 bp on both sides only with another such; default 50 |
+| `exclude`       | Samples to leave out, such as a second reference carried as a haplotype; none by default                                             |
+| `foldRareForms` | Fold states and forms under `minCarriers` into the nearest common one they agree with, else `~` or `other`; on by default            |
+
+### Labels
+
+- `markTag(mark)` is the per-mark label and takes a `Mark` or a `SiteMark`. C4's
+  common change gives `del 6.37kb`
+- `formTag` names a form in about 20 characters for a row label: its largest
+  change's `markTag`, then ` +N` counting the rest. Given the result, it leaves
+  out the changes every form shares, and where two forms would read the same it
+  names the changes that tell them apart: C4's `del 32.7kb, del 6.37kb` and
+  `del 32.7kb, repl 6.32kb->32.7kb`
+- `describeForm` lists every change's `markTag`, largest first, comma-separated
+- Sizes take 3 significant figures with the unit attached (`94bp`, `6.46kb`,
+  `1.2Mb`), as `sizeTag` writes them
+- A change is a deletion where it runs 0 bp of the haplotype's own, an insertion
+  where it leaves out 0 bp of the reference, and a replacement where both sides
+  have bp, at any ratio: no size threshold names one. A mark gives one size
+  where a side is 0 bp and both otherwise, the reference's first
+- A mark is made of the departures that change the reference's length, walk it
+  backwards or walk it again, so a SNP beside a deletion neither widens it nor
+  names it. A departure under 50 bp on both sides joins only another such, so a
+  small indel beside a change does not name it either, while a repeat's change
+  that the walks split into small pieces still adds up. `refLength` is the
+  reference's side, `altLength` the haplotype's, and `delta` their difference
+- A state is one kind of change, so its name holds for every carrier: 119 bp
+  left out and 1 bp walked in place of 120 are two states
+- A deletion and an insertion elsewhere stay two changes, whatever their sizes
+
+| Change                         | Token                                                |
+| ------------------------------ | ---------------------------------------------------- |
+| deletion, insertion            | `del 18.4kb`, `ins 22kb`                             |
+| replacement                    | `repl 32.7kb->58.7kb`, `repl 37.2kb->6bp`            |
+| duplication                    | `dup 94.1kb`, and with R left out `dup 113kb->207kb` |
+| inversion                      | `inv 12kb`                                           |
+| no change, only shared changes | `ref`, `shared`                                      |
+| rare change, no call           | `rarer`, `no call`                                   |
+| more changes, in `formTag`     | `del 32.7kb +1`, `del 32.7kb, del 6.37kb`            |
+
 ## Sites come from the walks
 
 Each haplotype's departures from the reference path R give the sites. The
@@ -201,13 +301,13 @@ join neighbouring sites: AMY1 goes from 18 to 23 forms (ARI 0.915).
 
 `markTag` writes a mark as a short token, `formTag` a form as its largest token
 with ` +N` for the rest, and `describeForm` every token, largest first; the
-README's table lists them. `sizeTag` writes 3 significant figures. A mark gives
-one size where a side is 0 bp and both otherwise, R's first, so no label leaves
-a sum to its reader: `repl 6.35kb->26.4kb` at C4, and at AMY1 `dup 94.1kb` for a
-step back and `dup 113kb->207kb` for one joined to a 94 kb deletion and 19 kb
-walked reversed. Where two forms' row labels would read the same, `formTag`
-names, after the largest change, the changes that tell them apart, each the
-largest of those the most of the alike forms lack.
+[Usage](#labels)'s table lists them. `sizeTag` writes 3 significant figures. A
+mark gives one size where a side is 0 bp and both otherwise, R's first, so no
+label leaves a sum to its reader: `repl 6.35kb->26.4kb` at C4, and at AMY1
+`dup 94.1kb` for a step back and `dup 113kb->207kb` for one joined to a 94 kb
+deletion and 19 kb walked reversed. Where two forms' row labels would read the
+same, `formTag` names, after the largest change, the changes that tell them
+apart, each the largest of those the most of the alike forms lack.
 
 Row labels at the `auto` floor, 462 haplotypes once CHM13 is left out:
 

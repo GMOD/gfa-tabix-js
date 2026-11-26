@@ -13,7 +13,7 @@ import {
 import type { WalkCutOptions } from './walkReader.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
-const README = new URL('../README.md', import.meta.url).pathname
+const CUTTING_DOC = new URL('../docs/cutting.md', import.meta.url).pathname
 
 function open(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
@@ -30,8 +30,8 @@ const cellValue = (cell: string) =>
       ? cell === 'true'
       : Number(cell.replaceAll(',', ''))
 
-function readmePresets() {
-  const text = readFileSync(README, 'utf8')
+function documentedPresets() {
+  const text = readFileSync(CUTTING_DOC, 'utf8')
   const section = text.slice(
     text.indexOf('## Cut presets'),
     text.indexOf('## Fragments'),
@@ -84,8 +84,8 @@ async function tablesOf(
   return graph.tables(kept, fragments, departures, gaps)
 }
 
-test('the presets are the ones the README tabulates', () => {
-  expect(readmePresets()).toEqual(CUT_PRESETS)
+test('the presets are the ones docs/cutting.md tabulates', () => {
+  expect(documentedPresets()).toEqual(CUT_PRESETS)
 })
 
 test('the presets keep WALK_CONTEXT and differ only in their budgets', () => {

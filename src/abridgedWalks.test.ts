@@ -9,7 +9,7 @@ import { WalkReader } from './walkReader.ts'
 import type { WalkCutOptions } from './walkReader.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
-const README = new URL('../README.md', import.meta.url).pathname
+const READS_DOC = new URL('../docs/reads.md', import.meta.url).pathname
 
 function open(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
@@ -161,8 +161,8 @@ test('abridgedText says the bp off the reference not loaded in plain words', () 
   )
 })
 
-test('the README example is what ownends.R gives', async () => {
-  const text = readFileSync(README, 'utf8')
+test('the docs/reads.md example is what ownends.R gives', async () => {
+  const text = readFileSync(READS_DOC, 'utf8')
   const example = text.slice(text.indexOf('abridgedWalks(tables).map('))
   const lines = example
     .slice(0, example.indexOf('```'))
