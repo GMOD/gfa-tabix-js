@@ -213,7 +213,7 @@ does not build counts there by its `abridged` row's `hapBp`.
 
 `gaps` states what lies on each walk's contig between its fragments, past its
 first and last, and in its departures outside them, as
-[ADR 0001](adr/0001-a-cut-states-what-lies-between-fragments.md) decides. Each
+[ADR 0001](../agent-docs/adr/0001-a-cut-states-what-lies-between-fragments.md) decides. Each
 has `name`, `edge` (0 between two fragments, 1 a row's start, 2 its end, 3 a
 departure outside the row), `start`/`end` on the contig, the `fragment` it
 follows (or precedes, for a row's start), and `segments` in contig order whose

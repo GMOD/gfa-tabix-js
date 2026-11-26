@@ -56,7 +56,7 @@ export interface GraphTables {
   // R may be a copy of reference sequence the reference passes elsewhere
   revisited: number
   // what lies between each walk's fragments, past its ends and in its
-  // departures outside them, as docs/adr/0001 decides; absent from tables
+  // departures outside them, as agent-docs/adr/0001 decides; absent from tables
   // another source builds
   gaps?: GapTable
 }

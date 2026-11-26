@@ -1,6 +1,17 @@
-# Reads, budgets and abridged walks
+# Large genomic regions and abridged walks
 
-## Budgets
+A cut over a download, step or node cap throws a `RegionTooLargeError`. Where a
+stretch of the graph is too large, a file stores its costliest paths as abridged
+walks, and a cut loads their steps when `expand` names the walk.
+
+## Large genomic regions
+
+A cut reads every selected haplotype's walk through the region, so the data to
+download and the nodes to draw grow with the region's width and the number of
+haplotypes. A cut over a cap on download size, steps or nodes throws a
+`RegionTooLargeError`. The error has `bytes`, what the region would download,
+and `fitsBp`, about how wide a region would fit. `zoomHelps` is false where no
+narrower region fits.
 
 - Over the byte budget, the error's `bytes` is what the window would fetch, so a
   viewer with a fixed window can offer to load it anyway with `byteBudget`

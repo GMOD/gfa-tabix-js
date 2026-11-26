@@ -122,7 +122,7 @@ const runEnd = (run: WalkRun, bp: Float64Array) =>
 /**
  * Each walk's stretches between and past its fragments, and its departures
  * outside them, split into segments that partition each stretch, as
- * docs/adr/0001-a-cut-states-what-lies-between-fragments.md decides
+ * agent-docs/adr/0001-a-cut-states-what-lies-between-fragments.md decides
  */
 export function walkGaps({
   runs,

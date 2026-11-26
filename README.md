@@ -67,19 +67,32 @@ const gfaTabix = new GfaTabixFile({
 const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
 ```
 
+## Words used here
+
+- **Reference:** the one linear genome, such as GRCh38
+- **Haplotype:** one copy of a chromosome from one person
+- **Node and link:** a piece of DNA many haplotypes share, and the join to the
+  next
+- **Walk:** the route one haplotype takes through the nodes and links
+- **Window:** a stretch of the reference, also called a region
+- **Cut:** the nodes, links and walks under a window
+
 ## Docs
 
-- [Cutting a window](docs/cutting.md): every method and option, fragments,
-  departures, the GFA tabix file
-- [Reads, budgets and abridged walks](docs/reads.md): what a cut fetches
-- [Counts](docs/counts.md): haplotypes per node and link
-- [Runs](docs/runs.md): a range's walks as reference stretches and the bp
-  between
-- [Structural forms](docs/structural-forms.md): grouping haplotypes by change
-- [Migrating to 10](docs/migrating-to-10.md): from @jbrowse/graph-walks
-- [Migrating to graph-walks 8](docs/migrating-to-8.md): changes in 7 and 8
-- [ADR 0001](docs/adr/0001-a-cut-states-what-lies-between-fragments.md): gaps
-  between fragments
+Reference:
+
+- [Cutting a window](docs/cutting.md): every method and option, and the GFA
+  tabix file
+- [Large genomic regions and abridged walks](docs/reads.md):
+  `RegionTooLargeError`
+
+Views of the haplotypes under a window:
+
+- [Counts](docs/counts.md): haplotypes through each node and link
+- [Runs](docs/runs.md): each walk as reference stretches and the DNA between
+  them
+- [Structural forms](docs/structural-forms.md): haplotypes that make the same
+  change
 
 ## License
 
