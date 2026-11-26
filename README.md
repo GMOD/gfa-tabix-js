@@ -1,6 +1,6 @@
 # @jbrowse/graph-walks
 
-graph-walks is the reader for
+`@jbrowse/graph-walks` is the reader for
 [gfa-to-tabix](https://github.com/GMOD/gfa-to-tabix)'s pangenome files, as
 [@gmod/bam](https://github.com/GMOD/bam-js) is for BAM.
 

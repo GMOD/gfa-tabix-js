@@ -18,7 +18,7 @@ def arrow(x1, x2, y):
     out.append(f'<path d="M{x2},{y} l-12,-7 l0,14 Z" fill="{MUTED}"/>')
 
 out.append(f'<rect width="{W}" height="{H}" rx="12" fill="{CARD}"/>')
-t(W / 2, 52, 'graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file', 22)
+t(W / 2, 52, '@jbrowse/graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file', 21)
 
 PY, PH = 88, 240
 LY = PY + PH + 26
@@ -54,7 +54,7 @@ t(P1 + P1W / 2, LY + 8, 'you pick a stretch', 17)
 t(P3 + P3W / 2, LY + 8, 'you get each genome’s route', 17)
 
 svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
+<title>@jbrowse/graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
 {chr(10).join(out)}
 </svg>
 '''
