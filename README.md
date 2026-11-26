@@ -4,22 +4,20 @@
 [gfa-to-tabix](https://github.com/GMOD/gfa-to-tabix)'s pangenome files, as
 [@gmod/bam](https://github.com/GMOD/bam-js) is for BAM.
 
-It fetches only the part of the graph under a stretch of the reference, such as
-one gene, by range requests from a web server, so a genome browser can draw it.
+A pangenome graph stores many people's genomes on one reference genome, with a
+branch wherever someone's DNA differs. graph-walks fetches only the part under a
+stretch of the reference, such as one gene, by range requests, so a genome
+browser can draw it.
 
 ![A stretch of chromosome 6, and an arrow to each genome's route through it, as colored lines through shared pieces of DNA, one detouring through extra DNA and one skipping a part](docs/hero.svg)
-
-A pangenome graph stores many people's genomes together: one reference genome,
-with a branch wherever someone's DNA differs from it.
 
 - **In:** a walk file from `gfa-to-tabix --walks`, or its older segment index,
   and a region such as `chr6:160,614,798-160,647,758`
 - **Out:** each haplotype's walk through the region, and the nodes and links
   they visit
 
-The JBrowse graph plugin, BandageJS, jb2hubs and the sequenceTubeMap fork read
-through it for a browser track, and ggbandage and ggtubemap for a static figure
-([Cut presets](docs/cutting.md#cut-presets)).
+Used by the JBrowse graph plugin, BandageJS, jb2hubs, the sequenceTubeMap fork,
+ggbandage and ggtubemap.
 
 ## Install
 
@@ -47,13 +45,11 @@ const { graph, kept, fragments, departures } = await reader.cut(
 const tables = graph.tables(kept, fragments, departures)
 ```
 
-- `WalkReader.open(url)` reads `url` and `url.idx` by range requests;
-  `WalkReader.open(url, url => new LocalFile(url))` reads local files
+- `WalkReader.open(url)` reads `url` and `url.idx` by range requests; pass
+  `url => new LocalFile(url)` from generic-filehandle2 as a second argument to
+  read local files
 - `tables` holds the nodes, the links, each walk's steps, and every place a walk
   leaves the reference
-- To try it, jbrowse.org hosts the HPRC release 2.1 walk files used above
-- Every reader method and cut option is in
-  [The reader](docs/cutting.md#the-reader)
 
 ## Docs
 
