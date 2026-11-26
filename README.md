@@ -9,7 +9,7 @@ branch wherever someone's DNA differs. graph-walks fetches only the part under a
 stretch of the reference, such as one gene, by range requests, so a genome
 browser can draw it.
 
-![A stretch of chromosome 6, and an arrow to each genome's route through it, as colored lines through shared pieces of DNA, one detouring through extra DNA and one skipping a part](docs/hero.svg)
+![A stretch of chromosome 6 zooms out into each genome's route through it, as colored lines through shared pieces of DNA, one detouring through extra DNA and one skipping a part](docs/hero.svg)
 
 - **In:** a walk file from `gfa-to-tabix --walks`, or its older segment index,
   and a region such as `chr6:160,614,798-160,647,758`

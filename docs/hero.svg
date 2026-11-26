@@ -1,22 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="358" viewBox="0 0 900 358" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
 <title>@jbrowse/graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
-<rect width="900" height="358" rx="12" fill="#ffffff"/>
+<rect width="900" height="420" rx="12" fill="#ffffff"/>
 <text x="450.0" y="52.0" font-size="21" fill="#1f2328" font-weight="600" text-anchor="middle">@jbrowse/graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file</text>
-<rect x="30.0" y="88.0" width="300.0" height="240.0" rx="12" fill="#f6f8fa" stroke="#c3cad3" stroke-width="1"/>
-<rect x="58.0" y="158.0" width="244.0" height="24.0" rx="12" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
-<path d="M199.5,182 L78,235 L282,235 L219.0,182 Z" fill="#fff1d6"/>
-<rect x="199.5" y="154.0" width="19.5" height="32.0" rx="4" fill="#9a6700" stroke="none" stroke-width="1"/>
-<rect x="78.0" y="235.0" width="204.0" height="36.0" rx="6" fill="#fff1d6" stroke="#9a6700" stroke-width="2"/>
-<text x="180.0" y="132.0" font-size="15" fill="#59636e" font-weight="400" text-anchor="middle">chromosome 6</text>
-<rect x="420.0" y="88.0" width="450.0" height="240.0" rx="12" fill="#f6f8fa" stroke="#c3cad3" stroke-width="1"/>
-<rect x="450.0" y="184.0" width="78.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
-<rect x="543.6" y="184.0" width="78.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
-<rect x="668.4" y="184.0" width="78.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
-<rect x="762.0" y="184.0" width="78.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
-<rect x="619.5" y="130.0" width="51.0" height="30.0" rx="4" fill="#ddeaff" stroke="#0969da" stroke-width="1.5"/>
-<path d="M442,200 L607.6,200 C621.6,200 615.5,145 629.5,145 L660.5,145 C674.5,145 668.4,200 682.4,200 L848,200" fill="none" stroke="#0969da" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M442,214 L848,214" fill="none" stroke="#8c959f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M442,228 L524.0,228 C559.2,290 730.8,290 766.0,228 L848,228" fill="none" stroke="#cf222e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M352,208.0 L394,208.0" fill="none" stroke="#59636e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M398,208.0 l-12,-7 l0,14 Z" fill="#59636e"/>
+<text x="106.0" y="117.0" font-size="15" fill="#59636e" font-weight="400" text-anchor="end">chr6</text>
+<rect x="120.0" y="102.0" width="660.0" height="20.0" rx="10" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
+<path d="M502.8,122 L30,170 L870,170 L542.4,122 Z" fill="#fff1d6"/>
+<rect x="502.8" y="98.0" width="39.6" height="28.0" rx="4" fill="#9a6700" stroke="none" stroke-width="1"/>
+<rect x="30.0" y="170.0" width="840.0" height="220.0" rx="12" fill="#f6f8fa" stroke="#9a6700" stroke-width="2"/>
+<rect x="90.0" y="259.0" width="144.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
+<rect x="262.8" y="259.0" width="144.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
+<rect x="493.2" y="259.0" width="144.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
+<rect x="666.0" y="259.0" width="144.0" height="60.0" rx="4" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
+<rect x="408.0" y="205.0" width="84.0" height="30.0" rx="4" fill="#ddeaff" stroke="#0969da" stroke-width="1.5"/>
+<path d="M82,275 L392.8,275 C406.8,275 404.0,220 418.0,220 L482.0,220 C496.0,220 493.2,275 507.2,275 L818,275" fill="none" stroke="#0969da" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M82,289 L818,289" fill="none" stroke="#8c959f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M82,303 L230.0,303 C291.6,365 608.4,365 670.0,303 L818,303" fill="none" stroke="#cf222e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
