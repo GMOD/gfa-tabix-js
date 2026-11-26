@@ -67,8 +67,12 @@ const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
 
 ## Docs
 
-- [API reference](docs/api.md): start here for options, the returned tables and
-  errors. It links to the pages on the other methods
+- [API reference](docs/api.md)
+
+## See also
+
+- [gfa-to-tabix](https://github.com/GMOD/gfa-to-tabix), which writes the files
+  this package reads
 
 ## License
 
