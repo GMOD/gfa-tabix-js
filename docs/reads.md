@@ -39,7 +39,7 @@ narrower region fits.
   fetched for records' own steps count against `byteBudget` with the window's,
   and a cut they would take past it throws the same `RegionTooLargeError` before
   fetching any of them, so a window attaches the own steps of every record that
-  [gets them](cutting.md#departures) or of none. The `blocks` units a cut reads
+  [gets them](api.md#departures) or of none. The `blocks` units a cut reads
   count against `byteBudget` too. The detail records `expand` names count only
   against `stepBudget`, once read; the writer moves paths out of any tile whose
   rows would compress past its header's `abridgebytes`
@@ -118,8 +118,7 @@ narrower region fits.
   alone:
   - those whose span lies over the drawn stretch
   - those between two such pieces of a line, by piece number
-  - those holding the own steps of a record that
-    [gets them](cutting.md#departures)
+  - those holding the own steps of a record that [gets them](api.md#departures)
   - in a contained cut with context, the piece whose last steps the context
     reaches before a piece over the drawn stretch
 - With `expand` naming the walk, the cut reads those pieces from their detail
@@ -132,7 +131,7 @@ narrower region fits.
   places, departures with their steps and `breakAt`, and gaps, except:
   - an `unread` gap segment's `before` or `after` beside an abridged piece the
     cut did not build is NaN, where the twin states the breakpoint
-    ([Gaps](cutting.md#gaps))
+    ([Gaps](api.md#gaps))
   - `fragments` come in no stated order, so the two can list them differently;
     `graph.tables` orders the walks of both alike
 - Every other piece of a tile under the window is its bp alone, from its
@@ -220,7 +219,7 @@ A cut reads these units, each once:
   in the HPRC file reads 519 detail units, back to back in two stretches of the
   file, by 4 reads, the same bytes
 - **Tiles fetched to attach:** for each record within `attachBp` that leaves or
-  rejoins on the window or its context ([Departures](cutting.md#departures)) and
+  rejoins on the window or its context ([Departures](api.md#departures)) and
   whose leave piece or rejoin piece the window's tiles lack, the tiles its
   `ownTiles` names. No `blocks` unit is read for them: an unexpanded piece's own
   run comes from its `abridged` row and the record

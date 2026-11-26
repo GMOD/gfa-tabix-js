@@ -13,7 +13,7 @@ import {
 import type { WalkCutOptions } from './walkFile.ts'
 
 const DATA = new URL('../test_data/', import.meta.url).pathname
-const CUTTING_DOC = new URL('../docs/cutting.md', import.meta.url).pathname
+const API_DOC = new URL('../docs/api.md', import.meta.url).pathname
 
 function open(fixture: string) {
   const path = `${DATA}${fixture}.walks.gz`
@@ -31,10 +31,10 @@ const cellValue = (cell: string) =>
       : Number(cell.replaceAll(',', ''))
 
 function documentedPresets() {
-  const text = readFileSync(CUTTING_DOC, 'utf8')
+  const text = readFileSync(API_DOC, 'utf8')
   const section = text.slice(
     text.indexOf('## Cut presets'),
-    text.indexOf('## Fragments'),
+    text.indexOf('## Tables'),
   )
   const browser: Record<string, number | boolean> = {}
   const figure: Record<string, number | boolean> = {}
@@ -82,7 +82,7 @@ async function tablesOf(
   return graph.tables(kept, fragments, departures, gaps)
 }
 
-test('the presets are the ones docs/cutting.md tabulates', () => {
+test('the presets are the ones docs/api.md tabulates', () => {
   expect(documentedPresets()).toEqual(CUT_PRESETS)
 })
 
