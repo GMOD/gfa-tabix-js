@@ -7,6 +7,8 @@ graph-walks is the reader for
 It fetches only the part of the graph under a stretch of the reference, such as
 one gene, by range requests from a web server, so a genome browser can draw it.
 
+![Two panels: you pick a stretch of chromosome 6, and you get each genome's route through it, as colored lines through shared pieces of DNA, one detouring through extra DNA and one skipping a part](docs/hero.svg)
+
 A pangenome graph stores many people's genomes together: one reference genome,
 with a branch wherever someone's DNA differs from it.
 

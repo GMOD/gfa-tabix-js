@@ -39,6 +39,7 @@
   "scripts": {
     "build": "rm -rf esm && tsc -p tsconfig.build.json",
     "typecheck": "tsrs --noEmit",
+    "hero": "python3 scripts/hero.py docs/hero.svg",
     "lint": "oxlint --deny-warnings --report-unused-disable-directives",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
