@@ -1,11 +1,11 @@
 # @jbrowse/graph-walks
 
-graph-walks is the JavaScript reader for the files
-[gfa-to-tabix](https://github.com/GMOD/gfa-to-tabix) writes, the way
-[@gmod/bam](https://github.com/GMOD/bam-js) reads BAM files: gfa-to-tabix turns
-a pangenome graph into indexed files you host on a web server, and graph-walks
-fetches only the part under a stretch of the reference, such as one gene, by
-range requests, so a genome browser can draw it.
+graph-walks is the reader for
+[gfa-to-tabix](https://github.com/GMOD/gfa-to-tabix)'s pangenome files, as
+[@gmod/bam](https://github.com/GMOD/bam-js) is for BAM.
+
+It fetches only the part of the graph under a stretch of the reference, such as
+one gene, by range requests from a web server, so a genome browser can draw it.
 
 A pangenome graph stores many people's genomes together: one reference genome,
 with a branch wherever someone's DNA differs from it.
