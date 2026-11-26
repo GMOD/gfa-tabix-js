@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="380" viewBox="0 0 900 380" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="358" viewBox="0 0 900 358" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
 <title>@jbrowse/graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
-<rect width="900" height="380" rx="12" fill="#ffffff"/>
+<rect width="900" height="358" rx="12" fill="#ffffff"/>
 <text x="450.0" y="52.0" font-size="21" fill="#1f2328" font-weight="600" text-anchor="middle">@jbrowse/graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file</text>
 <rect x="30.0" y="88.0" width="300.0" height="240.0" rx="12" fill="#f6f8fa" stroke="#c3cad3" stroke-width="1"/>
 <rect x="58.0" y="158.0" width="244.0" height="24.0" rx="12" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
@@ -19,6 +19,4 @@
 <path d="M442,228 L524.0,228 C559.2,290 730.8,290 766.0,228 L848,228" fill="none" stroke="#cf222e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 <path d="M352,208.0 L394,208.0" fill="none" stroke="#59636e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
 <path d="M398,208.0 l-12,-7 l0,14 Z" fill="#59636e"/>
-<text x="180.0" y="362.0" font-size="17" fill="#1f2328" font-weight="600" text-anchor="middle">you pick a stretch</text>
-<text x="645.0" y="362.0" font-size="17" fill="#1f2328" font-weight="600" text-anchor="middle">you get each genome’s route</text>
 </svg>

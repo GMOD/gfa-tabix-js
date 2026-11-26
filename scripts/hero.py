@@ -1,5 +1,5 @@
 import sys
-W, H = 900, 380
+W, H = 900, 358
 INK, MUTED, CARD, BOX, BOXS, PANEL = '#1f2328', '#59636e', '#ffffff', '#e6eaef', '#c3cad3', '#f6f8fa'
 REF, A, B, HI, HIBG = '#8c959f', '#cf222e', '#0969da', '#9a6700', '#fff1d6'
 out = []
@@ -21,7 +21,6 @@ out.append(f'<rect width="{W}" height="{H}" rx="12" fill="{CARD}"/>')
 t(W / 2, 52, '@jbrowse/graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file', 21)
 
 PY, PH = 88, 240
-LY = PY + PH + 26
 
 P1, P1W = 30, 300
 rect(P1, PY, P1W, PH, PANEL, BOXS, 12)
@@ -50,8 +49,6 @@ path(f'M{X0 - 8},{ya} L{nx(.2) - 4:.1f},{ya} C{nx(.28):.1f},{ya + 62} {nx(.72):.
 
 arrow(P1 + P1W + 22, P3 - 22, PY + PH / 2)
 
-t(P1 + P1W / 2, LY + 8, 'you pick a stretch', 17)
-t(P3 + P3W / 2, LY + 8, 'you get each genome’s route', 17)
 
 svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
 <title>@jbrowse/graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
