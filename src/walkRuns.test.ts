@@ -15,7 +15,7 @@ import {
 } from './testing.ts'
 import { panSNHaplotypeOrSample } from './util.ts'
 import { WalkContainer } from './walkContainer.ts'
-import { departureStretch, squeezer } from './walkDeparture.ts'
+import { ATTACH_BP, departureStretch, squeezer } from './walkDeparture.ts'
 import { chainDepartures, walkDepartures } from './walkDepartures.ts'
 import { WalkFile } from './walkFile.ts'
 import {
@@ -87,7 +87,7 @@ const CASES = [
   'beyond',
   'elsewhere',
   'edge',
-  'ends',
+  'nowhere',
 ] as const
 
 type Case = (typeof CASES)[number]
@@ -281,6 +281,7 @@ interface Sweep {
   departuresCompared: number
   departureMismatches: string[]
   overBytes: string[]
+  attachChanges: number
   details: string[]
 }
 
@@ -297,6 +298,7 @@ async function sweep(): Promise<Sweep> {
     departuresCompared: 0,
     departureMismatches: [],
     overBytes: [],
+    attachChanges: 0,
     details: [],
   }
   for (const name of FIXTURES) {
@@ -333,10 +335,15 @@ async function sweep(): Promise<Sweep> {
         return held
       })
       for (const region of regions) {
+        const byDefault = new Map<boolean, WalkRuns>()
         for (const contained of [false, true]) {
-          for (const context of [0, 10]) {
-            const opts = { contained, context }
-            const where = `${name} ${refName}:${region.start}-${region.end} ${contained ? 'contained' : 'plain'} context ${context}`
+          for (const [context, attachBp] of [
+            [0, ATTACH_BP],
+            [10, ATTACH_BP],
+            [10, 3],
+          ] as const) {
+            const opts = { contained, context, attachBp }
+            const where = `${name} ${refName}:${region.start}-${region.end} ${contained ? 'contained' : 'plain'} context ${context} attachBp ${attachBp}`
             const cut = await settle(
               reader.getCutForRange(refName, region.start, region.end, {
                 ...opts,
@@ -364,13 +371,24 @@ async function sweep(): Promise<Sweep> {
                 refName,
                 region.start,
                 region.end,
-                { context },
+                { context, attachBp },
               )
               if (bytes > allowed) {
                 out.overBytes.push(`${where}: ${bytes} > ${allowed}`)
               }
               const c = cut.value
               const read = runs.value
+              if (context === 10 && attachBp === ATTACH_BP) {
+                byDefault.set(contained, read)
+              }
+              const held = byDefault.get(contained)
+              if (
+                attachBp !== ATTACH_BP &&
+                held &&
+                firstDifference(read, held) !== undefined
+              ) {
+                out.attachChanges++
+              }
               const tables = tablesOf(c)
               const expected = fragmentRuns(tables, refName, header.holes)
               const found = firstDifference(read, expected)
@@ -404,7 +422,7 @@ async function sweep(): Promise<Sweep> {
   return out
 }
 
-describe('the fixture sweep: every fixture and reference sequence, plain and contained, with context 0 and 10', () => {
+describe('the fixture sweep: every fixture and reference sequence, plain and contained, with context 0 and 10 and attachBp the default and 3', () => {
   let result: Sweep
   beforeAll(async () => {
     result = await sweep()
@@ -418,7 +436,7 @@ describe('the fixture sweep: every fixture and reference sequence, plain and con
       `ends held to the gaps: ${[...result.gaps].map(([c, n]) => `${c} ${n}`).join(', ')}`,
     )
     console.warn(
-      `haplotypes whose departures walkDepartures and the runs both read: ${result.departuresCompared}`,
+      `haplotypes whose departures walkDepartures and the runs both read: ${result.departuresCompared}; windows whose runs attachBp 3 changes: ${result.attachChanges}`,
     )
   }, 900_000)
 
@@ -822,7 +840,7 @@ describe('getRunsForRange takes a range as the other range methods do', () => {
       await file.getRunsForRange('GRCh38#0#chrM', 1000, 1500),
     )
     const cut = await file.getCutForRange('chrM', 1000, 1500)
-    expect(byContig).toEqual(fragmentRuns(cut.tables(), 'GRCh38#0#chrM'))
+    expect(byContig).toEqual(fragmentRuns(cut.tables(), 'GRCh38#0#chrM', []))
   })
 
   test('haplotypes keeps their walks beside the reference’s, as getGraphForRange does', async () => {
@@ -833,7 +851,7 @@ describe('getRunsForRange takes a range as the other range methods do', () => {
     const { tables } = await file.getGraphForRange('chrM', 1000, 1500, {
       haplotypes: ['CHM13#0'],
     })
-    expect(runs).toEqual(fragmentRuns(tables, 'GRCh38#0#chrM'))
+    expect(runs).toEqual(fragmentRuns(tables, 'GRCh38#0#chrM', []))
     expect(new Set(runs.walks.names.map(panSNHaplotypeOrSample))).toEqual(
       new Set(['GRCh38#0', 'CHM13#0']),
     )

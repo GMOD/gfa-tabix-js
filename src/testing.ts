@@ -492,7 +492,7 @@ interface Segment {
  * that rejoins covers its own bp past the fragment with that row, every
  * `own` segment there of its missingBp, and where an `unread` segment
  * follows that bp, the row states the end's breakpoint there; an end where
- * the walk ends has only bp the cut read and kept out past it; at the drawn
+ * the walk has no step on the reference has only bp the cut read and kept out past it; at the drawn
  * edge, an `unread` segment beside the fragment starts at its breakpoint
  */
 export function endsAgainstGaps(runs: WalkRuns, tables: GraphTables) {
@@ -607,9 +607,9 @@ export function endsAgainstGaps(runs: WalkRuns, tables: GraphTables) {
               label,
             )
           }
-        } else if (kind === 'ends') {
+        } else if (kind === 'nowhere') {
           tally(
-            'an end where the walk ends holds only bp read past it',
+            'an end with no step on the reference past it holds only bp read past it',
             ends.ownBp[p] === held + trimmed &&
               segments.every(x => x.kind === 'read') &&
               (trimmed === 0

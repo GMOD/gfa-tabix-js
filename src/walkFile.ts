@@ -304,20 +304,22 @@ export interface GraphForRangeOptions
 
 export interface CountsForRangeOptions extends WalkCountOptions, OnReference {}
 
-export type WalkRunsOptions = Pick<
+type WalkRunsOptions = Pick<
   WalkCutOptions,
   | 'signal'
   | 'keep'
   | 'context'
   | 'contained'
+  | 'attachBp'
   | 'byteBudget'
   | 'departureByteBudget'
   | 'budgetNames'
 >
 
-export interface RunsForRangeOptions extends WalkRunsOptions, OnReference {
-  // the `sample#haplotype` walks to keep beside the reference, where `keep`
-  // is not given; every walk when undefined or empty
+export interface RunsForRangeOptions
+  extends Omit<WalkRunsOptions, 'keep'>, OnReference {
+  // the `sample#haplotype` walks to keep beside the reference; every walk when
+  // undefined or empty
   haplotypes?: string[]
 }
 
@@ -2126,15 +2128,17 @@ export class WalkFile {
   }
 
   /**
-   * The walks getCutForRange returns for the range with the same options, as
-   * runs (walkRuns.ts), read from the rows without decoding a step: each
-   * walk row's route choices and each abridged piece's blocks row, from the
-   * tiles and departure blocks over the window and its context and those
-   * tiles' blocks units, with no detail unit and no tile past them. Walks
-   * are those `keep` accepts, or of the `haplotypes` asked for beside the
-   * reference's, every one by default. It refuses a file whose header does
-   * not state revisited:i:0 with a RunsRefusedError, and a window past the
-   * byte budgets as a cut does.
+   * The walks of a cut of the range that expands nothing, with the same
+   * `context`, `contained` and `attachBp`, as runs (walkRuns.ts), read from
+   * the rows without decoding a step: each walk row's route choices and each
+   * abridged piece's blocks row, from the tiles and departure blocks over the
+   * window and its context and those tiles' blocks units, with no detail
+   * unit and no attach tile. Its walks are the reference's and those of the
+   * `haplotypes` asked for, every one by default. It refuses a file whose
+   * header does not state revisited:i:0 with a RunsRefusedError, so its
+   * `revisited` is always 0, and a window past the byte budgets as a cut
+   * does; it never refuses on a step budget, node limit or placeholder
+   * limit.
    */
   async getRunsForRange(
     refName: string,
@@ -2147,10 +2151,7 @@ export class WalkFile {
     return this.runs(
       sequence.refName,
       { start, end },
-      {
-        ...rest,
-        keep: rest.keep ?? walksKept(haplotypes, sequence.refName),
-      },
+      { ...rest, keep: walksKept(haplotypes, sequence.refName) },
     )
   }
 
@@ -2164,6 +2165,7 @@ export class WalkFile {
       keep,
       context = WALK_CONTEXT,
       contained = false,
+      attachBp = ATTACH_BP,
       byteBudget = WALK_BUDGETS.byteBudget,
       departureByteBudget = WALK_BUDGETS.departureByteBudget,
     } = opts
@@ -2296,7 +2298,7 @@ export class WalkFile {
       const runs = (ownRecords.get(piece.name) ?? []).flatMap(d => {
         const stretch = ownStretch(piece, d)
         return stretch
-          ? [{ ...stretch, attached: attachesOwnSteps(d, drawn, ATTACH_BP) }]
+          ? [{ ...stretch, attached: attachesOwnSteps(d, drawn, attachBp) }]
           : []
       })
       return (
@@ -2384,5 +2386,3 @@ export class WalkFile {
 export type CutForRange = Awaited<ReturnType<WalkFile['getCutForRange']>>
 
 export type GraphForRange = Awaited<ReturnType<WalkFile['getGraphForRange']>>
-
-export type RunsForRange = Awaited<ReturnType<WalkFile['getRunsForRange']>>

@@ -13,7 +13,6 @@ export type {
   FormsForRangeOptions,
   GraphForRange,
   GraphForRangeOptions,
-  RunsForRange,
   RunsForRangeOptions,
   WalkCountOptions,
   WalkCutOptions,
@@ -59,19 +58,8 @@ export { ATTACH_BP, departureKind, placementChoice } from './walkDeparture.ts'
 export type { DepartureKind, WalkDeparture } from './walkDeparture.ts'
 export { GAP_KINDS } from './walkGaps.ts'
 export type { GapKind, GapSegment, WalkGap } from './walkGaps.ts'
-export {
-  END_KINDS,
-  RunsRefusedError,
-  fragmentRuns,
-  runDepartures,
-} from './walkRuns.ts'
-export type {
-  EndKind,
-  RunDeparture,
-  WalkDeparting,
-  WalkEnds,
-  WalkRuns,
-} from './walkRuns.ts'
+export { END_KINDS, RunsRefusedError, fragmentRuns } from './walkRuns.ts'
+export type { EndKind, WalkEnds, WalkRuns } from './walkRuns.ts'
 export { COUNT_REASONS, countReasons } from './walkCounts.ts'
 export type { CountColumns, CountReason, WalkCounts } from './walkCounts.ts'
 export { FORMS_STEP_BUDGET, walkDepartures } from './walkDepartures.ts'

@@ -28,13 +28,13 @@ import type { ChainEvent } from './walkDepartures.ts'
  * What a walk does past one end of a fragment, read from the departure that
  * leaves its last step on the reference, or rejoins its first: `beyond`, it
  * is next on the reference past the drawn stretch on that side, the same way
- * round; `elsewhere`, it is next on the reference reversed, or back on the
- * other side; `edge`, no departure, and the end lies on the drawn stretch's
- * edge, so whatever the walk does next lies off it; `ends`, no departure and
- * the end lies inside the drawn stretch: the walk has no step on the
- * reference sequence past it.
+ * round; `elsewhere`, any other departure, reversed, back on the other side
+ * or with its far end inside the drawn stretch; `edge`, no departure, and the
+ * end lies on the drawn stretch's edge, so whatever the walk does next lies
+ * off it; `nowhere`, no departure and the end lies inside the drawn stretch:
+ * the walk has no step on the reference sequence past it.
  */
-export const END_KINDS = ['beyond', 'elsewhere', 'edge', 'ends'] as const
+export const END_KINDS = ['beyond', 'elsewhere', 'edge', 'nowhere'] as const
 
 export type EndKind = (typeof END_KINDS)[number]
 
@@ -44,9 +44,10 @@ export type EndKind = (typeof END_KINDS)[number]
  * for a `before` end and its rejoin for an `after` one, `reversed` 1 where
  * that step runs against the reference, `ownBp` the walk's bp between the
  * fragment's stretch and that step, a lead or tail included, and
- * `missingBp` the part between the contig's W lines. For `ends`, `ownBp` is
- * the walk's bp the read holds past the stretch, all of it off the
- * reference; for `edge` it is NaN. `pos` is NaN for both.
+ * `missingBp` the part between the contig's W lines. For `nowhere`, `ownBp`
+ * is the rest of the run the read holds past the stretch, all of it off the
+ * reference; for `edge` it is NaN. For both, `pos` is NaN and `reversed` and
+ * `missingBp` are 0.
  */
 export interface WalkEnds {
   kinds: Uint8Array
@@ -65,11 +66,18 @@ export interface WalkEnds {
  * at `offsets[p]` up to `offsets[p + 1]`, each over `[starts, starts + bp)`
  * of the reference, `against` 1 where the walk takes it against the
  * reference, `offBefore` the bp of the walk's own run before it, 0 for a
- * fragment's first, and `loaded` 0 where that run holds a placeholder, a
- * stretch of a piece the read did not load. `leadBp` and `tailBp` are the
- * bp off the reference before a fragment's first stretch and after its last,
- * a contained cut's context. The reference's nodes are those of its
- * fragments, and the drawn stretch spans them.
+ * fragment's first, and `loaded` 0 where that run holds a placeholder: the
+ * file abridged its piece, so it reports the file's abridging, not which
+ * nodes a host loaded. Stretches either side of a hole follow on with
+ * `offBefore` 0, so a consumer takes `holes` out before calling the gap a
+ * deletion. In a plain cut a fragment's stretches can lie off the drawn
+ * stretch and off the reference's nodes, where the walk goes away and comes
+ * back; a contained cut keeps them on it. `leadBp` and `tailBp` are the bp
+ * off the reference before a fragment's first stretch and after its last, a
+ * contained cut's context. The reference's nodes are those of its fragments,
+ * and the drawn stretch spans them, NaN where the reference has no node over
+ * the window. `departing` leaves out a walk with a fragment, even where it
+ * also jumps the window elsewhere.
  */
 export interface WalkRuns {
   refName: string
@@ -112,9 +120,6 @@ export interface WalkRuns {
     rejoinReversed: Uint8Array
   }
 }
-
-// A WalkRuns' departing departures, of walks with no fragment
-export type WalkDeparting = WalkRuns['departing']
 
 /**
  * A file whose header does not state revisited:i:0: a run off the reference
@@ -1073,11 +1078,11 @@ function runsTables(
         : 'elsewhere'
       : pastDrawn(at)
         ? 'edge'
-        : 'ends'
+        : 'nowhere'
     ends.kinds[p] = END_KINDS.indexOf(kind)
     ends.pos[p] = d ? d.pos : Number.NaN
     ends.reversed[p] = d?.reversed === true ? 1 : 0
-    ends.ownBp[p] = d ? d.ownBp : kind === 'ends' ? readBp : Number.NaN
+    ends.ownBp[p] = d ? d.ownBp : kind === 'nowhere' ? readBp : Number.NaN
     ends.missingBp[p] = d ? d.missingBp : 0
   }
   fragments.forEach((f, p) => {
@@ -1130,14 +1135,15 @@ function runsTables(
  * A cut's tables read back as runs: each walk-table walk a fragment, its
  * steps on the reference grouped into stretches and those off it into runs,
  * and its ends from the departure table's departure leaving its last step on
- * the reference, or rejoining its first. `holes` are the walk file's on
- * `refName`, which the tables do not state. This is what WalkFile.getRunsForRange
- * must return for the same window and options.
+ * the reference, or rejoining its first. `holes` are the walk file's
+ * header's, which the tables do not state. It does not refuse: it copies the
+ * tables' `revisited`, which a caller checks is 0. It is what
+ * WalkFile.getRunsForRange returns for a cut that expands nothing.
  */
 export function fragmentRuns(
   { nodes, walks, departures, revisited }: GraphTables,
   refName: string,
-  holes: Hole[] = [],
+  holes: Hole[],
 ): WalkRuns {
   const refStarts = walks.refStarts ?? new Float64Array(walks.steps.length)
   const leaving = new Map<string, number>()
