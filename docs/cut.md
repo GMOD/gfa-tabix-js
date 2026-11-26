@@ -87,8 +87,8 @@ once.
 first and last fragment, and in its departures outside them.
 
 - A gap has `name`, `start` and `end` on the contig, the `fragment` it follows,
-  and `edge`: 0 between two fragments, 1 at the start of a walk row, 2 at its
-  end, 3 for a departure outside the row
+  or precedes at the start of a row, and `edge`: 0 between two fragments, 1 at
+  the start of a walk row, 2 at its end, 3 for a departure outside the row
 - Its `segments` are in contig order and their `bp` sum to `end - start`
 
 | Segment kind | Meaning                                                                               |

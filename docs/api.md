@@ -34,26 +34,25 @@ const walks = new WalkFile({
   `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38-f8.GRCh38.walks.gz` and
   `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-chm13-f8.CHM13.walks.gz`
 
-## Methods
+## Reading a range
 
-`getGraphForRange(refName, start, end, opts)` returns
-`{ tables, refName, sample, sequences }`: the graph over the range as
-[tables](#tables), the sequence's full name, the reference sample, and each
-node's bases when `sequences: true` asks for them.
+```ts
+const { tables, refName, sample } = await walks.getGraphForRange(
+  'chr6',
+  160_614_797,
+  160_647_758,
+  { haplotypes: ['HG00097', 'HG00133'] },
+)
+```
 
-`haplotypes` is a list of PanSN prefixes such as `HG00097` or `HG002#1`. The cut
-keeps the reference and the haplotypes named, or every haplotype when the list
-is empty.
-
-Methods that take no range:
-
-| Method                            | Returns                                                               |
-| --------------------------------- | --------------------------------------------------------------------- |
-| `getHeader()`                     | The reference sample, every haplotype with rows, and the tile size    |
-| `getReferenceSequences()`         | The sequences a range can be on, in full PanSN: `GRCh38#0#chr6`       |
-| `getSequenceName(sample, contig)` | The file's name for a contig on a sample, undefined where it has none |
-| `getSequenceLength(refName)`      | Where the sequence's reference ends, 0 for a sequence the file lacks  |
-| `getUnits(refName)`               | The sequence's unit table, empty for a sequence the file lacks        |
+- `getGraphForRange(refName, start, end, opts)` returns the graph over the range
+  as [tables](#tables), with the sequence's full `refName` and the reference
+  `sample`
+- `haplotypes` is a list of PanSN prefixes such as `HG00097` or `HG002#1`. The
+  cut keeps the reference and the haplotypes named, or every haplotype when the
+  list is empty
+- `sequences: true` adds `sequences`, each node's bases by id, from a file
+  written with `--sequences`
 
 ### Naming the range
 
@@ -77,7 +76,6 @@ Methods that take no range:
 | Option                | Effect                                                                                 | Default        |
 | --------------------- | -------------------------------------------------------------------------------------- | -------------- |
 | `haplotypes`          | The walks to keep beside the reference, by PanSN prefix                                | every walk     |
-| `keep`                | `getCutForRange`'s filter on `sample#haplotype#contig`, the reference's walk included  | every walk     |
 | `referenceSample`     | The sample whose contig `refName` names                                                | header's first |
 | `context`             | bp of reference kept past each end of the range                                        | 1000           |
 | `contained`           | `true` keeps each walk within the window; see [Contained cuts](cut.md#contained-cuts)  | false          |
@@ -128,25 +126,43 @@ const { tables } = await walks.getGraphForRange('chr6', start, end, {
 
 ## Tables
 
-`getGraphForRange(...).tables` and `getCutForRange(...).tables()` hold the cut
-as typed arrays. `graphTablesGFA` in
+`tables` holds the cut as typed arrays, one entry per node, link or walk.
+`graphTablesGFA` in
 [@jbrowse/bandage-core](https://github.com/GMOD/bandage-core) writes the nodes,
 links and walks as GFA.
 
-| Table        | Columns                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `nodes`      | `names`, `lengths`, `refs`, `starts`, `ranks`, `refNames`, `passes`, `reversed`, `placeholders`                           |
-| `links`      | `from`, `to`, `strands`                                                                                                   |
-| `walks`      | `names`, `starts`, `ends`, `offsets` into `steps` and `reversed`, `refStarts`, `trimmedBefore`, `trimmedAfter`            |
-| `departures` | One row per [departure](cut.md#departures), with own steps as node indices at `offsets[k]` to `offsets[k + 1]` of `steps` |
-| `gaps`       | One row per [gap](cut.md#gaps), each walk by its index in `walks` and each step as a node index                           |
-| `revisited`  | The header's count of nodes the reference passes more than once, NaN where the header states none                         |
+```ts
+const { nodes, walks } = tables
+walks.names.forEach((name, w) => {
+  for (let k = walks.offsets[w]; k < walks.offsets[w + 1]; k++) {
+    const node = walks.steps[k]
+    console.log(name, nodes.names[node], walks.reversed[k], nodes.lengths[node])
+  }
+})
+```
 
-- `walks` lists the reference first, then the other walks by name and `hapStart`
-- `walks.refStarts` is each step's position on the reference, NaN for a step off
-  it
-- `nodes.passes` counts how many times the reference passes the node, and
-  `nodes.reversed` is 1 where the reference steps it reversed
+| Column                                      | Meaning                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `nodes.names`, `nodes.lengths`              | Each node's name and bp, sorted by position                                           |
+| `nodes.refs`, `nodes.refNames`              | The sequence the node is placed on, as an index into `refNames`                       |
+| `nodes.starts`                              | The node's position on that sequence                                                  |
+| `nodes.ranks`                               | 0 for a node on the reference                                                         |
+| `nodes.passes`                              | How many times the reference passes the node                                          |
+| `nodes.reversed`                            | 1 where the reference steps the node reversed                                         |
+| `nodes.placeholders`                        | 1 for a [placeholder](reads.md#abridged-walks)                                        |
+| `links.from`, `links.to`                    | The two nodes of each link, as node indices                                           |
+| `links.strands`                             | Bit 0 is set where the `from` end is reversed, and bit 1 where the `to` end is        |
+| `walks.names`                               | Each walk, `sample#haplotype#contig`, the reference first and the rest by name        |
+| `walks.starts`, `walks.ends`                | The walk's stretch of its contig                                                      |
+| `walks.offsets`                             | Walk `w` has the steps from `offsets[w]` up to `offsets[w + 1]`                       |
+| `walks.steps`, `walks.reversed`             | Each step's node index, and 1 where the walk steps the node reversed                  |
+| `walks.refStarts`                           | Each step's position on the reference, NaN for a step off it                          |
+| `walks.trimmedBefore`, `walks.trimmedAfter` | bp of the walk the cut read past either end of what it kept                           |
+| `departures`, `gaps`                        | One row per [departure](cut.md#departures) and per [gap](cut.md#gaps)                 |
+| `revisited`                                 | How many nodes the reference passes more than once, NaN where the header has no count |
+
+- A walk that leaves the part of the file the cut read and comes back has more
+  than one entry in `walks`, one per [fragment](cut.md#fragments)
 - A node the reference passes more than once is placed at its pass over the
   window, the earliest of several. A node off the reference is placed on the
   walk whose name sorts first among those that step it, so its place can change
@@ -205,6 +221,16 @@ const gfa = await gfaTabix.getGraphForRange(
 | `RegionTooLargeError`    | A cut is over a budget or limit ([Large genomic regions](reads.md))     |
 | `DepartureReadError`     | The departure read is over `departureByteBudget`                        |
 | `RunsRefusedError`       | `getRunsForRange` on a file whose header does not state `revisited:i:0` |
+
+## File information
+
+| Method                            | Returns                                                               |
+| --------------------------------- | --------------------------------------------------------------------- |
+| `getHeader()`                     | The reference sample, every haplotype with rows, and the tile size    |
+| `getReferenceSequences()`         | The sequences a range can be on, in full PanSN: `GRCh38#0#chr6`       |
+| `getSequenceName(sample, contig)` | The file's name for a contig on a sample, undefined where it has none |
+| `getSequenceLength(refName)`      | Where the sequence's reference ends, 0 for a sequence the file lacks  |
+| `getUnits(refName)`               | The sequence's unit table, empty for a sequence the file lacks        |
 
 ## Going further
 
