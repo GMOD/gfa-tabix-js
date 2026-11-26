@@ -35,6 +35,9 @@ const runs = await walks.getRunsForRange('chr6', 32_510_000, 32_600_000, {
   the reference before the first stretch and after the last that a contained
   cut's context keeps, with `leadLoaded` and `tailLoaded`, and the `before` and
   `after` ends
+- `trimmedBefore` and `trimmedAfter` count the walk row's bp past either end of
+  the fragment, its steps on the reference included, so they are not the
+  haplotype's own sequence off the reference
 - `stretches` holds `starts` and `bp` on the reference, `against`, `offBefore`,
   the bp of the run before, 0 for a fragment's first, and `loaded`, 0 where that
   run holds a placeholder. `loaded` reports the file's abridging, a piece the
