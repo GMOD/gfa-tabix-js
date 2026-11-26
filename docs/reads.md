@@ -153,11 +153,11 @@
   among its `steps`. They can be the only steps of a piece a cut holds: a
   record's own steps in a piece with no step on the drawn stretch, in a tile of
   the window or in one fetched to attach them
-- `graph.tables(kept, fragments, departures)` keeps the steps of a walk's
-  unloaded pieces as `walks.abridgedSteps`, each piece on the first walk holding
-  it, and of those no walk holds as `departures.abridgedSteps`, each on the
-  first departure holding it, NaN for a walk or departure with none. A walk's
-  unloaded steps are the two together
+- The tables keep the steps of a walk's unloaded pieces as
+  `walks.abridgedSteps`, each piece on the first walk holding it, and of those
+  no walk holds as `departures.abridgedSteps`, each on the first departure
+  holding it, NaN for a walk or departure with none. A walk's unloaded steps are
+  the two together
 - `abridgedWalks(tables)` lists, as an `AbridgedWalk` `{ name, bp }` each, the
   walks with a run off the reference that the cut did not load, by full name, in
   the tables' order. `bp` is the lengths of the placeholders the walk's
@@ -190,7 +190,7 @@ abridgedWalks(tables).map(walk => abridgedText(walk))
   context, which it tells from the records' columns itself, the tiles read past
   a window's to the ones those records name, each record's placeholders to the
   runs the tiles' `blocks` rows give, the expanding cut to no `blocks` unit, and
-  the bytes read to `bytesFor` (`scripts/blocks-equality.ts`)
+  the bytes read to `getBytesForRange` (`scripts/blocks-equality.ts`)
 
 ## What a cut reads
 
@@ -228,8 +228,8 @@ and never for one that only lies over it:
 - What a window reads past its own tiles, `blocks` units and departure blocks
   therefore follows what happens on the window, not how many walks pass over it
 
-`reader.bytesFor(refName, region, { context, attachBp })` adds these up before a
-cut is made:
+`walks.getBytesForRange(refName, start, end, { context, attachBp })` adds these
+up before a cut is made:
 
 - It counts the window's tiles, each one's `blocks` unit, the window's departure
   blocks, and the tiles named in `ownTiles`, beyond the window's, by the records
@@ -242,10 +242,10 @@ cut is made:
 - **An upper bound with `keep` or `haplotypes`:** fewer walks leave out the
   `blocks` unit of a tile that abridges none of them and the tiles only other
   walks' records name, and add no read
-- **With `expand`:** the cut reads no more than `bytesFor` but for its detail
-  units, and no less than `bytesFor` without the `blocks` units. Which detail
-  units it reads is in the tiles' `abridged` rows, which `bytesFor` does not
-  read
+- **With `expand`:** the cut reads no more than `getBytesForRange` but for its
+  detail units, and no less than `getBytesForRange` without the `blocks` units.
+  Which detail units it reads is in the tiles' `abridged` rows, which
+  `getBytesForRange` does not read
 
 ## How a cut works
 
@@ -260,8 +260,8 @@ cut is made:
   differs from the data's length. Over HTTP the length comes from Content-Range,
   so a server must expose that header to cross-origin readers for the check to
   hold; where the reader cannot learn the length it skips the check. Every call
-  that reads the file, `referenceSequences`, `units` and `referenceNodes` among
-  them, waits on this check
+  that reads the file, `getReferenceSequences`, `getUnits` and
+  `getReferenceNodes` among them, waits on this check
 - It refuses, with a `WalkFormatError`, a unit or table that does not hold what
   lists it: one that is not whole gzip members, one whose text ends partway
   through a line, a unit whose `#unit` line is not its table entry's, and a row

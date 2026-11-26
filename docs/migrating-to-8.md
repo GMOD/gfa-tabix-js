@@ -1,5 +1,8 @@
 # Migrating to graph-walks 8
 
+The names here are graph-walks 8's; [Migrating to 10](migrating-to-10.md) maps
+them to @gmod/gfa-tabix's.
+
 ## Changes in 8
 
 - **`links`** is `'walked'`, `'between'` or `'none'`: `'walked'` is graph-walks

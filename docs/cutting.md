@@ -1,82 +1,101 @@
 # Cutting a window
 
-## The reader
+## The walk file
 
 - **In:** a `gfa-to-tabix --walks` file, `<prefix>.<sample>.walks.gz` with its
-  directory `<prefix>.<sample>.walks.gz.idx`, or a segment index,
-  `<prefix>.segs.bed.gz` and `<prefix>.links.bed.gz` with theirs or format 2's
-  `<prefix>.graph.bed.gz`, plus a reference region such as
-  `chr6:160,614,798-160,647,758`
-- **Out:** from a walk file, the reference over the region, every haplotype's
-  walk through it, and the nodes and links they visit, as typed arrays; from a
-  segment index, the segments and links under the region as GFA text
-- The reader reads walk format 8, which gfa-to-tabix 5.0 and later write, and
+  directory `<prefix>.<sample>.walks.gz.idx`, plus a reference range such as
+  `chr6:160,614,798-160,647,758`, which is `160_614_797, 160_647_758` 0-based
+  half-open
+- **Out:** the reference over the range, every haplotype's walk through it, and
+  the nodes and links they visit, as typed arrays
+- `WalkFile` reads walk format 8, which gfa-to-tabix 5.0 and later write, and
   refuses an older format with a `WalkFormatError` asking for a rebuild, and a
   newer one asking for a newer reader
-- It reads a walk file through
+- It reads through
   [generic-filehandle2](https://github.com/GMOD/generic-filehandle2)'s handles
   and gunzips with
-  [@gmod/bgzf-filehandle](https://github.com/GMOD/bgzf-filehandle); a segment
-  index through any object with
-  [@gmod/tabix](https://github.com/GMOD/tabix-js)'s `TabixIndexedFile` methods
-- `WalkReader.open(url)` reads the walk file at `url` and its directory at `url`
-  plus `.idx`, put before any query string or fragment, by HTTP range requests
-  through generic-filehandle2's `RemoteFile`. Its second argument opens each
-  location another way: `url => new LocalFile(url)` for a local file
-- `WalkReader.fromFilehandles({ data, directory })` takes the two handles
-  already open: `data` the `.walks.gz`, `directory` its `.idx`. Any object with
-  a generic-filehandle2 handle's `read`, `readFile`, `stat` and `source` will do
-- A file gfa-to-tabix 5.0 or later wrote, in walk format 8; the reader refuses
-  any other format and says to rebuild the file. jbrowse.org hosts the HPRC
-  release 2.1 walk files in format 8, each with its `.idx`:
+  [@gmod/bgzf-filehandle](https://github.com/GMOD/bgzf-filehandle)
+- jbrowse.org hosts the HPRC release 2.1 walk files in format 8, each with its
+  `.idx`:
   `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-grch38-f8.GRCh38.walks.gz` and
   `https://jbrowse.org/demos/hprc/hprc-v2.1-mc-chm13-f8.CHM13.walks.gz`
-- `tables` lists the nodes with their lengths and reference positions, the links
-  the cut's steps walk, each walk's steps, and every departure from the
-  reference over the window ([Departures](#departures)). `graphTablesGFA` in
-  [@jbrowse/bandage-core](https://github.com/GMOD/bandage-core) writes the
-  nodes, links and walks as GFA
-- `reader.header()` lists the reference sample and every haplotype with rows,
-  and the tile size, `tile`, read from the walk file's header unit
+
+### Opening one
+
+| Option            | Effect                                                                                         |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| `walksUrl`        | The walk file by URL, read by HTTP range requests through generic-filehandle2's `RemoteFile`   |
+| `walksPath`       | The walk file by local path, through `LocalFile`                                               |
+| `walksFilehandle` | The walk file already open: any object with a handle's `read`, `readFile`, `stat` and `source` |
+| `idxUrl`          | The directory by URL; by default `walksUrl` plus `.idx`, before any query string or fragment   |
+| `idxPath`         | The directory by local path; by default `walksPath` plus `.idx`                                |
+| `idxFilehandle`   | The directory already open, which a `walksFilehandle` needs                                    |
+
+A `WalkFile` takes exactly one of the three `walks` options and at most one of
+the three `idx` options, and throws a `TypeError` otherwise.
+
+### Methods
+
+Every range method takes `refName, start, end`, 0-based half-open, and an
+options object with `signal`. `refName` is a contig of the reference sample,
+`chr6`, or the file's own name for it, `GRCh38#0#chr6`
+([Naming the window](#naming-the-window)).
+
+- `getGraphForRange(refName, start, end, opts)` is the graph over the range as
+  tables, with the haplotypes `haplotypes` names
+  ([The graph over a range](#the-graph-over-a-range))
+- `getCutForRange(refName, start, end, opts)` is the cut itself: `graph`,
+  `kept`, `fragments`, `departures`, `gaps`, `placeholders`, the `refName` it
+  cut, and `tables()`, which writes all of them as the tables. It takes `keep`
+  in place of `haplotypes`
+- `getCountsForRange(refName, start, end, opts)` is how many of the file's
+  haplotypes step each node and link over the range, and how often, with each
+  count exact or stated as a lower bound and why ([Counts](counts.md))
+- `getBytesForRange(refName, start, end, { context, attachBp })` is the
+  compressed bytes a cut of the range reads when it keeps every walk and expands
+  none ([What a cut reads](reads.md#what-a-cut-reads))
+- `getReferenceNodes(refName, start, end)` is every pass of the reference over
+  the range
+- `getFormsForRange(refName, start, end, opts)` with `structuralForms` groups
+  the haplotypes by their structural changes
+  ([Structural forms](structural-forms.md#usage))
+- `getHeader()` lists the reference sample and every haplotype with rows, and
+  the tile size, `tile`, read from the walk file's header unit
   - `graph` is the hash of the GFA's segments, as its node and link index states
     it, and `leftout` how many of its lines have no rows in the file; each is
     absent where the file doesn't state it
-- `reader.referenceSequences()` lists the sequences a region can be on, in full
+- `getReferenceSequences()` lists the sequences a range can be on, in full
   PanSN: `GRCh38#0#chr6`
-- `reader.units(refName)` is a sequence's unit table,
-  `reader.sequenceLength(refName)` where its reference ends, and
-  `reader.referenceNodes(refName, region)` every pass of the reference over a
-  region
-- `reader.bytesFor(refName, region, { context, attachBp })` is the compressed
-  bytes a cut of the region reads when it keeps every walk and expands none
-  ([What a cut reads](reads.md#what-a-cut-reads))
-- `reader.counts(refName, region, opts)` is how many of the file's haplotypes
-  step each node and link over a region, and how often, with each count exact or
-  stated as a lower bound and why ([Counts](counts.md))
-- `reader.cutRegion` takes a contig such as `chr6` and haplotypes by name
-  ([A region by contig](#a-region-by-contig)), `rgfaCut` cuts a segment index
-  ([Segment indexes](#segment-indexes)), and `formsCut` with `structuralForms`
-  groups the haplotypes by their structural changes
-  ([Structural forms](structural-forms.md#usage))
+- `getSequenceName(sample, contig)` is the file's name for a contig on a sample
+- `getUnits(refName)` is a sequence's unit table and
+  `getSequenceLength(refName)` where its reference ends, each by the file's
+  name, empty or 0 for a sequence the file lacks
+- `tables` lists the nodes with their lengths and reference positions, the links
+  the cut's steps walk, each walk's steps, every departure from the reference
+  over the window ([Departures](#departures)) and the gaps between a walk's
+  fragments ([Gaps](#gaps)). `graphTablesGFA` in
+  [@jbrowse/bandage-core](https://github.com/GMOD/bandage-core) writes the
+  nodes, links and walks as GFA
 
 ## Cut options
 
 | Option                | Effect                                                                                                         |
 | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `keep`                | Which walks to decode, the reference's among them, by `sample#haplotype#contig`; every one by default          |
+| `haplotypes`          | `getGraphForRange`'s walks to keep beside the reference, by PanSN prefix; every one by default                 |
+| `keep`                | `getCutForRange`'s walks to decode, the reference's among them, by `sample#haplotype#contig`; every one        |
+| `referenceSample`     | The sample whose contig `refName` names; the header's first reference by default                               |
 | `context`             | bp of reference kept past each end of the region; default 1000, `WALK_CONTEXT`                                 |
 | `stepBudget`          | The most steps a cut keeps, departures' own steps included; 4,000,000 by default                               |
 | `byteBudget`          | The most compressed bytes the walk and attach reads fetch; 8 MB by default                                     |
 | `departureByteBudget` | The most compressed bytes the departure read fetches; 2 MB by default                                          |
 | `attachBp`            | The most bp of own sequence a departure gets its steps attached for; default 65,536                            |
-| `attachFetches`       | Deprecated and ignored: the tiles of every record that gets its steps are fetched                              |
 | `nodeLimit`           | The most nodes a cut keeps, placeholders not among them; no limit by default                                   |
 | `placeholderLimit`    | The most placeholders a cut keeps; no limit by default                                                         |
 | `contained`           | `true` keeps each walk within the window; see [Contained cuts](#contained-cuts)                                |
 | `links`               | `'walked'` (default) the links the cut's walks take; `'between'` also other walks' between its nodes; `'none'` |
-| `sequences`           | Keep each node's bases in `graph.sequences`, from a `--sequences` file                                         |
+| `sequences`           | Keep each node's bases in `sequences` (`graph.sequences` of a cut), from a `--sequences` file                  |
 | `signal`              | An `AbortSignal` that stops the reads                                                                          |
-| `expand`              | Which abridged walks to read in full, by `sample#haplotype#contig`; none by default                            |
+| `expand`              | Which abridged walks to read in full: PanSN prefixes, or a function of `sample#haplotype#contig`; none         |
 | `budgetNames`         | The words a `RegionTooLargeError` message uses for the step and byte budgets                                   |
 
 - A cut over a budget or its node limit throws a `RegionTooLargeError`. The
@@ -85,54 +104,54 @@
 - `WALK_BUDGETS` holds the default budgets and `attachBp`, what a browser window
   holds; a caller that wants no limit passes `Infinity`
 
-## A region by contig
+## The graph over a range
 
 ```ts
-const { tables, refName, sample } = await reader.cutRegion(
-  { refName: 'chr6', start: 160_614_798, end: 160_647_758 },
+const { tables, refName, sample } = await walks.getGraphForRange(
+  'chr6',
+  160_614_797,
+  160_647_758,
   { haplotypes: ['HG00097', 'HG00133'], nodeLimit: 100_000 },
 )
 ```
 
-- `cutRegion` resolves `chr6` to the reference sample's sequence,
+- `getGraphForRange` resolves `chr6` to the reference sample's sequence,
   `GRCh38#0#chr6`, and keeps the haplotypes named, every one when none are
-- `referenceSample` names another sample than the header's first reference. A
-  sequence the file lacks throws, naming the ones it holds
-- A contig on more than one haplotype of the reference sample throws an
-  `AmbiguousSequenceError` naming them: `chr1` in a file built with
-  `--refs HG002`, which holds `HG002#1#chr1` and `HG002#2#chr1`.
-  `referenceSample: 'HG002#1'`, or the full name `HG002#1#chr1`, picks one
-- Such a file is two coordinate systems, one per reference haplotype. Where both
-  pass a node, another haplotype's step there may be filed under either, so its
-  walk can lie wholly under one and show in no window of the other
-- The cut options below apply too, with `haplotypes` in place of `keep`
+- `sequences: true` adds `sequences`, each node's bases by id, from a file
+  written with `--sequences`
+- Such a file is two coordinate systems where the reference sample is diploid,
+  one per reference haplotype. Where both pass a node, another haplotype's step
+  there may be filed under either, so its walk can lie wholly under one and show
+  in no window of the other
 
 ## Naming the window
 
-- `reader.sequenceFor(sample, refName)` gives the walk file's sequence for a
-  contig on a sample: `chr6` on `GRCh38` is `GRCh38#0#chr6`, and a pggb file's
-  `chm13#chr1` is `chr1` on `chm13`
-- `panSNHaplotypeOrSample(name)` is what a walk file's header lists a path
-  under: `HG002#1` for `HG002#1#chr6`, and the sample, `chm13`, for a name with
-  no haplotype field, `chm13#chr6`. `walkDepartures` groups paths by it
+- Every range method resolves `refName` against the reference sample, the
+  header's first reference unless `referenceSample` names another: `chr6` on
+  `GRCh38` is `GRCh38#0#chr6`, and a pggb file's `chm13#chr1` is `chr1` on
+  `chm13`. The file's own name resolves to itself
+- A sequence the file lacks throws a `MissingSequenceError` whose `sequences`
+  lists those it holds
+- A contig on more than one haplotype of the reference sample throws an
+  `AmbiguousSequenceError` with the names in `sequences`: `chr1` in a file built
+  with `--refs HG002`, which holds `HG002#1#chr1` and `HG002#2#chr1`.
+  `referenceSample: 'HG002#1'`, or the full name `HG002#1#chr1`, picks one
+- `getSequenceName(sample, contig)` resolves a name the same way, undefined for
+  a sequence the file lacks
 - `walksKept(haplotypes, refName)` returns the `keep` filter for a cut on
   `refName`, which keeps the reference walk on `refName` and the walks of the
-  haplotypes named
+  haplotypes named, as `haplotypes` does
 - `refNameLookup` and `resolveRefName` resolve a contig the same way against any
   file's sequence names
-- Where a contig is on more than one haplotype of the sample, `sequenceFor` and
-  `resolveRefName` throw an `AmbiguousSequenceError` with the names in
-  `sequences`: `chr1` on `HG002` where the file holds `HG002#1#chr1` and
-  `HG002#2#chr1`. `chr1` on `HG002#1`, or the full name, resolves
 
 ## Cut presets
 
 ```ts
-import { CUT_PRESETS } from '@jbrowse/graph-walks'
+import { CUT_PRESETS } from '@gmod/gfa-tabix'
 
-const cut = await reader.cut(refName, region, {
+const { tables } = await walks.getGraphForRange('chr6', start, end, {
   ...CUT_PRESETS.browser,
-  keep: walksKept(['HG00097'], refName),
+  haplotypes: ['HG00097'],
 })
 ```
 
@@ -150,9 +169,9 @@ const cut = await reader.cut(refName, region, {
 - `WALK_CONTEXT` is the context both keep
 - `CUT_PRESETS`, each preset and `WALK_BUDGETS` are frozen: a reader spreads one
   into its options, as above, so no reader changes them for another
-- `keep`, `expand`, `nodeLimit`, `placeholderLimit`, `links` and `sequences`
-  stay each reader's own: which walks it shows, which it reads in full, how many
-  nodes and placeholders its layout places, and what it draws
+- `haplotypes`, `keep`, `expand`, `nodeLimit`, `placeholderLimit`, `links` and
+  `sequences` stay each reader's own: which walks it shows, which it reads in
+  full, how many nodes and placeholders its layout places, and what it draws
 
 | Option                | `browser` | `figure` |
 | --------------------- | --------- | -------- |
@@ -183,10 +202,9 @@ does not build counts there by its `abridged` row's `hapBp`.
   departure records say where it leaves and rejoins
 - A walk's fragments therefore depend on the window, its context and the file
   alone, not on which other walks the cut keeps
-- `fragments` come in no stated order. `graph.tables` orders its `walks` itself:
-  the reference first, then by name and `hapStart`
-- `graph.tables(kept, fragments, departures)` keeps `trimmedBefore` and
-  `trimmedAfter` as columns of `walks`
+- `fragments` come in no stated order. The tables order their `walks`
+  themselves: the reference first, then by name and `hapStart`
+- The tables keep `trimmedBefore` and `trimmedAfter` as columns of `walks`
 
 ## Gaps
 
@@ -214,16 +232,15 @@ A row end runs over the bp of the run past the fragment, and over the whole of
 any record that reaches it. Tiles fetched for a record's own steps give `steps`
 alone, and the cut fetches them for every record that
 [gets its own steps](#departures) or refuses the window, so which records get
-`steps` follows from each record and the window alone.
-`graph.tables(kept, fragments, departures, gaps)` writes them as a `gaps` table,
-each stretch's walk by its fragment's index in `walks`, and each step as a node
-index.
+`steps` follows from each record and the window alone. The tables, from
+`tables()` or `getGraphForRange`, write them as a `gaps` table, each stretch's
+walk by its fragment's index in `walks`, and each step as a node index.
 
 ## Departures
 
 A departure is where a walk's consecutive steps on the reference are not
 adjacent there: it leaves the reference at one breakpoint and rejoins it at
-another, with `ownBp` of its own sequence between. `cut` returns each departure
+another, with `ownBp` of its own sequence between. A cut returns each departure
 once:
 
 - Every departure record whose line overlaps the window and its context, from
@@ -239,7 +256,7 @@ once:
   the window, even inside its fragment, is not returned
 
 ```ts
-import { departureKind } from '@jbrowse/graph-walks'
+import { departureKind } from '@gmod/gfa-tabix'
 
 for (const d of departures) {
   // HG00097#1#chr6 leaves 160,620,000 and rejoins 160,674,000 (forward), 120,000 bp of its own
@@ -281,8 +298,7 @@ for (const d of departures) {
   `[start − context, end + context)`, and rejoins there when that base of its
   rejoin step does: for a step along the reference, the base before `leavePos`
   and the base at `rejoinPos`; for one against it, the base at `leavePos` and
-  the base before `rejoinPos`. `leavesOrRejoinsOn(d, span)` says so of any
-  departure and stretch
+  the base before `rejoinPos`.
 - `steps` are the walk's steps between its leave and its rejoin, from the end of
   the leave piece and the start of the rejoin piece. A step of 0 bp is an own
   step, so a record with `ownBp` 0, or no more than its `missingBp`, can carry
@@ -309,8 +325,8 @@ for (const d of departures) {
 - The rule reads bases, not nodes. A cut draws whole the node that straddles an
   end of the window and its context, and a walk that leaves that node at its far
   end, past the stretch, gets no steps: a record states its breakpoints and not
-  how far its end nodes run, and `bytesFor` has to tell the rule from the record
-  alone. A wider `context` reaches it
+  how far its end nodes run, and `getBytesForRange` has to tell the rule from
+  the record alone. A wider `context` reaches it
 - The rule is the same for a record and for a departure the cut computes inside
   one piece, so what a cut keeps does not turn on where the writer cut a walk
   into pieces
@@ -337,11 +353,10 @@ for (const d of departures) {
 - `fromSteps` is true for a departure computed from a piece's steps
 - Those steps' nodes are kept, so the cut draws a short insertion or replacement
   at the window's edge whole, and counts them against `stepBudget`
-- `graph.tables(kept, fragments, departures)` keeps them as the `departures`
-  table: `names`, `hapStarts`, `ownBp`, `missingBp`, `leavePos`,
-  `leaveReversed`, `leavePasses`, `rejoinPos`, `rejoinReversed`, `rejoinPasses`,
-  `fromSteps`, and each one's own steps as node indices at `offsets[k]` to
-  `offsets[k + 1]` of `steps`, with `reversed`
+- The tables keep them as the `departures` table: `names`, `hapStarts`, `ownBp`,
+  `missingBp`, `leavePos`, `leaveReversed`, `leavePasses`, `rejoinPos`,
+  `rejoinReversed`, `rejoinPasses`, `fromSteps`, and each one's own steps as
+  node indices at `offsets[k]` to `offsets[k + 1]` of `steps`, with `reversed`
 
 ## Links and node places
 
@@ -383,8 +398,8 @@ for (const d of departures) {
 - A node on the reference states the strand the reference steps it on:
   `tables.nodes.reversed` is 1 where the `ref` row that places the node steps it
   reversed, at the pass `nodes.starts` gives, and a node's `reversed` in
-  `graph.nodes` and in `reader.referenceNodes` says the same. A cut's reference
-  walk covers the drawn stretch, and a haplotype's walk can bring in a node the
+  `graph.nodes` and in `getReferenceNodes` says the same. A cut's reference walk
+  covers the drawn stretch, and a haplotype's walk can bring in a node the
   reference steps elsewhere in the tiles read, which no step of that walk gives
   the reference's strand of; the column gives it for every node with rank 0. It
   is 0 for a node placed off the reference, whose strand along its walk the
@@ -420,39 +435,48 @@ for (const d of departures) {
 - At AMY1 haplotypes go from a 4 kb window to the other copies of the gene and
   back. The default cut keeps 9,928 nodes there, and the contained cut 182
 
-## Segment indexes
+## The GFA tabix file
 
 ```ts
-import { rgfaCut } from '@jbrowse/graph-walks'
+import { GfaTabixFile } from '@gmod/gfa-tabix'
+import { TabixIndexedFile } from '@gmod/tabix'
 
-const gfa = await rgfaCut(
-  { segments: segsFile, links: linksFile },
-  { refName: 'GRCh38#0#chr6', start: 160_614_798, end: 160_647_758 },
+const gfaTabix = new GfaTabixFile({
+  graph: new TabixIndexedFile({ url: graphUrl, tbiUrl: `${graphUrl}.tbi` }),
+})
+const gfa = await gfaTabix.getGraphForRange(
+  'GRCh38#0#chr6',
+  160_614_797,
+  160_647_758,
   { hops: 1 },
 )
 ```
 
-- `segsFile` and `linksFile` are `TabixIndexedFile`s, or any object with its
-  `getLines`
-- For gfa-to-tabix's format 2, pass `{ graph: graphFile }`, the one
-  `<prefix>.graph.bed.gz`, with `getLines` and `getHeaderLines`. `rgfaCut` reads
-  its layout from the header, refuses a format other than 2, and writes each
-  node's `SB:H:` bits as the `SM:Z:` names format 1 states, in `#samples` order.
-  A link end its row gives no carriers takes them from its node row in the same
-  query, so a cut of either format gives the same segments and links
+- `GfaTabixFile` reads gfa-to-tabix's GFA tabix file, its segments and links as
+  Tabix-indexed BED: `{ graph }`, format 2's one `<prefix>.graph.bed.gz`, or
+  `{ segments, links }`, format 1's `<prefix>.segs.bed.gz` and
+  `<prefix>.links.bed.gz`. Each is a `TabixIndexedFile` of
+  [@gmod/tabix](https://github.com/GMOD/tabix-js), which the caller installs, or
+  any object with its `getLines`, and `getHeaderLines` for format 2
+- `getGraphForRange` returns the segments and links over the range as GFA text,
+  each segment `*` with LN/SN/SO/SR tags and the tag column's tags, sorted, so
+  one range always gives the same text
+- Format 2's layout comes from its header; a format other than 2 is refused.
+  Each node's `SB:H:` bits are written as the `SM:Z:` names format 1 states, in
+  `#samples` order. A link end its row gives no carriers takes them from its
+  node row in the same query, so a cut of either format gives the same segments
+  and links
 - gfa-to-tabix's default, anchored layout files every allele under the reference
   interval its bubble hangs from, so one read of each file holds the whole cut
 - Its contig layout files each segment under the segment's own sequence. Each of
   `hops` rounds follows links out from the window, and a last read closes every
   allele reached
-- `rgfaCut` writes each segment as `*` with LN/SN/SO/SR tags and the tag
-  column's tags, sorted, so one region always gives the same text
-- `parseSegmentRow`, `parseLinkLine` and `segmentSamples` read single rows;
-  `parseGraphHeader`, `parseGraphRow` and `carrierNames` read format 2's
+- `parseSegmentRow`, `parseLinkLine` and `segmentSamples` read single rows of
+  format 1; `parseGraphHeader` and `parseGraphRow` read format 2's
 
 ## Moved components
 
 - gfa-to-tabix 1.5's `--max-component` leaves a component over the limit on its
   own coordinates, so an anchored cut reaches it only through the links into it
-- `rgfaCut` tags each segment of such a component that it holds `mv:i:1`
-  (`MOVED_TAG`), for a viewer to draw as a stub
+- `getGraphForRange` tags each segment of such a component that it holds
+  `mv:i:1`, for a viewer to draw as a stub

@@ -12,15 +12,14 @@
 ## Usage
 
 ```ts
-import {
-  describeForm,
-  formTag,
-  formsCut,
-  structuralForms,
-} from '@jbrowse/graph-walks'
+import { describeForm, formTag, structuralForms } from '@gmod/gfa-tabix'
 
 const region = { refName: 'chr1', start: 109_680_000, end: 109_715_000 }
-const haplotypes = await formsCut(reader, region)
+const haplotypes = await walks.getFormsForRange(
+  region.refName,
+  region.start,
+  region.end,
+)
 const result = structuralForms(haplotypes, { window: region })
 result.forms.map(f => `${f.members.length} ${describeForm(f)}`)
 // ['306 del 18.4kb', '156 ref']
@@ -28,19 +27,20 @@ result.forms.map(f => formTag(f, result))
 // ['del 18.4kb', 'ref']
 ```
 
-- `formsCut` cuts the region uncontained and without links, and returns each
-  haplotype's departures from the reference: exact REF span and ALT length,
+- `getFormsForRange` cuts the region uncontained and without links, and returns
+  each haplotype's departures from the reference: exact REF span and ALT length,
   inverted bp, and bp walked again by a step back along the reference. It
   expands no walk: an abridged piece's `blocks` row gives the departures its
   detail record gives
-- `formsCut` keeps to `FORMS_STEP_BUDGET` steps, or a larger `stepBudget`, and
-  throws `RegionTooLargeError` past it
-- `formsCut` takes `byteBudget`, and a region whose tiles the table puts past it
-  throws `RegionTooLargeError` before any read
-- `formsCut` reads each haplotype's departures off the cut's `departures`, every
-  one over the region, and its fragments' ends, so a haplotype that leaves the
-  region and rejoins the reference far away, or jumps over it whole, is a
-  departure with no step on it; `walkDepartures` does the same for any cut
+- `getFormsForRange` keeps to `FORMS_STEP_BUDGET` steps, or a larger
+  `stepBudget`, and throws `RegionTooLargeError` past it
+- `getFormsForRange` takes `byteBudget`, and a region whose tiles the table puts
+  past it throws `RegionTooLargeError` before any read
+- `getFormsForRange` reads each haplotype's departures off the cut's
+  `departures`, every one over the region, and its fragments' ends, so a
+  haplotype that leaves the region and rejoins the reference far away, or jumps
+  over it whole, is a departure with no step on it; `walkDepartures` does the
+  same for any cut
 - A walk the graph stores back to front reads the other way round: one that
   walks the reference only against it, or that leaves it behind where it
   entered. A walk forward at its flanks keeps its orientation however much of
@@ -185,12 +185,12 @@ one haplotype cover is now no call.
 ### What a form states
 
 A form states, at every site that is not an edge, one state of its members: its
-marks there, a no call, or a rarer change. `formContradictions` checks that
-statement against each member's own departures. It recomputes the member's
-changes itself, joining its departures, giving each a kind, and adding up plain
-pieces at a summed site, and shares with `structuralForms` only `agrees`, the
-tolerance, `changeKind`, the naming rule, and the constants. A test holds it to
-that import.
+marks there, a no call, or a rarer change. `formContradictions`, in
+`src/formsCheck.ts`, checks that statement against each member's own departures.
+It recomputes the member's changes itself, joining its departures, giving each a
+kind, and adding up plain pieces at a summed site, and shares with
+`structuralForms` only `agrees`, the tolerance, `changeKind`, the naming rule,
+and the constants. A test holds it to that import.
 
 - `call`: the form states a call only where the member's walks span the site's
   part inside the window, and `hidden` a no call only where they do not
@@ -348,10 +348,10 @@ rule gives that 5 kb window 50 bp and the five windows above 1 kb.
 
 ## Abridged walks
 
-`formsCut` expands no abridged walk. A piece the cut does not load comes from
-its tile's `blocks` unit with its steps on R and the bp of its own between them,
-and its departures are those its detail record gives: forms key on a departure's
-place and size, never on its nodes.
+`getFormsForRange` expands no abridged walk. A piece the cut does not load comes
+from its tile's `blocks` unit with its steps on R and the bp of its own between
+them, and its departures are those its detail record gives: forms key on a
+departure's place and size, never on its nodes.
 
 - `scripts/blocks-equality.ts` holds the two equal on a walk file: over random
   windows on its abridged tiles, each haplotype's cover and departures and the
@@ -364,7 +364,8 @@ place and size, never on its nodes.
   expanded, so it came back with nothing covered
 
 `structuralForms` takes under 0.1 s in every window, so the cut dominates.
-`formsCut` spends about 1 s over a single expanded cut on its first, plain cut.
+`getFormsForRange` spends about 1 s over a single expanded cut on its first,
+plain cut.
 
 ### What a `dp` tag must list
 
@@ -382,8 +383,9 @@ alone would change the forms:
 
 ## Validation
 
-Through `formsCut` and `structuralForms` against the published file, expanded,
-scored against the assemblies (`truth.tsv`) and the sidecar (`forms-v3.jsonl`):
+Through `getFormsForRange` and `structuralForms` against the published file,
+expanded, scored against the assemblies (`truth.tsv`) and the sidecar
+(`forms-v3.jsonl`):
 
 | Window | Walk net = assembly | Forms 50 bp / 1 kb | ARI vs sidecar, 50 bp | Sidecar forms |
 | ------ | ------------------- | ------------------ | --------------------- | ------------- |

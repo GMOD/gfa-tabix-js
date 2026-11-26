@@ -1,9 +1,14 @@
 # Counts
 
 ```ts
-import { CUT_PRESETS, countReasons } from '@jbrowse/graph-walks'
+import { CUT_PRESETS, countReasons } from '@gmod/gfa-tabix'
 
-const counts = await reader.counts(refName, region, CUT_PRESETS.browser)
+const counts = await walks.getCountsForRange(
+  'chr6',
+  160_614_797,
+  160_647_758,
+  CUT_PRESETS.browser,
+)
 const k = counts.nodes.ids.indexOf(id)
 counts.nodes.haplotypes[k] // haplotypes stepping the node
 counts.nodes.passes[k] // their steps on it
@@ -11,12 +16,12 @@ countReasons(counts.nodes.haplotypeReasons[k]) // [] where exact
 counts.haplotypes.window // haplotypes over the window
 ```
 
-- `reader.counts` counts every walk of the file over a region, where a cut draws
-  the few it keeps: for each node and link the walks step, `haplotypes`, how
-  many haplotypes step it, and `passes`, how many steps all of them take on it.
-  A haplotype is what the header lists a path under, `HG002#1`, so a haplotype
-  stepping a node three times counts once in the first and three times in the
-  second, and its contigs count as one
+- `getCountsForRange` counts every walk of the file over a region, where a cut
+  draws the few it keeps: for each node and link the walks step, `haplotypes`,
+  how many haplotypes step it, and `passes`, how many steps all of them take on
+  it. A haplotype is what the header lists a path under, `HG002#1`, so a
+  haplotype stepping a node three times counts once in the first and three times
+  in the second, and its contigs count as one
 - A link counts however a walk takes it: `>3>4` and `<4<3` are one link, with
   each haplotype once
 - It takes a cut's `context`, `contained`, `attachBp`, budgets and `expand`, and
@@ -72,7 +77,7 @@ exact, and else the `COUNT_REASONS` bits it may fall short by, which
   once, so the counts mark no node or link of it exact by its `passes`: each
   takes `elsewhere`, and is a lower bound. gfa-to-tabix keeps the rule on every
   file it writes, but a file names no writer, so the counts go by the header:
-  `(await reader.header()).revisited` is 0 where a count can be exact by its
+  `(await walks.getHeader()).revisited` is 0 where a count can be exact by its
   `passes`
 - **A haplotype count of `haplotypes.file`** is exact in any file, since the
   file holds no other haplotype. Its pass count is exact only by the rule above
@@ -133,12 +138,12 @@ exact, and else the `COUNT_REASONS` bits it may fall short by, which
 ## What counts cost
 
 - **Reads:** the units a cut that keeps every walk reads with the same options.
-  Without `expand`, `bytesFor`'s: the window's tiles, their `blocks` units and
-  departure blocks in one read, then the tiles fetched to attach. With it, the
-  window's tiles and departure blocks, then the detail units of the pieces it
-  expands and the `blocks` units of the pieces it does not, all in one read of
-  every run of touching units, then the tiles fetched to attach, and the detail
-  units it expands of their pieces
+  Without `expand`, `getBytesForRange`'s: the window's tiles, their `blocks`
+  units and departure blocks in one read, then the tiles fetched to attach. With
+  it, the window's tiles and departure blocks, then the detail units of the
+  pieces it expands and the `blocks` units of the pieces it does not, all in one
+  read of every run of touching units, then the tiles fetched to attach, and the
+  detail units it expands of their pieces
 - **Work:** each walk row it counts decoded once, with no step kept: a step
   along the reference is an array read and two bit sets, and a route's nodes and
   links are looked up once per tile. It grows with the steps of the pieces

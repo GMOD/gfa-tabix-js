@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>@jbrowse/graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
+<title>@gmod/gfa-tabix: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
 <rect width="900" height="420" rx="12" fill="#ffffff"/>
-<text x="450.0" y="52.0" font-size="21" fill="#1f2328" font-weight="600" text-anchor="middle">@jbrowse/graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file</text>
+<text x="450.0" y="52.0" font-size="21" fill="#1f2328" font-weight="600" text-anchor="middle">@gmod/gfa-tabix reads one stretch of a pangenome from a gfa-to-tabix walk file</text>
 <text x="106.0" y="117.0" font-size="15" fill="#59636e" font-weight="400" text-anchor="end">chr6</text>
 <rect x="120.0" y="102.0" width="660.0" height="20.0" rx="10" fill="#e6eaef" stroke="#c3cad3" stroke-width="1"/>
 <path d="M502.8,122 L30,170 L870,170 L542.4,122 Z" fill="#fff1d6"/>

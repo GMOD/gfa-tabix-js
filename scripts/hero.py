@@ -14,7 +14,7 @@ def path(d, stroke, sw=4):
     out.append(f'<path d="{d}" fill="none" stroke="{stroke}" stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round"/>')
 
 out.append(f'<rect width="{W}" height="{H}" rx="12" fill="{CARD}"/>')
-t(W / 2, 52, '@jbrowse/graph-walks reads one stretch of a pangenome from a gfa-to-tabix walk file', 21)
+t(W / 2, 52, '@gmod/gfa-tabix reads one stretch of a pangenome from a gfa-to-tabix walk file', 21)
 
 cx0, cx1, cy = 120, W - 120, 112
 t(cx0 - 14, cy + 5, 'chr6', 15, MUTED, '400', 'end')
@@ -40,7 +40,7 @@ path(f'M{X0 - 8},{ya} L{nx(.2) - 4:.1f},{ya} C{nx(.28):.1f},{ya + 62} {nx(.72):.
 
 
 svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>@jbrowse/graph-walks: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
+<title>@gmod/gfa-tabix: one stretch of a pangenome, read from a gfa-to-tabix walk file</title>
 {chr(10).join(out)}
 </svg>
 '''
