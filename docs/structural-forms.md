@@ -46,7 +46,7 @@ result.forms.map(f => formTag(f, result))
 `floorBp: 'auto'` is 50 bp for a window under 25 kb, 1 kb from 25 to 300 kb and
 10 kb above. Forms that become identical at a higher floor merge.
 
-## What a result holds
+## Result fields
 
 | Field          | Contents                                                                                   |
 | -------------- | ------------------------------------------------------------------------------------------ |

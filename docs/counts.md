@@ -20,7 +20,7 @@ countReasons(counts.nodes.haplotypeReasons[k]) // [] where exact
 counts.haplotypes.window // haplotypes over the window
 ```
 
-## What counts return
+## Returned fields
 
 | Field                    | Meaning                                                                          |
 | ------------------------ | -------------------------------------------------------------------------------- |
@@ -67,7 +67,7 @@ A count is exact where its reason mask is 0. Otherwise it is a lower bound, and
 - An exact count is of the lines the file has. gfa-to-tabix's checks compare the
   file against its GFA
 
-## What to say with a count
+## Wording a count
 
 - **Mask 0:** "N of the M haplotypes in the file step this node", with M from
   `haplotypes.file`. `haplotypes.window` is not an M, since it depends on which
@@ -84,7 +84,7 @@ A count is exact where its reason mask is 0. Otherwise it is a lower bound, and
 ## Reads and budgets
 
 - Counts read the units a cut that keeps every walk reads with the same options
-  ([What a cut reads](reads.md#what-a-cut-reads))
+  ([Units a cut reads](reads.md#units-a-cut-reads))
 - Counts decode each walk row once and build no fragment, table or graph. Memory
   is one bit per haplotype for each node and link, and a pass count
 - `byteBudget` and `departureByteBudget` apply as in a cut, and the counts throw

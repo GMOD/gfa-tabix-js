@@ -73,7 +73,7 @@ abridgedWalks(tables).map(walk => abridgedText(walk))
 on its abridged tiles, the cut that expands nothing must agree with the cut that
 expands every walk.
 
-## What a cut reads
+## Units a cut reads
 
 A cut reads these units of the file, each once:
 

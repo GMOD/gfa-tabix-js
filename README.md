@@ -71,7 +71,7 @@ const gfaTabix = new GfaTabixFile({
 const gfa = await gfaTabix.getGraphForRange('GRCh38#0#chr6', 0, 100_000)
 ```
 
-## Words used here
+## Terms
 
 - **Reference:** the one linear genome, such as GRCh38
 - **Haplotype:** one copy of a chromosome from one person

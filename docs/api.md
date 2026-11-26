@@ -44,15 +44,15 @@ const walks = new WalkFile({
 
 Every range method takes `refName, start, end` and an options object.
 
-| Method              | Returns                                                                                 | More                                          |
-| ------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `getGraphForRange`  | The graph over the range as [tables](#tables), with `refName`, `sample` and `sequences` | [Tables](#tables)                             |
-| `getCutForRange`    | The cut as objects: `graph`, `kept`, `fragments`, `departures`, `gaps`, `placeholders`  | [Fragments](#fragments)                       |
-| `getRunsForRange`   | Each walk as stretches of reference and the bp between them, with no step decoded       | [Runs](runs.md)                               |
-| `getCountsForRange` | How many of the file's haplotypes step each node and link                               | [Counts](counts.md)                           |
-| `getFormsForRange`  | Each haplotype's departures, the input of `structuralForms`                             | [Structural forms](structural-forms.md)       |
-| `getBytesForRange`  | The compressed bytes a cut of the range would read                                      | [What a cut reads](reads.md#what-a-cut-reads) |
-| `getReferenceNodes` | Every pass of the reference over the range                                              |                                               |
+| Method              | Returns                                                                                 | More                                            |
+| ------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `getGraphForRange`  | The graph over the range as [tables](#tables), with `refName`, `sample` and `sequences` | [Tables](#tables)                               |
+| `getCutForRange`    | The cut as objects: `graph`, `kept`, `fragments`, `departures`, `gaps`, `placeholders`  | [Fragments](#fragments)                         |
+| `getRunsForRange`   | Each walk as stretches of reference and the bp between them, with no step decoded       | [Runs](runs.md)                                 |
+| `getCountsForRange` | How many of the file's haplotypes step each node and link                               | [Counts](counts.md)                             |
+| `getFormsForRange`  | Each haplotype's departures, the input of `structuralForms`                             | [Structural forms](structural-forms.md)         |
+| `getBytesForRange`  | The compressed bytes a cut of the range would read                                      | [Units a cut reads](reads.md#units-a-cut-reads) |
+| `getReferenceNodes` | Every pass of the reference over the range                                              |                                                 |
 
 - `getGraphForRange` takes `haplotypes`, a list of PanSN prefixes such as
   `HG00097` or `HG002#1`, and keeps the reference and every haplotype when the

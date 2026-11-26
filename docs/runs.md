@@ -24,7 +24,7 @@ const runs = await walks.getRunsForRange('chr6', 32_510_000, 32_600_000, {
   `RunsRefusedError`, since a run off the reference could then hold a node the
   reference passes. Cut the window for such a file
 
-## What runs return
+## Returned fields
 
 A stretch is consecutive steps on the reference, each starting on the base where
 the last ended, all in one direction. A run is what lies between two stretches.
